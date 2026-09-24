@@ -1,0 +1,38 @@
+/*
+!/.gitignore
+!/README.md
+!/ITSeti.Maintenance/
+
+# Local credentials and machine-specific state
+/AdminCredentials.ps1
+/AdminBootstrap.ps1
+/Test-AdminAuth.ps1
+/Test-SavedLogin.ps1
+/Test-*.ps1
+/Inspect-DiskMark.ps1
+/admin-credentials*.xml
+*.private.xml
+.env
+.env.*
+
+# Build and diagnostic output
+**/bin/
+**/obj/
+/.build/
+/.test-output/
+**/artifacts/
+**/dist/
+/validation.txt
+/timings.txt
+/diskmark-inspection.json
+**/validation.txt
+**/timings.txt
+**/diskmark-inspection.json
+**/comparison.txt
+**/history.xml
+
+# IDE and local user state
+.vs/
+.vscode/
+*.user
+*.suo

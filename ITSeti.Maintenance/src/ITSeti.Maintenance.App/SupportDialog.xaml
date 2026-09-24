@@ -1,0 +1,30 @@
+<Window x:Class="ITSeti.Maintenance.App.SupportDialog"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="ИТ-Сети | Оставить заявку" Icon="Assets/favicon.ico" Width="550" SizeToContent="Height" ResizeMode="NoResize"
+ WindowStartupLocation="CenterOwner" Background="White" FontFamily="Segoe UI Variable Text, Segoe UI">
+ <Window.Resources>
+  <Style TargetType="Hyperlink"><Setter Property="Foreground" Value="#235CCB"/><Setter Property="TextDecorations" Value="None"/><Setter Property="Cursor" Value="Hand"/></Style>
+ </Window.Resources>
+ <Grid Margin="30,26,30,26">
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <TextBlock Text="Связаться с ИТ-Сети" FontSize="22" FontWeight="SemiBold" Foreground="#143C87" Margin="0,0,0,6"/>
+  <TextBlock Grid.Row="1" Text="Выберите удобный способ подачи заявки" Foreground="#627E8D" FontSize="13" Margin="0,0,0,20"/>
+  <Grid Grid.Row="2" Margin="0,0,0,0"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+   <TextBlock Text="MAX" FontWeight="SemiBold" FontSize="15" Foreground="#203A50"/>
+   <TextBlock Grid.Row="1" Margin="0,3,0,16" FontSize="14"><Hyperlink NavigateUri="https://max.ru/id6670529055_bot" RequestNavigate="OpenLink">Открыть бота в MAX</Hyperlink></TextBlock>
+  </Grid>
+  <Border Grid.Row="3" BorderBrush="#E6EDF2" BorderThickness="0,1,0,0" Padding="0,15,0,15"><Grid>
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+   <StackPanel><TextBlock Text="Электронная почта" FontWeight="SemiBold" FontSize="15" Foreground="#203A50"/><TextBlock Text="support@it-seti.ru" FontSize="14" Foreground="#47647A" Margin="0,4,0,0"/></StackPanel>
+   <Button Grid.Column="1" Width="34" Height="34" Click="CopyEmail_Click" ToolTip="Скопировать адрес почты" AutomationProperties.Name="Скопировать адрес почты" Cursor="Hand" Background="#F3F6F8" BorderBrush="#DDE6EB"><TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="#143C87"/></Button>
+  </Grid></Border>
+  <StackPanel Grid.Row="4">
+   <Border BorderBrush="#E6EDF2" BorderThickness="0,1,0,0" Padding="0,15,0,15"><StackPanel><TextBlock Text="Telegram" FontWeight="SemiBold" FontSize="15" Foreground="#203A50"/><TextBlock Margin="0,4,0,0" FontSize="14"><Hyperlink NavigateUri="https://t.me/it_seti_support_bot" RequestNavigate="OpenLink">@it_seti_support_bot</Hyperlink></TextBlock></StackPanel></Border>
+   <Border BorderBrush="#E6EDF2" BorderThickness="0,1,0,0" Padding="0,15,0,15"><StackPanel><TextBlock Text="Телефон" FontWeight="SemiBold" FontSize="15" Foreground="#203A50"/><TextBlock Text="+7 (343) 243-57-63" FontSize="14" Foreground="#47647A" Margin="0,4,0,0"/><TextBlock Text="Кнопка 2 в голосовом меню" FontSize="12" Foreground="#718898" Margin="0,3,0,0"/></StackPanel></Border>
+  </StackPanel>
+  <Grid Grid.Row="5" Margin="0,4,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+   <TextBlock x:Name="CopyStatus" Foreground="#24796F" FontSize="12" VerticalAlignment="Center"/>
+   <Button Grid.Column="1" Content="Закрыть" Click="Close_Click" Padding="18,8" Background="#326EFF" Foreground="White" BorderThickness="0" Cursor="Hand"/>
+  </Grid>
+ </Grid>
+</Window>

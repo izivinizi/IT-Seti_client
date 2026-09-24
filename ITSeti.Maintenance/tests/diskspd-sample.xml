@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Results>
+  <TimeSpan>
+    <TestTimeSeconds>8</TestTimeSeconds>
+    <Thread><Target><ReadBytes>800000000</ReadBytes><WriteBytes>400000000</WriteBytes></Target></Thread>
+  </TimeSpan>
+</Results>
