@@ -3,6 +3,7 @@
   <ItemGroup><ProjectReference Include="..\ITSeti.Maintenance.Core\ITSeti.Maintenance.Core.csproj" /></ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.20" />
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="Backend\NativeDiskMark.cs" />

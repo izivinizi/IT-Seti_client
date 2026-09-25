@@ -14,6 +14,11 @@ public static class DiagnosticRules
         if (snapshot.WindowsBuild is int windowsBuild && windowsBuild < 17763)
             issues.Add(new("Версия Windows устарела", $"Установлена {FormatWindows(snapshot)}. Это ниже Windows 10 версии 1809 (сборка 17763); система давно не получает актуальную поддержку и обновления безопасности.", "Warning"));
         var sample = full?.ResourceSampling is { Samples: >= 6, Error: "" } complete ? complete : null;
+        var cpuTemperature = snapshot.CpuTemperatureC ?? full?.CpuTemperatureC;
+        if (cpuTemperature is >= 90)
+            issues.Add(new("Критически высокая температура процессора", $"Датчик показывает {cpuTemperature:N0} °C. Дайте компьютеру остыть и проверьте охлаждение.", "Critical"));
+        else if (cpuTemperature is > 80)
+            issues.Add(new("Повышенная температура процессора", $"Датчик показывает {cpuTemperature:N0} °C. Проверьте охлаждение, если температура держится высокой.", "Warning"));
         if (snapshot.TotalMemoryBytes > 0)
         {
             var total = snapshot.TotalMemoryBytes / 1073741824.0;
@@ -49,6 +54,9 @@ public static class DiagnosticRules
         {
             foreach (var disk in full.SmartDisks.Where(d => Regex.IsMatch(d.Status, "Caution|Bad|Тревог|Плох", RegexOptions.IgnoreCase)))
                 issues.Add(new($"Состояние диска {disk.Model} вызывает опасения", "Сохраните важные файлы и обратитесь к специалисту для проверки диска.", "Critical"));
+            foreach (var disk in full.SmartDisks.Where(d => DiskLifetime.ExceedsWarning(d.PowerOnHours)))
+                issues.Add(new($"Накопитель {disk.Model} наработал более 60 000 часов",
+                    $"Наработка: {DiskLifetime.Format(disk.PowerOnHours)}. Это повод внимательнее следить за состоянием SMART и резервными копиями, но само по себе не означает неисправность.", "Warning"));
             var benchmark = full.Benchmark;
             var warning = GetReadWarningThreshold(snapshot, benchmark);
             var criticalSpeed = benchmark.MediaType switch { "SSD" => 180, "HDD" => 80, _ => 0 };
@@ -78,6 +86,11 @@ public static class DiagnosticRules
         if (snapshot.WindowsBuild is int windowsBuild && windowsBuild < 17763)
             findings.Add($"Windows ниже версии 1809: {FormatWindows(snapshot)}.");
         var sample = snapshot.Full?.ResourceSampling is { Samples: >= 6, Error: "" } complete ? complete : null;
+        var cpuTemperature = snapshot.CpuTemperatureC ?? snapshot.Full?.CpuTemperatureC;
+        if (cpuTemperature is >= 90)
+            findings.Add($"CPU: критически высокая температура {cpuTemperature:N0} °C (порог 90 °C).");
+        else if (cpuTemperature is > 80)
+            findings.Add($"CPU: температура {cpuTemperature:N0} °C выше 80 °C.");
         if (sample?.CpuHighSamples >= 5) findings.Add($"CPU: ≥90% в {sample.CpuHighSamples} из {sample.Samples} замеров за 30 секунд");
         if (sample?.MemoryHighSamples >= 5) findings.Add($"ОЗУ: ≥90% в {sample.MemoryHighSamples} из {sample.Samples} замеров за 30 секунд");
         if (sample is not null && sample.LowAvailableSamples >= 5 && sample.PagingHighSamples >= 3)
@@ -94,6 +107,8 @@ public static class DiagnosticRules
         {
             if (Regex.IsMatch(disk.Status, "Caution|Bad|Тревог|Плох", RegexOptions.IgnoreCase))
                 findings.Add($"SMART {disk.Model}: {disk.Status}");
+            if (DiskLifetime.ExceedsWarning(disk.PowerOnHours))
+                findings.Add($"Наработка {disk.Model}: {DiskLifetime.Format(disk.PowerOnHours)}. Порог предупреждения — более 60 000 ч.");
             if (disk.MediaType == "SSD" && IsLinkLimited(disk.TransferMode)) findings.Add($"Ограничение интерфейса {disk.Model}: {disk.TransferMode}. Поддержка порта/слота ПК не подтверждена.");
         }
         var hdds = full.PhysicalDisks.Where(d => d.MediaType == "HDD").Select(d => d.Model)

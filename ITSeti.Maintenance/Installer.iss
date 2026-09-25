@@ -3,7 +3,7 @@
 [Setup]
 AppId={{CFA7B53D-16A9-4D77-9D82-EE68369AB185}
 AppName=ИТ-Сети Обслуживание ПК
-AppVersion=0.6.0
+AppVersion=0.9.0
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance
 DefaultGroupName=ИТ-Сети

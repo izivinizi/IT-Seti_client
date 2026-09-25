@@ -72,7 +72,7 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
     $previousSmart=@(); $previousNotes=@()
     if($script:PreserveDiskSnapshot){$previousSmart=@($script:Snapshot.Smart | Where-Object {$_});$previousNotes=@($script:Snapshot.Notes | Where-Object {$_})}
     $script:PreserveDiskSnapshot=$false
-    $script:Snapshot = @{Notes=$previousNotes; Processes=@(); Events=@(); Volumes=@(); Disks=@(); Smart=$previousSmart; CPU='нет данных'; GPU='нет данных'; MemoryType='нет данных'; TotalRAM=$null; FreeRAM=$null; Load=$null; LastBootAt=$null; EventLimited=$false; EventUnavailable=0; ProcessUnavailable=0}
+    $script:Snapshot = @{Notes=$previousNotes; Processes=@(); Events=@(); Volumes=@(); Disks=@(); Smart=$previousSmart; CPU='нет данных'; GPU='нет данных'; CpuTemperatureC=$null; CpuTemperatureStatus=$null; MemoryType='нет данных'; TotalRAM=$null; FreeRAM=$null; Load=$null; LastBootAt=$null; EventLimited=$false; EventUnavailable=0; ProcessUnavailable=0}
     $s=$script:Snapshot
     $script:WindowsUpdateStatus=$null
     if($script:PendingDiskTest){$s.Notes += 'Нагрузка CPU/ОЗУ измерена во время дискового теста, не в простое.'}
@@ -80,6 +80,7 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
     try {
         $s.CPU=((Get-WmiObject Win32_Processor -ErrorAction Stop | ForEach-Object {$_.Name.Trim()}) -join ', ')
         $s.GPU=((Get-WmiObject Win32_VideoController -ErrorAction Stop | Where-Object {$_.Name -notmatch 'Virtual|Parsec|USB Mobile'} | ForEach-Object {$_.Name}) -join ', ')
+        $s.CpuTemperatureC=Get-CpuTemperatureC
         if(!$s.GPU) {$s.GPU='только виртуальные адаптеры / нет данных'}
         try {
             $types=@(Get-WmiObject Win32_PhysicalMemory -ErrorAction Stop | ForEach-Object {
@@ -110,6 +111,8 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
         }
         $s.Load=($loads | Measure-Object -Average).Average
         $s.FreeRAM=($free | Measure-Object -Average).Average
+        $measuredTemperature=Get-CpuTemperatureC
+        if($null -ne $measuredTemperature -and ($null -eq $s.CpuTemperatureC -or $measuredTemperature -gt $s.CpuTemperatureC)){$s.CpuTemperatureC=$measuredTemperature}
         if($s.Load -ge 85) {$s.Notes += 'Высокая загрузка CPU: проверьте процессы на обычной рабочей нагрузке.'}
         if(Get-Process dism,sfc -ErrorAction SilentlyContinue) {$s.Notes += 'Уже идёт восстановление Windows; оно влияет на текущую нагрузку.'}
     } catch {$s.Notes += ('Оборудование/нагрузка: '+$_.Exception.Message)}
@@ -219,24 +222,25 @@ function Get-SummaryLines {
     '01 | РЕСУРСЫ СИСТЕМЫ'
     if($s.WindowsEdition){'Windows: {0}, версия {1}, сборка {2}' -f $s.WindowsEdition,$s.WindowsRelease,$s.WindowsBuild}
     if($script:WindowsUpdateStatus){'Автообновления: '+$script:WindowsUpdateStatus}
-    'CPU: '+$s.CPU+$(if($null -ne $s.Load){' | нагрузка {0:N0}%' -f $s.Load})
+    'CPU: '+$s.CPU+$(if($null -ne $s.Load){' | {0:N0}%' -f $s.Load})+$(if($null -ne $s.CpuTemperatureC){' | {0:N0} °C' -f $s.CpuTemperatureC}else{' | температура недоступна'})
     if($null -ne $s.FreeRAM -and $s.TotalRAM -gt 0) {'ОЗУ: {0:N1} ГБ | свободно {1:N1} ГБ | занято {2:N0}%' -f $s.TotalRAM,$s.FreeRAM,(100*(1-$s.FreeRAM/$s.TotalRAM))}
     else {'ОЗУ: замер недоступен'}
     'GPU: '+$s.GPU
     '02 | ДИСКИ И МЕСТО'
-    foreach($d in $s.Disks) {
-        $smart=@($s.Smart | Where-Object {$_.Model -eq $d.FriendlyName})
-        $state='Windows: '+$(if($d.HealthStatus -eq 'Healthy'){'OK'}else{$d.HealthStatus})
-        if($smart.Count -eq 1){$state='SMART: '+$smart[0].Status}
-        'Накопитель: {0} | {1} | {2}' -f $d.FriendlyName,$d.MediaType,$state
-    }
-    foreach($v in $s.Volumes) {
-        $pct=0; if($v.Size){$pct=100*$v.FreeSpace/$v.Size}
-        '{0} свободно {1:N1} из {2:N1} ГБ | занято {3:N0}%' -f $v.DeviceID,($v.FreeSpace/1GB),($v.Size/1GB),(100-$pct)
-    }
-    foreach($d in $s.Smart){if($d.TransferMode){'Интерфейс {0}: {1} (текущий | поддерживаемый диском).' -f $d.Model,$d.TransferMode}}
-    if($script:DiskResult){'SEQ: чтение {0} / запись {1} МБ/с' -f $script:DiskResult.Read,$script:DiskResult.Write}
-    elseif($script:DiskFailure){'Тест диска: '+$script:DiskFailure}
+    $systemDrive=$env:SystemDrive
+    $systemSmart=@($s.Smart | Where-Object {[regex]::IsMatch([string]$_.Letters,('(?i)(?<![A-Z])'+[regex]::Escape($systemDrive)))} | Select-Object -First 1)
+    $systemVolume=$s.Volumes | Where-Object {$_.DeviceID -eq $systemDrive} | Select-Object -First 1
+    $systemPhysical=$null
+    if($systemSmart.Count){$systemPhysical=$s.Disks | Where-Object {$_.FriendlyName -eq $systemSmart[0].Model} | Select-Object -First 1}
+    elseif(@($s.Disks).Count -eq 1){$systemPhysical=$s.Disks[0]}
+    $diskParts=@($systemDrive)
+    if($systemSmart.Count){$diskParts+=([string]$systemSmart[0].Model);if($systemSmart[0].MediaType -and $systemSmart[0].MediaType -ne 'Unknown'){$diskParts+=([string]$systemSmart[0].MediaType)};$diskParts+=('SMART '+[string]$systemSmart[0].Status);if($systemSmart[0].TransferMode){$diskParts+=([string]$systemSmart[0].TransferMode -replace '\s*\|\s*','/')}}
+    elseif($systemPhysical){$diskParts+=([string]$systemPhysical.FriendlyName);if($systemPhysical.MediaType){$diskParts+=([string]$systemPhysical.MediaType)};$diskParts+=('Windows '+[string]$systemPhysical.HealthStatus)}
+    if($systemSmart.Count -and $null -ne $systemSmart[0].PowerOnHours){$hours=[long]$systemSmart[0].PowerOnHours;$days=[math]::Floor($hours/24);$diskParts+=('{0:N0} ч (~{1} г. {2} дн.)' -f $hours,[math]::Floor($days/365),($days%365))}
+    if($systemVolume -and $systemVolume.Size){$used=100*(1-$systemVolume.FreeSpace/$systemVolume.Size);$diskParts+=('{0:N1}/{1:N1} ГБ свободно, занято {2:N0}%' -f ($systemVolume.FreeSpace/1GB),($systemVolume.Size/1GB),$used)}
+    if($script:DiskResult){$diskParts+=('SEQ чтение {0} МБ/с' -f $script:DiskResult.Read)}
+    elseif($script:DiskFailure){$diskParts+=('тест: '+$script:DiskFailure)}
+    'Системный диск: '+($diskParts -join ' | ')
     '03 | НЕСТАНДАРТНЫЕ ПРОЦЕССЫ'
     'Процессы вне списка: {0}; без доступа к файлу: {1}' -f @($s.Processes).Count,$s.ProcessUnavailable
     if($s.PublisherSkipped -or $s.PublisherMetadataSkipped){'Исключено по издателю: {0}; по полю файла без подписи: {1} (не проверка подлинности).' -f $s.PublisherSkipped,$s.PublisherMetadataSkipped}
@@ -320,7 +324,12 @@ function Get-CriticalFindings {
     }
     foreach($d in $s.Smart) {
         if($d.Status -match 'Caution|Bad|Тревог|Плох'){'CrystalDiskInfo: {0} - {1}.' -f $d.Model,$d.Status}
+        if($null -ne $d.PowerOnHours -and [long]$d.PowerOnHours -gt 60000){'Наработка {0}: {1:N0} ч (более 60 000 ч). Проверьте SMART и резервные копии.' -f $d.Model,$d.PowerOnHours}
         Get-DiskLinkWarning $d
+    }
+    if($null -ne $s.CpuTemperatureC) {
+        if($s.CpuTemperatureC -ge 90){'CPU: критически высокая температура {0:N0} °C (порог 90 °C).' -f $s.CpuTemperatureC}
+        elseif($s.CpuTemperatureC -gt 80){'CPU: температура {0:N0} °C выше 80 °C.' -f $s.CpuTemperatureC}
     }
     if($script:DiskResult -and @('SSD','HDD') -contains $script:DiskResult.MediaType) {
         $warningLimit=if($script:DiskResult.MediaType -eq 'HDD'){100}elseif($script:DiskResult.IsNvme){900}else{210}
@@ -334,6 +343,28 @@ function Get-CriticalFindings {
             $message
         }
     }
+}
+function Get-CpuTemperatureC {
+    $values=@()
+    foreach($namespace in @('root\LibreHardwareMonitor','root\OpenHardwareMonitor')) {
+        try {
+            foreach($sensor in @(Get-WmiObject -Namespace $namespace -Class Sensor -ErrorAction Stop)) {
+                if([string]$sensor.SensorType -ne 'Temperature'){continue}
+                $identity=([string]$sensor.Identifier+' '+[string]$sensor.Parent+' '+[string]$sensor.Name)
+                if($identity -notmatch '(?i)(/(intelcpu|amdcpu)/\d+/|CPU\s*(Package|Core)|Tctl|Tdie|Package\s*id)'){continue}
+                $value=0.0
+            if([double]::TryParse([string]$sensor.Value,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$value) -and $value -gt 0 -and $value -le 120){$values+= $value}
+            }
+        } catch {}
+    }
+    try {
+        foreach($zone in @(Get-WmiObject -Namespace 'root\wmi' -Class MSAcpi_ThermalZoneTemperature -ErrorAction Stop | Where-Object {$_.InstanceName -match '(?i)CPU|PROCESSOR|PROCHOT|TCTL|TDIE'})) {
+            $value=([double]$zone.CurrentTemperature/10)-273.15
+            if($value -gt 0 -and $value -le 120){$values+=$value}
+        }
+    } catch {}
+    if($values.Count){return [double](($values | Measure-Object -Maximum).Maximum)}
+    return $null
 }
 function Get-DiskLinkWarning($Disk) {
     $parts=@(([string]$Disk.TransferMode) -split '\|')
@@ -359,10 +390,21 @@ function ConvertFrom-CdiReport([string]$Text) {
         $rotation=[regex]::Match($block,'(?m)^\s*Rotation Rate\s*:\s*(.*)$').Groups[1].Value
         $interface=[regex]::Match($block,'(?m)^\s*Interface\s*:\s*(.*)$').Groups[1].Value
         $transfer=[regex]::Match($block,'(?m)^[ \t]*Transfer Mode[ \t]*:[ \t]*([^\r\n]*)').Groups[1].Value.Trim()
+        $powerOn=[regex]::Match($block,'(?im)^\s*(?:Power\s*On\s*Hours?|Часы\s+работы|Время\s+работы|Наработка)\s*:\s*(?<value>[\d\s.,]+?)\s*(?<unit>hours?|hrs?|h|час(?:а|ов|ы)?|ч|days?|d|дн(?:ей|я)?|years?|yrs?|лет|год(?:а|ов)?)?(?:\s|$)')
+        $powerOnHours=$null
+        if($powerOn.Success) {
+            $amountText=$powerOn.Groups['value'].Value -replace '[^\d]',''
+            if($amountText -match '^\d+$') {
+                $amount=[long]$amountText
+                $unit=$powerOn.Groups['unit'].Value
+                $factor=if($unit -match '^(?:days?|d|дн)') {24} elseif($unit -match '^(?:years?|yrs?|лет|год)') {8760} else {1}
+                $powerOnHours=[long]($amount*$factor)
+            }
+        }
         $type='Unknown'
         if($rotation -match 'SSD|Solid State' -or $interface -match 'NVM Express|NVMe'){$type='SSD'}
         elseif($rotation -match '\d+\s*RPM'){$type='HDD'}
-        New-Object PSObject -Property @{Model=$model.Groups[1].Value.Trim();Status=$health.Groups[1].Value.Trim();Letters=$letters;MediaType=$type;TransferMode=$transfer}
+        New-Object PSObject -Property @{Model=$model.Groups[1].Value.Trim();Status=$health.Groups[1].Value.Trim();Letters=$letters;MediaType=$type;TransferMode=$transfer;PowerOnHours=$powerOnHours}
     }
 }
 function Show-ServiceSummary {

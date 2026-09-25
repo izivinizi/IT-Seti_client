@@ -52,6 +52,9 @@ internal static class Program
                 if (first.TotalMemoryBytes == 0 || first.CpuPercent is < 0 or > 100 || first.Disks.Count == 0 || first.QuickDisks is not { Count: > 0 }
                     || first.LastBootAt is null || first.LastBootAt > first.StartedAt)
                     throw new Exception("Invalid system measurements");
+                if (first.CpuTemperatureC is < 5 or > 120
+                    || first.CpuTemperatureC is not null && first.CpuTemperatureStatus?.Contains("LibreHardwareMonitor", StringComparison.Ordinal) != true)
+                    throw new Exception("CPU temperature source returned an invalid value or an unexpected provider");
                 var identityPath = Path.Combine(output, "inventory.txt");
                 var identityStore = new MachineIdentityStore(identityPath);
                 identityStore.SaveInventoryNumber("0042");
@@ -79,7 +82,7 @@ internal static class Program
                 window.ViewModel.Selected = window.ViewModel.History[1];
                 if (window.ViewModel.Selected.Id != first.Id) throw new Exception("History selection failed");
                 Capture(window, Path.Combine(output, "user-home.png"));
-                var normalHeight = window.ActualHeight;
+                var normalExtent = Find<ScrollViewer>(userShell)!.ExtentHeight;
                 var stressed = first with
                 {
                     CpuPercent = 95,
@@ -93,7 +96,7 @@ internal static class Program
                 window.ViewModel.Selected = stressed;
                 window.UpdateLayout();
                 await Task.Delay(250);
-                if (!window.ViewModel.HasMoreUserIssues || window.ActualHeight <= normalHeight
+                if (!window.ViewModel.HasMoreUserIssues || Find<ScrollViewer>(userShell)!.ExtentHeight <= normalExtent
                     || ((Button)window.FindName("MoreIssuesButton")!).Visibility != Visibility.Visible
                     || !window.ViewModel.HasLowDiskSpace || window.ViewModel.LowSpaceActionLabel != "Что занимает C:")
                     throw new Exception("User window did not expand for multiple issues");
@@ -153,21 +156,22 @@ internal static class Program
                     || window.ViewModel.DebugStage != "Проверка диска")
                     throw new Exception("Admin debug details are missing");
                 var failedDebug = new DiagnosticDebugView();
-                failedDebug.Refresh(debugSnapshot, "Не удалось запустить задачу Windows", "Запуск проверки");
-                if (!failedDebug.Source.Contains("завершилась с ошибкой") || failedDebug.Steps.Count != 1
-                    || failedDebug.Steps[0].Detail != "Не удалось запустить задачу Windows" || failedDebug.DirectoryPath.Length != 0)
+                failedDebug.Refresh(debugSnapshot, "Не удалось запустить задачу Windows", "Запуск проверки", preferSelected: true);
+                if (!failedDebug.Source.Contains("завершилась с ошибкой")
+                    || failedDebug.Steps.SingleOrDefault(step => step.Name == "Запуск проверки")?.Detail != "Не удалось запустить задачу Windows"
+                    || failedDebug.Steps.Any(step => step.Name == "Скорость диска") || failedDebug.DirectoryPath.Length != 0)
                     throw new Exception("Failed run is mixed with an older successful report");
                 failedDebug.Refresh(debugSnapshot, preferSelected: true);
                 if (failedDebug.DirectoryPath != debugRun || failedDebug.Steps.All(s => s.Name != "Скорость диска"))
                     throw new Exception("Selected report is hidden by the latest failure");
                 var debugTabs = Find<TabControl>(adminShell) ?? throw new Exception("Admin tabs missing");
-                debugTabs.SelectedIndex = 6;
+                debugTabs.SelectedIndex = 7;
                 window.UpdateLayout();
                 await Task.Delay(250);
                 window.UpdateLayout();
                 Capture(window, Path.Combine(output, "admin-debug.png"));
                 debugTabs.SelectedIndex = 0;
-                debugTabs.SelectedIndex = 7;
+                debugTabs.SelectedIndex = 8;
                 window.UpdateLayout();
                 await Task.Delay(200);
                 window.UpdateLayout();
@@ -192,20 +196,25 @@ internal static class Program
                 var treeStart = TreeSizeLauncher.CreateStartInfo(@"C:\Tools\TreeSizeFree.exe", @"C:\");
                 if (treeStart.UseShellExecute || treeStart.Verb.Length > 0 || treeStart.ArgumentList.Single() != @"C:\")
                     throw new Exception("TreeSize launch must scan the selected volume without elevation");
+                var elevatedTreeStart = TreeSizeLauncher.CreateElevatedStartInfo(@"C:\Tools\TreeSizeFree.exe", @"C:\");
+                if (!elevatedTreeStart.UseShellExecute || elevatedTreeStart.Verb != "runas" || elevatedTreeStart.ArgumentList.Single() != @"C:\")
+                    throw new Exception("Engineer TreeSize action must request Windows elevation for the selected volume");
                 window.ViewModel.SetSetupMode(false);
                 var detectedSetup = OrganizationSoftwareAudit.FindSource();
                 if (File.Exists(@"F:\Service\ITSETI-Setup\system\Install.ps1")
                     && !string.Equals(detectedSetup, @"F:\Service\ITSETI-Setup", StringComparison.OrdinalIgnoreCase))
                     throw new Exception("Moved ITSETI-Setup folder was not discovered under Service");
                 await AssertSetupSignatureCheck(output);
-                foreach (var name in new[] { "InstallSetupButton", "LaunchSetupMenuButton", "LaunchDiskInfoButton", "LaunchDiskMarkButton" })
+                foreach (var name in new[] { "InstallSetupButton", "LaunchDiskInfoButton", "LaunchDiskMarkButton", "LaunchTreeSizeButton" })
                     if (window.FindName(name) is not Button { IsEnabled: true }) throw new Exception($"ПО action is unavailable: {name}");
+                if (((Button)window.FindName("LaunchSetupMenuButton")!).IsEnabled != window.ViewModel.HasSetupSource)
+                    throw new Exception("Setup menu availability does not match the detected package source");
                 AssertDiskToolResolution(output);
                 window.UpdateLayout();
                 await Task.Delay(250);
                 Capture(window, Path.Combine(output, "overview.png"));
                 var setupTabs = Find<TabControl>(window) ?? throw new Exception("Tabs missing");
-                setupTabs.SelectedIndex = 4;
+                setupTabs.SelectedIndex = 5;
                 ((ComboBox)window.FindName("SetupModeSelector")!).SelectedIndex = 1;
                 window.UpdateLayout();
                 await Task.Delay(250);
@@ -249,7 +258,7 @@ internal static class Program
                     window.UpdateLayout();
                     await Task.Delay(250);
                     Capture(window, Path.Combine(output, "physical-disks.png"));
-                    tabs.SelectedIndex = 3;
+                    tabs.SelectedIndex = 4;
                     window.UpdateLayout();
                     await Task.Delay(250);
                     Capture(window, Path.Combine(output, "events.png"));
@@ -280,19 +289,19 @@ internal static class Program
         static HttpClient For(string payload) => new(new FakeReleaseHandler(payload));
 
         const string digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        var newer = new GitHubReleaseClient(For(Payload("v0.7.0", digest)), "https://unit.test/latest");
-        var update = await newer.GetUpdateAsync(new Version(0, 6, 0));
-        if (update?.Version != new Version(0, 7, 0) || update.Digest != digest || update.Size != 12345)
+        var newer = new GitHubReleaseClient(For(Payload("v0.9.0", digest)), "https://unit.test/latest");
+        var update = await newer.GetUpdateAsync(new Version(0, 8, 0));
+        if (update?.Version != new Version(0, 9, 0) || update.Digest != digest || update.Size != 12345)
             throw new Exception("Valid newer GitHub release was not accepted");
 
-        var current = new GitHubReleaseClient(For(Payload("v0.6.0", digest)), "https://unit.test/latest");
-        if (await current.GetUpdateAsync(new Version(0, 6, 0, 0)) is not null)
+        var current = new GitHubReleaseClient(For(Payload("v0.9.0", digest)), "https://unit.test/latest");
+        if (await current.GetUpdateAsync(new Version(0, 9, 0, 0)) is not null)
             throw new Exception("Current release was incorrectly offered as an update");
 
-        var invalid = new GitHubReleaseClient(For(Payload("v0.7.0", "sha256:invalid")), "https://unit.test/latest");
+        var invalid = new GitHubReleaseClient(For(Payload("v0.9.0", "sha256:invalid")), "https://unit.test/latest");
         try
         {
-            await invalid.GetUpdateAsync(new Version(0, 6, 0));
+            await invalid.GetUpdateAsync(new Version(0, 8, 0));
             throw new Exception("Release without a valid digest was accepted");
         }
         catch (InvalidDataException) { }
@@ -398,6 +407,15 @@ internal static class Program
             .Any(i => i.Severity == "Critical" && i.Title.Contains("требует проверки")))
             throw new Exception("Windows disk health missing from full user result");
         if (DiagnosticRules.GetFindings(snapshot).Count != 1) throw new Exception("SSD read threshold failed");
+        if (DiskLifetime.ExceedsWarning(60_000) || !DiskLifetime.ExceedsWarning(60_001)
+            || !DiskLifetime.Format(60_000).Contains("6 г. 310 дн.", StringComparison.Ordinal))
+            throw new Exception("Drive power-on hour threshold or years/days conversion failed");
+        var longRunningDisk = new SmartDiskDetails("Aged SSD", "Good", "C:", "SSD", "SATA/600", 60_001);
+        if (!DiagnosticRules.GetUserIssues(snapshot with { Full = full with { SmartDisks = [longRunningDisk] } })
+                .Any(issue => issue.Severity == "Warning" && issue.Title.Contains("60 000"))
+            || DiagnosticRules.GetUserIssues(snapshot with { Full = full with { SmartDisks = [longRunningDisk with { PowerOnHours = 60_000 }] } })
+                .Any(issue => issue.Title.Contains("60 000")))
+            throw new Exception("Drive power-on hours warning boundary failed");
         var nvme = snapshot with { Full = full with { Benchmark = benchmark with { Read = 899, IsNvme = true } } };
         if (!DiagnosticRules.GetFindings(nvme).Any(line => line.Contains("ниже 900"))) throw new Exception("NVMe read threshold failed");
         if (DiagnosticRules.GetFindings(nvme with { Full = nvme.Full! with { Benchmark = nvme.Full!.Benchmark with { Read = 900 } } }).Any(line => line.Contains("ниже 900")))
@@ -441,6 +459,17 @@ internal static class Program
         if (!DiagnosticRules.GetUserIssues(cpu).Any(i => i.Title.Contains("Процессор"))) throw new Exception("Sustained CPU pressure missing");
         if (DiagnosticRules.GetUserIssues(cpu with { Full = full }).Any(i => i.Title.Contains("Процессор")))
             throw new Exception("One CPU sample flagged as sustained pressure");
+        var warmCpu = snapshot with { Full = full with { CpuTemperatureC = 80.1 } };
+        if (!DiagnosticRules.GetUserIssues(warmCpu).Any(issue => issue.Severity == "Warning" && issue.Title.Contains("температура"))
+            || DiagnosticRules.GetUserIssues(snapshot with { Full = full with { CpuTemperatureC = 80 } }).Any(issue => issue.Title.Contains("температура")))
+            throw new Exception("CPU temperature warning threshold failed");
+        var criticalCpu = snapshot with { Full = full with { CpuTemperatureC = 90 } };
+        if (!DiagnosticRules.GetUserIssues(criticalCpu).Any(issue => issue.Severity == "Critical" && issue.Title.Contains("температура"))
+            || DiagnosticRules.GetUserIssues(snapshot with { Full = full with { CpuTemperatureC = 89.9 } }).Any(issue => issue.Severity == "Critical"))
+            throw new Exception("CPU temperature critical threshold failed");
+        if (!DiagnosticRules.GetUserIssues(snapshot with { Full = null, CpuTemperatureC = 90 })
+            .Any(issue => issue.Severity == "Critical" && issue.Title.Contains("температура")))
+            throw new Exception("CPU temperature from the independent sensor reader was ignored");
         var lowSpace = snapshot with { Disks = [new DiskSnapshot("C:\\", 100L * 1073741824, 14L * 1073741824)] };
         if (!DiagnosticRules.GetUserIssues(lowSpace).Any(i => i.Title.Contains("места") && i.Severity == "Warning")) throw new Exception("15 GB space warning missing");
         lowSpace = lowSpace with { Disks = [new DiskSnapshot("C:\\", 100L * 1073741824, 4L * 1073741824)] };
@@ -501,7 +530,7 @@ internal static class Program
             new SqliteHistoryStore(Path.Combine(output, "disk-groups.db")));
         var full = new FullDiagnosticDetails("Test CPU", "Test GPU", false,
             [new PhysicalDiskDetails("Samsung SSD", "SSD", "Healthy")],
-            [new SmartDiskDetails("Samsung SSD", "Good", "C:", "SSD", "SATA/600")],
+            [new SmartDiskDetails("Samsung SSD", "Good", "C:", "SSD", "SATA/600", 60_001)],
             [], [], 0, 0, false,
             new DiskBenchmark("C:", "SSD", 250, 0, 2, "Completed", ""), output);
         var snapshot = new DiagnosticSnapshot(Guid.NewGuid(), DateTimeOffset.Now, "TEST", 10,
@@ -509,8 +538,15 @@ internal static class Program
             [new DiskSnapshot("C:\\", 100L * 1024 * 1024 * 1024, 40L * 1024 * 1024 * 1024)], [], full);
         model.Selected = snapshot;
         if (model.DiskGroups.Count != 1 || model.DiskGroups[0].Partitions.Count != 1 ||
-            model.DiskGroups[0].TransferMode != "SATA/600")
+            model.DiskGroups[0].TransferMode != "SATA/600" || !model.DiskGroups[0].LifetimeWarning.Contains("60 000"))
             throw new Exception("Disk model, health, link mode and volume were not grouped together");
+        if (!model.SystemDiskSummary.Contains("C:", StringComparison.OrdinalIgnoreCase)
+            || !model.SystemDiskSummary.Contains("Samsung SSD", StringComparison.OrdinalIgnoreCase)
+            || !model.SystemDiskSummary.Contains("наработ", StringComparison.OrdinalIgnoreCase))
+            throw new Exception("Compact system disk summary omitted model or lifetime");
+        if (!((TabControl)System.Windows.Application.Current.Windows.OfType<MainWindow>().First().FindName("AdminTabs")!).Items
+                .OfType<TabItem>().Any(item => Equals(item.Header, "Сеть")))
+            throw new Exception("Network tab is missing");
     }
 
     private static async Task AssertUserCleanupWorker(string output, string backend, string signal, string expected)

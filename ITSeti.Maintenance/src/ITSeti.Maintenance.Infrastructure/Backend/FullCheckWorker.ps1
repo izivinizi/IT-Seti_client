@@ -1,5 +1,6 @@
 ﻿param([string]$RunRoot,[string]$ToolsRoot,[switch]$SkipDiskTests,[switch]$LimitedMode,[switch]$HeadlessDiskSpd,[switch]$UserMode,[switch]$TrustedTools,[switch]$SkipResourceSampling,[switch]$SkipDiskBenchmark,[switch]$StartRepair)
 $ErrorActionPreference='Stop'
+$CpuTemperatureFile=$env:ITSETI_CPU_TEMPERATURE_FILE
 $RunRoot=(Resolve-Path -LiteralPath $RunRoot).Path
 $ScriptRoot=$RunRoot
 $Days=7;$Samples=5
@@ -56,15 +57,15 @@ function Save-Result([string]$Name,[switch]$Pending) {
     if($s.ProcessUnavailable){$notes+=('Без доступа к исполняемому файлу процессов: '+$s.ProcessUnavailable)}
     if($s.EventUnavailable){$notes+=('Недоступно выборок журналов: '+$s.EventUnavailable)}
     $data=@{
-        Id=$id;StartedAt=$started;ComputerName=$env:COMPUTERNAME;LastBootAt=$s.LastBootAt;WindowsEdition=$s.WindowsEdition;WindowsRelease=$s.WindowsRelease;WindowsBuild=$s.WindowsBuild
+        Id=$id;StartedAt=$started;ComputerName=$env:COMPUTERNAME;LastBootAt=$s.LastBootAt;WindowsEdition=$s.WindowsEdition;WindowsRelease=$s.WindowsRelease;WindowsBuild=$s.WindowsBuild;CpuTemperatureC=$(if($null -ne $s.CpuTemperatureC){[double]$s.CpuTemperatureC}else{$null});CpuTemperatureStatus=[string]$s.CpuTemperatureStatus
         CpuPercent=$(if($null -ne $s.Load){[double]$s.Load}else{-1})
         TotalMemoryBytes=[uint64]([double]$s.TotalRAM*1GB);AvailableMemoryBytes=[uint64]([double]$s.FreeRAM*1GB)
         Disks=@(foreach($v in $s.Volumes){@{Name=([string]$v.DeviceID+'\');TotalBytes=[long]$v.Size;FreeBytes=[long]$v.FreeSpace;VolumeId=[string]$v.VolumeSerialNumber}})
         Notes=$notes
         Full=@{
-            CpuName=[string]$s.CPU;GpuName=[string]$s.GPU;MemoryType=[string]$s.MemoryType;Elevated=[bool]$script:Admin
+            CpuName=[string]$s.CPU;GpuName=[string]$s.GPU;MemoryType=[string]$s.MemoryType;CpuTemperatureC=$(if($null -ne $s.CpuTemperatureC){[double]$s.CpuTemperatureC}else{$null});Elevated=[bool]$script:Admin
             PhysicalDisks=@(foreach($d in $s.Disks){@{Model=[string]$d.FriendlyName;MediaType=[string]$d.MediaType;Health=[string]$d.HealthStatus}})
-            SmartDisks=@(foreach($d in $s.Smart){@{Model=[string]$d.Model;Status=[string]$d.Status;Letters=[string]$d.Letters;MediaType=[string]$d.MediaType;TransferMode=[string]$d.TransferMode}})
+            SmartDisks=@(foreach($d in $s.Smart){@{Model=[string]$d.Model;Status=[string]$d.Status;Letters=[string]$d.Letters;MediaType=[string]$d.MediaType;TransferMode=[string]$d.TransferMode;PowerOnHours=$(if($null -ne $d.PowerOnHours){[long]$d.PowerOnHours}else{$null})}})
             Processes=@(foreach($p in $s.Processes){@{Name=[string]$p.Name;Description=[string]$p.Description;Publisher=$(if($p.Signature -eq 'Valid'){$p.Signer}else{[string]$p.Company+' (из файла)'});Signature=[string]$p.Signature;Path=[string]$p.Path}})
             TopMemoryProcesses=@($script:TopMemoryProcesses)
             ResourceSampling=$script:ResourceSampling
@@ -106,6 +107,14 @@ try {
     }
     Write-Stage 'Замер CPU, ОЗУ и оборудования до дискового теста'
     Get-ServiceSnapshot -Live -StartDiskTest:(!$HeadlessDiskSpd -and !$SkipDiskTests -and !$script:DiskFailure)
+    if($CpuTemperatureFile -and (Test-Path -LiteralPath $CpuTemperatureFile)) {
+        try {
+            $sensor=Get-Content -LiteralPath $CpuTemperatureFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            if($null -ne $sensor.TemperatureC -and [double]$sensor.TemperatureC -gt 0 -and [double]$sensor.TemperatureC -le 120){$script:Snapshot.CpuTemperatureC=[double]$sensor.TemperatureC}
+            if($sensor.Status){$script:Snapshot.CpuTemperatureStatus=[string]$sensor.Status}
+        } catch {$script:Snapshot.CpuTemperatureStatus='Не удалось прочитать результат датчика: '+$_.Exception.Message}
+    }
+    if(!$script:Snapshot.CpuTemperatureStatus) {$script:Snapshot.CpuTemperatureStatus=if($null -ne $script:Snapshot.CpuTemperatureC){'Температура получена из Windows/WMI'}else{'Источник температуры не вернул данных'}}
     if($script:SamplerFailure){$script:Snapshot.Notes+=@('Замер нагрузки: '+$script:SamplerFailure)}
     if($LimitedMode){$script:Snapshot.Notes+=@('Ограниченный режим: повышение прав недоступно. Часть процессов и событий может быть недоступна; SMART и тест скорости пропущены.')}
     if($UserMode){$script:Snapshot.Notes+=@('Проверка выполнена от текущего пользователя; защищённые системные сведения могут быть недоступны.')}

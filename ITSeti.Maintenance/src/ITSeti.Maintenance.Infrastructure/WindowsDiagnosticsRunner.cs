@@ -37,10 +37,12 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
         var physicalDisks = await ReadDiskHealthAsync(cancellationToken);
         if (physicalDisks.Count == 0) notes.Add("Состояние накопителей через Windows определить не удалось. Для подробной проверки запустите полную диагностику.");
         var windows = ReadWindowsDetails();
+        var temperature = await CpuTemperatureReader.ReadAsync();
         return new DiagnosticSnapshot(Guid.NewGuid(), started, Environment.MachineName, cpu,
             memory.TotalPhysical, memory.AvailablePhysical, disks, notes, QuickDisks: physicalDisks,
             LastBootAt: DateTimeOffset.Now - TimeSpan.FromMilliseconds(Environment.TickCount64),
-            WindowsEdition: windows.Edition, WindowsRelease: windows.Release, WindowsBuild: windows.Build);
+            WindowsEdition: windows.Edition, WindowsRelease: windows.Release, WindowsBuild: windows.Build,
+            CpuTemperatureC: temperature.TemperatureC, CpuTemperatureStatus: temperature.Status);
     }, cancellationToken);
 
     private static (string? Edition, string? Release, int? Build) ReadWindowsDetails()

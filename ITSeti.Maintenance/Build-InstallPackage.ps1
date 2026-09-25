@@ -1,12 +1,12 @@
 param([string]$ToolsRoot=(Join-Path $PSScriptRoot 'Tools'),[string]$OutputRoot=(Join-Path $PSScriptRoot 'dist\ITSeti-Maintenance'))
 $ErrorActionPreference='Stop'
-$required=@('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe')
+$required=@('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe','PawnIO\PawnIO_setup.exe')
 foreach($relative in $required){if(!(Test-Path -LiteralPath (Join-Path $ToolsRoot $relative) -PathType Leaf)){throw "Missing: $relative"}}
 dotnet publish (Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj') -c Release -r win-x64 --self-contained true -o (Join-Path $OutputRoot 'App')
 if($LASTEXITCODE -ne 0){throw 'dotnet publish failed.'}
 $destination=Join-Path $OutputRoot 'Tools'
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
-foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free')) {
+foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO')) {
     $source=Join-Path $ToolsRoot $folder
     if(Test-Path -LiteralPath $source -PathType Container){
         $target=Join-Path $destination $folder

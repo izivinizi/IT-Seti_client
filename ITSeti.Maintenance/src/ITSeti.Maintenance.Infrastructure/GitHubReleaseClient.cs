@@ -23,7 +23,7 @@ public sealed class GitHubReleaseClient
     private static HttpClient CreateClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ITSeti-Maintenance/0.6");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("ITSeti-Maintenance/0.9.0");
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         return client;
     }

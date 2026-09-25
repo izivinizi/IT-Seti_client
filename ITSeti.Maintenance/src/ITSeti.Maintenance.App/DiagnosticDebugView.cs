@@ -24,8 +24,8 @@ public sealed class DiagnosticDebugView
         DirectoryPath = failedRoot ?? (currentError is null && Directory.Exists(selectedRoot) ? selectedRoot! : "");
         Source = failedRoot is not null ? "Последняя незавершённая проверка"
             : currentError is not null ? "Последняя проверка завершилась с ошибкой"
-            : snapshot?.Full is not null ? $"Полная проверка от {snapshot.DateLabel}"
-            : "Выберите полную проверку в истории";
+            : snapshot is not null ? $"{snapshot.KindLabel} проверка от {snapshot.DateLabel}"
+            : "Проверка ещё не выполнялась";
         Stage = ReadSmallFile("stage.txt") ?? currentStage ?? "—";
         Error = ReadSmallFile("error.txt") ?? currentError ?? "Ошибок запуска не обнаружено";
 
@@ -57,7 +57,14 @@ public sealed class DiagnosticDebugView
                 Steps.Add(new("Примечание", "Информация", note));
         }
 
-        foreach (var name in new[] { "error.txt", "full-check.log", "disk-worker.log", "resource-sampler.err.txt", "disk-result.xml", "result.json", "stage.txt", Path.Combine("repair", "status.txt") })
+        if (snapshot is not null)
+        {
+            var temperature = snapshot.CpuTemperatureC ?? snapshot.Full?.CpuTemperatureC;
+            Steps.Add(new("Температура CPU", temperature is null ? "Не получено" : "Готово",
+                temperature is null ? snapshot.CpuTemperatureStatus ?? "Источник температуры не проверялся в этой версии" : $"{temperature:N0} °C · {snapshot.CpuTemperatureStatus ?? "источник датчика не указан"}"));
+        }
+
+        foreach (var name in new[] { "error.txt", "full-check.log", "disk-worker.log", "resource-sampler.err.txt", "disk-result.xml", "cpu-temperature.json", "result.json", "stage.txt", Path.Combine("repair", "status.txt") })
         {
             var path = Path.Combine(DirectoryPath, name);
             if (DirectoryPath.Length > 0 && File.Exists(path)) Files.Add(new(name, path));

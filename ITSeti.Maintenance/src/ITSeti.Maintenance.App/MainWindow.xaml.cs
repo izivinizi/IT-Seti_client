@@ -15,6 +15,7 @@ public partial class MainWindow : Window
 {
     public MainViewModel ViewModel { get; }
     private readonly FullDiagnosticsRunner fullRunner = new();
+    private readonly TaskCompletionSource initializationCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool closeAfterMaintenance;
     private bool exitForUpdate;
     private DispatcherOperation? progressScroll;
@@ -35,7 +36,11 @@ public partial class MainWindow : Window
         ViewModel.CheckProgressEntries.CollectionChanged += (_, _) => QueueProgressScroll();
         CheckProgressList.IsVisibleChanged += (_, _) => QueueProgressScroll();
         Closed += (_, _) => { closed = true; progressScroll?.Abort(); };
-        Loaded += async (_, _) => await ViewModel.InitializeAsync();
+        Loaded += async (_, _) =>
+        {
+            await ViewModel.InitializeAsync();
+            initializationCompleted.TrySetResult();
+        };
         Closing += (_, e) =>
         {
             if (ViewModel.IsBusy)
@@ -50,6 +55,12 @@ public partial class MainWindow : Window
                 Hide();
             }
         };
+    }
+
+    public async Task RunScheduledQuickCheckAsync()
+    {
+        await initializationCompleted.Task;
+        await ViewModel.RunScheduledUserQuickAsync();
     }
 
     private void QueueProgressScroll()
@@ -212,6 +223,9 @@ public partial class MainWindow : Window
 
     private async void InstallAppUpdate_Click(object sender, RoutedEventArgs e)
     {
+        await ViewModel.CheckApplicationUpdatesAsync();
+        if (!ViewModel.CanInstallApplicationUpdate || ViewModel.ApplicationUpdateStatus.StartsWith("Установлена последняя", StringComparison.OrdinalIgnoreCase)) return;
+        if (!ViewModel.ApplicationUpdateStatus.StartsWith("Доступна версия", StringComparison.OrdinalIgnoreCase)) return;
         if (MessageBox.Show(this,
             "Приложение закроется. Системная задача скачает установщик последней версии и проверит его SHA-256 перед обновлением.",
             "Обновление приложения", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
@@ -310,6 +324,25 @@ public partial class MainWindow : Window
     }
     private async void LaunchDiskInfo_Click(object sender, RoutedEventArgs e) => await LaunchDiskToolAsync(diskInfo: true);
     private async void LaunchDiskMark_Click(object sender, RoutedEventArgs e) => await LaunchDiskToolAsync(diskInfo: false);
+    private void LaunchTreeSizeAdmin_Click(object sender, RoutedEventArgs e)
+    {
+        var volume = ViewModel.SelectedTreeSizeVolume;
+        if (string.IsNullOrWhiteSpace(volume)) return;
+        try
+        {
+            TreeSizeLauncher.StartElevatedScan(volume);
+            ViewModel.SetSoftwareActionStatus($"TreeSize Free запущен для {volume} с правами администратора.");
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            ViewModel.SetSoftwareActionStatus("Запрос повышения прав Windows отменён.");
+        }
+        catch (Exception ex)
+        {
+            ViewModel.SetSoftwareActionStatus("Не удалось запустить TreeSize Free: " + ex.Message);
+            MessageBox.Show(this, ex.Message, "TreeSize Free", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
     private async Task LaunchDiskToolAsync(bool diskInfo)
     {
         try
@@ -339,23 +372,7 @@ public partial class MainWindow : Window
         SizeToContent = SizeToContent.Height;
         Title = "ИТ-Сети | Помощь с компьютером";
     }
-    private void ChooseTools_Click(object sender, RoutedEventArgs e)
-    {
-        if (FullDiagnosticsRunner.IsInstalled)
-        {
-            MessageBox.Show(this, "В установленной версии комплект дисковых утилит меняется через установщик администратора.", "Утилиты защищены", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-        var dialog = new OpenFolderDialog { Title = "Папка, содержащая CrystalDiskInfo9_6_3_Portable и CrystalDiskMark9" };
-        if (dialog.ShowDialog(this) == true) fullRunner.ToolsRoot = dialog.FolderName;
-    }
-    private void OpenReport_Click(object sender, RoutedEventArgs e)
-    {
-        var directory = ViewModel.Selected?.Full?.ReportDirectory;
-        if (directory is null) return;
-        try { Process.Start(new ProcessStartInfo("explorer.exe", '"' + directory + '"') { UseShellExecute = true }); }
-        catch (Exception ex) { MessageBox.Show(this, ex.Message, "Не удалось открыть журнал"); }
-    }
+    private void RefreshNetwork_Click(object sender, RoutedEventArgs e) => ViewModel.RefreshNetworkAdapters();
     private void RefreshDebug_Click(object sender, RoutedEventArgs e) => ViewModel.RefreshDebug();
     private void OpenDebugDirectory_Click(object sender, RoutedEventArgs e)
     {

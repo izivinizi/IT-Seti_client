@@ -59,7 +59,11 @@ if($install -notmatch 'Register-ScheduledTask' -or $install -notmatch "-User 'SY
 if($install -notmatch 'ITSeti-Maintenance-Quick' -or $install -notmatch 'CurrentVersion\\Run') {throw 'Quick-check startup is missing.'}
 $entry=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCheck.ps1'),[Text.Encoding]::UTF8)
 if(!$install.Contains('ITSeti-Maintenance-QuickFull') -or !$install.Contains('-Quick')) {throw 'Installed quick full-check task is missing.'}
-if($install -notmatch 'DaysInterval 14' -or !$install.Contains('ITSeti-Maintenance-AutoFullRepair') -or $install -notmatch 'DaysInterval 60') {throw '14-day quick and 60-day full repair schedules are missing.'}
+if($install -match 'DaysInterval 14' -or !$install.Contains('ITSeti-Maintenance-AutoFullRepair') -or $install -notmatch 'DaysInterval 60') {throw 'The 14-day check must be prompted; the 60-day full repair schedule must remain.'}
+$appSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\App.xaml.cs'),[Text.Encoding]::UTF8)
+$promptSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\ScheduledCheckPrompt.cs'),[Text.Encoding]::UTF8)
+if(!$appSource.Contains('last-quick-run.txt') -or !$appSource.Contains('TimeSpan.FromDays(14)') -or
+   !$promptSource.Contains('DialogResult = false') -or !$appSource.Contains('AddDays(1)') -or !$appSource.Contains('ScheduleReminder')) {throw 'The prompted 14-day check or one-day reminder is incomplete.'}
 if(!$install.Contains('ITSeti-Maintenance-DisableUpdates') -or !$install.Contains('ITSeti-Maintenance-RestoreUpdates')) {throw 'Windows Update policy tasks are missing.'}
 $updater=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Update-Application.ps1'
 $updaterTokens=$null;$updaterErrors=$null

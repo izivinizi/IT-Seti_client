@@ -10,19 +10,37 @@ public static class TreeSizeLauncher
     {
         if (new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))
             throw new InvalidOperationException("Для просмотра файлов без прав администратора откройте приложение из обычной учётной записи.");
+        ValidateVolume(volume);
+        var exe = ResolveExecutable();
+        var info = CreateStartInfo(exe, volume);
+        using var process = Process.Start(info) ?? throw new InvalidOperationException("Не удалось открыть TreeSize Free.");
+    }
+
+    public static void StartElevatedScan(string volume)
+    {
+        ValidateVolume(volume);
+        var exe = ResolveExecutable();
+        var info = CreateElevatedStartInfo(exe, volume);
+        using var process = Process.Start(info) ?? throw new InvalidOperationException("Не удалось открыть TreeSize Free.");
+    }
+
+    private static void ValidateVolume(string volume)
+    {
         if (!Regex.IsMatch(volume, @"^[A-Za-z]:\\$"))
             throw new ArgumentException("Можно проверить только локальный диск.", nameof(volume));
         var drive = new DriveInfo(volume);
         if (!drive.IsReady || drive.DriveType != DriveType.Fixed)
             throw new InvalidOperationException("Выбранный локальный диск недоступен.");
+    }
 
+    private static string ResolveExecutable()
+    {
         var bundled = Path.Combine(AppContext.BaseDirectory, "Tools", "TreeSize Free", "TreeSizeFree.exe");
-        var installed = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "ITSeti", "Maintenance", "Tools", "TreeSize Free", "TreeSizeFree.exe");
+        var installed = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            "ITSeti Maintenance", "Tools", "TreeSize Free", "TreeSizeFree.exe");
         var exe = File.Exists(bundled) ? bundled : installed;
         if (!File.Exists(exe)) throw new FileNotFoundException("TreeSize Free не найден в комплекте приложения.");
-        var info = CreateStartInfo(exe, volume);
-        using var process = Process.Start(info) ?? throw new InvalidOperationException("Не удалось открыть TreeSize Free.");
+        return exe;
     }
 
     internal static ProcessStartInfo CreateStartInfo(string exe, string volume)
@@ -30,6 +48,18 @@ public static class TreeSizeLauncher
         var info = new ProcessStartInfo(exe)
         {
             UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(exe)!
+        };
+        info.ArgumentList.Add(volume);
+        return info;
+    }
+
+    internal static ProcessStartInfo CreateElevatedStartInfo(string exe, string volume)
+    {
+        var info = new ProcessStartInfo(exe)
+        {
+            UseShellExecute = true,
+            Verb = "runas",
             WorkingDirectory = Path.GetDirectoryName(exe)!
         };
         info.ArgumentList.Add(volume);

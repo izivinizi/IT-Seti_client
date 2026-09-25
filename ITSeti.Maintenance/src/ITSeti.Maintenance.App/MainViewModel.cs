@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Net.NetworkInformation;
 using System.Security.Principal;
 using System.Windows.Data;
 using Microsoft.Win32;
@@ -10,7 +11,14 @@ using ITSeti.Maintenance.Infrastructure;
 namespace ITSeti.Maintenance.App;
 
 public sealed record CheckProgressEntry(string Time, string Source, string Message);
-public sealed record DiskOverviewGroup(string Model, string MediaType, string Health, string TransferMode, IReadOnlyList<DiskSnapshot> Partitions);
+public sealed record NetworkAdapterOverview(string Name, string Type, string Status, string LinkSpeed, string Addresses);
+public sealed record DiskOverviewGroup(string Model, string MediaType, string Health, string TransferMode,
+    IReadOnlyList<DiskSnapshot> Partitions, long? PowerOnHours = null)
+{
+    public bool HasPowerOnHours => PowerOnHours.HasValue;
+    public string LifetimeLabel => DiskLifetime.Format(PowerOnHours);
+    public string LifetimeWarning => DiskLifetime.ExceedsWarning(PowerOnHours) ? "Наработка выше 60 000 часов" : "";
+}
 
 public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore history, IFullDiagnosticsRunner? fullRunner = null, UserCleanupRunner? cleanupRunner = null) : INotifyPropertyChanged
 {
@@ -20,11 +28,20 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public ObservableCollection<PhysicalDiskDetails> PhysicalDisks { get; } = [];
     public ObservableCollection<SmartDiskDetails> SmartDisks { get; } = [];
     public ObservableCollection<DiskOverviewGroup> DiskGroups { get; } = [];
+    public ObservableCollection<NetworkAdapterOverview> NetworkAdapters { get; } = [];
     public ObservableCollection<ProcessDetails> Processes { get; } = [];
     public ObservableCollection<EventDetails> Events { get; } = [];
     public ObservableCollection<DebugStep> DebugSteps { get; } = [];
     public ObservableCollection<DebugFile> DebugFiles { get; } = [];
     public ObservableCollection<CheckProgressEntry> CheckProgressEntries { get; } = [];
+    public ObservableCollection<string> TreeSizeVolumes { get; } = [];
+    private string? selectedTreeSizeVolume;
+    public string? SelectedTreeSizeVolume
+    {
+        get => selectedTreeSizeVolume;
+        set { selectedTreeSizeVolume = value; Notify(); }
+    }
+    public bool CanLaunchTreeSize => !busy && !string.IsNullOrWhiteSpace(SelectedTreeSizeVolume);
     private bool checkProgressActive;
     private int checkProgressGeneration;
     private string checkProgressPhase = "Проверка ещё не запускалась";
@@ -210,10 +227,10 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             }
             var media = !string.IsNullOrWhiteSpace(drive.MediaType) && drive.MediaType != "Unknown" ? drive.MediaType : match?.MediaType ?? "Не определён";
             var health = match is null ? $"Windows: {drive.Health}" : $"SMART: {match.Status} · Windows: {drive.Health}";
-            groups.Add(new(drive.Model, media, health, match?.TransferMode ?? "", partitions));
+            groups.Add(new(drive.Model, media, health, match?.TransferMode ?? "", partitions, match?.PowerOnHours));
         }
         foreach (var item in smart.Where(item => !usedSmart.Contains(item)))
-            groups.Add(new(item.Model, item.MediaType, "SMART: " + item.Status, item.TransferMode, VolumesFor(item)));
+            groups.Add(new(item.Model, item.MediaType, "SMART: " + item.Status, item.TransferMode, VolumesFor(item), item.PowerOnHours));
 
         var unmatched = snapshot.Disks.Where(volume => !assignedVolumes.Contains(volume.Name)).ToList();
         if (unmatched.Count > 0)
@@ -269,24 +286,42 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         get
         {
             var full = UserSnapshot?.Full;
+            string state;
             if (full is not null)
             {
                 if (full.SmartDisks.Any(d => System.Text.RegularExpressions.Regex.IsMatch(d.Status, "Caution|Bad|Тревог|Плох", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                     || full.PhysicalDisks.Any(d => System.Text.RegularExpressions.Regex.IsMatch(d.Health, "Warning|Unhealthy|Degraded|Pred Fail|Error|Тревог|Плох", System.Text.RegularExpressions.RegexOptions.IgnoreCase)))
-                    return "Состояние диска требует внимания";
-                return full.SmartDisks.Count > 0 ? "Получены данные о состоянии диска" : "Подробное состояние диска не получено";
+                    state = "Состояние диска требует внимания";
+                else if (UserSystemSmartDisk is { Status.Length: > 0 }) state = "Состояние диска: норма";
+                else if (full.SmartDisks.Count > 0) state = "Состояние SMART получено";
+                else if (full.PhysicalDisks.Count > 0) state = "Состояние проверено Windows";
+                else state = "Состояние диска не получено";
             }
-            var quick = UserSnapshot?.QuickDisks;
-            if (quick?.Any(d => System.Text.RegularExpressions.Regex.IsMatch(d.Health, "Warning|Unhealthy|Degraded|Pred Fail|Error|Тревог|Плох", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) == true)
-                return "Windows сообщает о проблеме с диском";
-            return quick is { Count: > 0 } ? "Проверено состояние дисков по данным Windows" : "Состояние дисков ещё не проверено";
+            else
+            {
+                var quick = UserSnapshot?.QuickDisks;
+                if (quick?.Any(d => System.Text.RegularExpressions.Regex.IsMatch(d.Health, "Warning|Unhealthy|Degraded|Pred Fail|Error|Тревог|Плох", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) == true)
+                    state = "Windows сообщает о проблеме с диском";
+                else state = quick is { Count: > 0 } ? "Состояние проверено по данным Windows" : "Состояние диска не проверено";
+            }
+            if (UserSystemSmartDisk?.PowerOnHours is long hours)
+                state += " · наработка " + DiskLifetime.Format(hours);
+            return state;
         }
     }
-    public string UserDiskLatency => UserSnapshot?.Full?.ResourceSampling is { Samples: >= 6, Error: "" } sample
-        ? sample.DiskReadLatencyMs is double read && sample.DiskWriteLatencyMs is double write
-            ? $"Отклик диска: чтение {read:N1} мс, запись {write:N1} мс"
-            : sample.DiskReadLatencyMs is double readOnly ? $"Отклик диска при чтении: {readOnly:N1} мс" : ""
-        : "";
+    private SmartDiskDetails? UserSystemSmartDisk
+    {
+        get
+        {
+            var full = UserSnapshot?.Full;
+            if (full is null) return null;
+            var drive = SystemDisk?.Name.TrimEnd('\\') ?? (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:");
+            return full.SmartDisks.FirstOrDefault(d =>
+                System.Text.RegularExpressions.Regex.Matches(d.Letters ?? "", @"(?i)(?<![A-Z])[A-Z]:")
+                    .Cast<System.Text.RegularExpressions.Match>().Any(m => string.Equals(m.Value, drive, StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+    public string UserCpuNameAndTemperature => $"{UserCpuName} · {FormatCpuTemperature(UserSnapshot?.CpuTemperatureC ?? UserSnapshot?.Full?.CpuTemperatureC)}";
     public string UserMemoryDetail => UserSnapshot is { TotalMemoryBytes: > 0 } s
         ? $"Свободно {s.AvailableMemoryBytes / 1073741824.0:N1} ГБ" + (s.Full?.ResourceSampling is { Samples: >= 6, Error: "" } sample ? $" · 30 с: {sample.MemoryAverage:N0}%"
             : busy && s.Full?.ResourceSampling is { Samples: > 0, Error: "" } liveSample ? $" · среднее: {liveSample.MemoryAverage:N0}%" : "")
@@ -334,6 +369,25 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         Notify();
     }
 
+    public void RefreshTreeSizeVolumes()
+    {
+        var systemDrive = (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:") + "\\";
+        var preferred = SelectedTreeSizeVolume ?? systemDrive;
+        TreeSizeVolumes.Clear();
+        foreach (var drive in DriveInfo.GetDrives())
+        {
+            try
+            {
+                if (drive.DriveType == DriveType.Fixed && drive.IsReady) TreeSizeVolumes.Add(drive.Name);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        SelectedTreeSizeVolume = TreeSizeVolumes.FirstOrDefault(d => string.Equals(d, preferred, StringComparison.OrdinalIgnoreCase))
+            ?? TreeSizeVolumes.FirstOrDefault(d => string.Equals(d, systemDrive, StringComparison.OrdinalIgnoreCase))
+            ?? TreeSizeVolumes.FirstOrDefault();
+    }
+
     public void SetSetupMode(bool acceptance)
     {
         setupAcceptanceMode = acceptance;
@@ -342,7 +396,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public string ScheduleStatus => FullDiagnosticsRunner.IsInstalled ? "Быстрая проверка: раз в 14 дней · полная с восстановлением: раз в 60 дней" : "Не настроено";
     public string ApplicationUpdateStatus => applicationUpdateStatus;
     public bool CanCheckApplicationUpdates => !busy && !applicationUpdateCheckRunning && !applicationUpdateRunning;
-    public bool CanInstallApplicationUpdate => availableApplicationRelease is not null && !busy && !applicationUpdateRunning;
+    public bool CanInstallApplicationUpdate => !busy && !applicationUpdateRunning && !applicationUpdateCheckRunning;
     public string FullRunHint => FullDiagnosticsRunner.IsInstalled ? "Запустить установленную проверку без UAC" : "Полная проверка: требуется подтверждение UAC";
     public bool CanRun => !busy;
     public bool CanRunFull => CanRun && fullRunner is not null;
@@ -366,10 +420,9 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     }
     public bool CanOpenRepairLog => SystemRepairRunner.LatestLogPath is not null;
     public string? RepairLogPath => SystemRepairRunner.LatestLogPath;
-    public bool CanOpenReport => Selected?.Full is not null;
     public string Status => status;
     public string Cpu => Selected?.CpuLabel ?? "—";
-    public string CpuDetail => Selected?.Full?.CpuName ?? LocalCpuName;
+    public string CpuDetail => $"{Selected?.Full?.CpuName ?? LocalCpuName} · {FormatCpuTemperature(Selected?.CpuTemperatureC ?? Selected?.Full?.CpuTemperatureC)}";
     public string Gpu => Selected?.Full?.GpuName ?? "Нет данных";
     public string MemoryType => Selected?.Full?.MemoryType is { Length: > 0 } type ? type : "Тип DDR не определён";
     public string Memory => Selected?.MemoryLabel ?? "—";
@@ -377,7 +430,116 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         : $"Свободно {Selected.AvailableMemoryBytes / 1073741824.0:N1} из {Selected.TotalMemoryBytes / 1073741824.0:N1} ГБ";
     public string DiskCount => Selected?.Disks.Count.ToString() ?? "—";
     public string DiskDetail => Selected is null ? "Нет данных" : $"Разделов с нехваткой места: {Selected.Disks.Count(d => d.FreeBytes < 15L * 1073741824)}";
+    public string SystemDiskSummary
+    {
+        get
+        {
+            if (Selected is null) return "Системный диск ещё не проверен";
+            var drive = (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").TrimEnd('\\');
+            var volume = Selected.Disks.FirstOrDefault(d => string.Equals(d.Name.TrimEnd('\\'), drive, StringComparison.OrdinalIgnoreCase));
+            var smart = Selected.Full?.SmartDisks.FirstOrDefault(d =>
+                System.Text.RegularExpressions.Regex.Matches(d.Letters ?? "", @"(?i)(?<![A-Z])[A-Z]:")
+                    .Cast<System.Text.RegularExpressions.Match>().Any(m => string.Equals(m.Value, drive, StringComparison.OrdinalIgnoreCase)));
+            var physical = Selected.Full?.PhysicalDisks.FirstOrDefault(d =>
+                smart is not null && string.Equals(d.Model, smart.Model, StringComparison.OrdinalIgnoreCase))
+                ?? (Selected.Full?.PhysicalDisks.Count == 1 ? Selected.Full.PhysicalDisks[0] : null);
+            var parts = new List<string> { drive };
+            if (smart is not null) parts.Add(smart.Model);
+            else if (physical is not null) parts.Add(physical.Model);
+            var media = smart?.MediaType ?? physical?.MediaType;
+            if (!string.IsNullOrWhiteSpace(media) && media != "Unknown") parts.Add(media);
+            if (!string.IsNullOrWhiteSpace(smart?.Status)) parts.Add("SMART " + smart.Status);
+            else if (!string.IsNullOrWhiteSpace(physical?.Health)) parts.Add(physical.Health);
+            if (!string.IsNullOrWhiteSpace(smart?.TransferMode)) parts.Add(smart.TransferMode.Replace(" | ", "/"));
+            if (smart?.PowerOnHours is long hours) parts.Add("наработка " + DiskLifetime.Format(hours));
+            if (Selected.Full?.Benchmark is { State: "Completed" } benchmark
+                && string.Equals(benchmark.Drive.TrimEnd('\\'), drive, StringComparison.OrdinalIgnoreCase))
+                parts.Add($"SEQ чт/зп {benchmark.Read?.ToString("N0") ?? "—"}/{benchmark.Write?.ToString("N0") ?? "—"} МБ/с");
+            if (volume is not null)
+                parts.Add($"{volume.FreeBytes / 1073741824.0:N1}/{volume.TotalBytes / 1073741824.0:N1} ГБ свободно · занято {volume.UsedPercent:N0}%");
+            else parts.Add("свободное место не измерено");
+            return string.Join(" · ", parts);
+        }
+    }
     public string SnapshotDate => Selected is null ? "Сохранённых проверок пока нет" : $"Проверка от {Selected.DateLabel}";
+    private static string FormatCpuTemperature(double? temperature) => temperature is >= 0 and <= 120
+        ? $"{temperature:N0} °C" : "температура недоступна";
+
+    public void RefreshNetworkAdapters()
+    {
+        NetworkAdapters.Clear();
+        try
+        {
+            foreach (var adapter in NetworkInterface.GetAllNetworkInterfaces()
+                         .Where(IsRelevantNetworkAdapter)
+                         .OrderBy(adapter => adapter.Name, StringComparer.CurrentCultureIgnoreCase))
+            {
+                string addresses;
+                try
+                {
+                    addresses = string.Join(", ", adapter.GetIPProperties().UnicastAddresses
+                        .Select(item => item.Address)
+                        .Where(IsUsableNetworkAddress)
+                        .Select(address => address.ToString())
+                        .Distinct(StringComparer.OrdinalIgnoreCase));
+                }
+                catch (NetworkInformationException) { continue; }
+                if (string.IsNullOrWhiteSpace(addresses)) continue;
+                var status = adapter.OperationalStatus switch
+                {
+                    OperationalStatus.Up => "Подключён",
+                    OperationalStatus.Down => "Отключён",
+                    OperationalStatus.Dormant => "Ожидание",
+                    OperationalStatus.LowerLayerDown => "Нет нижнего канала",
+                    _ => adapter.OperationalStatus.ToString()
+                };
+                var speed = adapter.OperationalStatus == OperationalStatus.Up && adapter.Speed > 0
+                    ? adapter.Speed >= 1_000_000_000 ? $"{adapter.Speed / 1_000_000_000.0:N1} Гбит/с" : $"{adapter.Speed / 1_000_000.0:N0} Мбит/с"
+                    : "—";
+                var type = adapter.NetworkInterfaceType switch
+                {
+                    NetworkInterfaceType.Ethernet or NetworkInterfaceType.FastEthernetT or NetworkInterfaceType.GigabitEthernet => "Ethernet",
+                    NetworkInterfaceType.Wireless80211 => "Wi-Fi",
+                    NetworkInterfaceType.Tunnel => "Туннель / VPN",
+                    NetworkInterfaceType.Ppp => "PPP / VPN",
+                    _ => adapter.NetworkInterfaceType.ToString()
+                };
+                NetworkAdapters.Add(new(adapter.Name, type, status, speed, addresses));
+            }
+        }
+        catch (NetworkInformationException) { }
+        Notify();
+    }
+
+    private static bool IsRelevantNetworkAdapter(NetworkInterface adapter)
+    {
+        if (adapter.OperationalStatus != OperationalStatus.Up || adapter.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+            return false;
+
+        var identity = adapter.Name + " " + adapter.Description;
+        var vpn = System.Text.RegularExpressions.Regex.IsMatch(identity,
+            @"(?i)(radmin|wireguard|openvpn|tailscale|zerotier|proton|global.?protect|anyconnect|forti|pulse|sonicwall|checkpoint|citrix|softether|\bvpn\b|ikev2)");
+        var noise = System.Text.RegularExpressions.Regex.IsMatch(identity,
+            @"(?i)(hyper.?v|vmware|virtualbox|\bvbox\b|wsl|docker|loopback|teredo|isatap|wi.?fi direct|bluetooth|npcap|wan miniport|microsoft kernel debug)");
+        if (noise && !vpn) return false;
+
+        return adapter.NetworkInterfaceType is NetworkInterfaceType.Ethernet
+            or NetworkInterfaceType.FastEthernetT
+            or NetworkInterfaceType.GigabitEthernet
+            or NetworkInterfaceType.Wireless80211
+            || vpn && adapter.NetworkInterfaceType is NetworkInterfaceType.Ppp or NetworkInterfaceType.Tunnel
+                or NetworkInterfaceType.Ethernet or NetworkInterfaceType.FastEthernetT or NetworkInterfaceType.GigabitEthernet;
+    }
+
+    private static bool IsUsableNetworkAddress(System.Net.IPAddress address)
+    {
+        if (System.Net.IPAddress.IsLoopback(address) || address.Equals(System.Net.IPAddress.Any)
+            || address.Equals(System.Net.IPAddress.IPv6Any) || address.IsIPv6LinkLocal || address.IsIPv6Multicast)
+            return false;
+        if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+            return !address.ToString().StartsWith("169.254.", StringComparison.Ordinal);
+        return address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6;
+    }
     public string Findings
     {
         get
@@ -567,9 +729,12 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             var previous = History.FirstOrDefault(h => h.StartedAt < Selected.StartedAt && h.ComputerName == Selected.ComputerName && h.KindLabel == Selected.KindLabel);
             if (previous is null) return "Предыдущей проверки этого типа пока нет";
             var lines = new List<string> { $"Предыдущая: {previous.DateLabel}", $"Загрузка процессора: {previous.CpuLabel} → {Selected.CpuLabel}; занято памяти: {previous.MemoryLabel} → {Selected.MemoryLabel}. Эти цифры меняются во время работы компьютера." };
-            foreach (var disk in Selected.Disks.Where(d => d.VolumeId.Length > 0))
+            foreach (var disk in Selected.Disks)
             {
-                var match = previous.Disks.Where(d => d.VolumeId == disk.VolumeId && d.TotalBytes == disk.TotalBytes).ToList();
+                var match = previous.Disks.Where(d => d.TotalBytes == disk.TotalBytes &&
+                    (disk.VolumeId.Length > 0
+                        ? string.Equals(d.VolumeId, disk.VolumeId, StringComparison.OrdinalIgnoreCase)
+                        : string.Equals(d.Name.TrimEnd('\\'), disk.Name.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))).ToList();
                 if (match.Count == 1) lines.Add($"{disk.Name} свободно: {match[0].FreeBytes / 1073741824.0:N1} → {disk.FreeBytes / 1073741824.0:N1} ГБ. Изменение между проверками, не результат очистки.");
             }
             if (previous.Full is { } old && Selected.Full is { } current)
@@ -579,25 +744,50 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                     var match = old.SmartDisks.Where(d => d.Model == disk.Model).ToList();
                     if (match.Count == 1 && match[0].Status != disk.Status) lines.Add($"SMART {disk.Model}: {match[0].Status} → {disk.Status}");
                 }
-                var oldKeys = old.Events.Select(e => (e.Log, e.Provider, e.Id, e.Level)).ToHashSet();
-                var newKinds = current.Events.Where(e => e.Level <= 2 && !oldKeys.Contains((e.Log, e.Provider, e.Id, e.Level)))
-                    .Select(e => (e.Log, e.Provider, e.Id, e.Level)).Distinct().Count();
-                lines.Add($"Типов ошибок, отсутствующих в прошлой выборке: {newKinds}. Сравнение доступных событий, не всей истории Windows.");
+                var oldKeys = old.Events.Where(item => item.Level <= 2).Select(EventIdentity).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var newErrors = current.Events.Where(item => item.Level <= 2 && !oldKeys.Contains(EventIdentity(item)))
+                    .GroupBy(item => (item.Provider, item.Id, item.Level)).Select(group => group.First()).ToArray();
+                lines.Add(newErrors.Length == 0
+                    ? "Новых критических ошибок Windows в выборке нет."
+                    : "Новые ошибки Windows: " + string.Join(", ", newErrors.Take(5).Select(item => $"{item.Provider} #{item.Id} ({item.LevelLabel.ToLowerInvariant()})"))
+                        + (newErrors.Length > 5 ? $" и ещё {newErrors.Length - 5}" : ""));
+
+                var oldProcesses = old.Processes.Select(item => item.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var newProcesses = current.Processes.Where(item => !oldProcesses.Contains(item.Name)).ToArray();
+                if (newProcesses.Length > 0)
+                    lines.Add("Новые процессы вне списка: " + string.Join(", ", newProcesses.Take(5).Select(DescribeProcess))
+                        + (newProcesses.Length > 5 ? $" и ещё {newProcesses.Length - 5}" : "") + ". Это не означает, что программы вредоносные.");
+                else lines.Add("Новых процессов вне списка нет.");
+
                 var oldRead = old.Benchmark;
                 var currentRead = current.Benchmark;
                 if (oldRead.State == "Completed" && currentRead.State == "Completed" && oldRead.MediaType == currentRead.MediaType
-                    && oldRead.Read.HasValue && currentRead.Read.HasValue
-                    && Selected.Disks.Any(d => d.Name.TrimEnd('\\') == currentRead.Drive && d.VolumeId.Length > 0
-                        && previous.Disks.Any(p => p.VolumeId == d.VolumeId)))
-                    lines.Add($"SEQ чтение: {oldRead.Read:N1} → {currentRead.Read:N1} МБ/с; результат зависит от нагрузки.");
+                    && string.Equals(oldRead.Drive, currentRead.Drive, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (oldRead.Read.HasValue && currentRead.Read.HasValue)
+                        lines.Add($"Скорость чтения: {oldRead.Read:N0} → {currentRead.Read:N0} МБ/с.");
+                    if (oldRead.Write.HasValue && currentRead.Write.HasValue)
+                        lines.Add($"Скорость записи: {oldRead.Write:N0} → {currentRead.Write:N0} МБ/с.");
+                }
             }
             return string.Join(Environment.NewLine, lines);
         }
     }
 
+    private static string EventIdentity(EventDetails item) => item.RecordId > 0
+        ? $"{item.Log}|record:{item.RecordId}"
+        : $"{item.Log}|{item.Provider}|{item.Id}|{item.Level}|{item.Message}";
+
+    private static string DescribeProcess(ProcessDetails item)
+    {
+        var label = !string.IsNullOrWhiteSpace(item.Description) ? item.Description : Path.GetFileNameWithoutExtension(item.Name);
+        return string.IsNullOrWhiteSpace(item.Publisher) ? label : $"{label} ({item.Publisher})";
+    }
+
     public Task RunFullAsync() => RunFullCoreAsync(false);
     public Task RunQuickFullAsync() => RunFullCoreAsync(false, true);
     public Task RunUserFullAsync() => RunFullCoreAsync(true);
+    public Task RunScheduledUserQuickAsync() => RunFullCoreAsync(true, true);
 
     public void OpenLowSpaceScan()
     {
@@ -776,6 +966,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         busy = true; Notify();
         try
         {
+            RefreshTreeSizeVolumes();
+            RefreshNetworkAdapters();
             RefreshIdentity();
             windowsUpdatePolicyStatus = new WindowsUpdatePolicyRunner().ReadStatus();
             await history.SaveManyAsync(await FullDiagnosticsRunner.ReadInstalledReportsAsync());

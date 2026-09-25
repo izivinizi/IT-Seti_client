@@ -9,7 +9,7 @@ if(!$admin){throw 'Run this installer once as administrator.'}
 $sourceApp=if($PreinstalledApp){$InstallRoot}else{Join-Path $PackageRoot 'App'}
 $sourceTools=if($PreinstalledApp){Join-Path $InstallRoot 'Tools'}else{Join-Path $PackageRoot 'Tools'}
 if(!(Test-Path -LiteralPath (Join-Path $sourceApp 'ITSeti.Maintenance.exe') -PathType Leaf)){throw 'Published application is missing.'}
-foreach($relative in @('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe')){
+foreach($relative in @('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe','PawnIO\PawnIO_setup.exe')){
     if(!(Test-Path -LiteralPath (Join-Path $sourceTools $relative) -PathType Leaf)){throw "Tool is missing: $relative"}
 }
 $install=$InstallRoot
@@ -17,7 +17,7 @@ $data=Join-Path $env:ProgramData 'ITSeti\Maintenance'
 New-Item -ItemType Directory -Path $install,$data,(Join-Path $data 'Runs'),(Join-Path $data 'Repairs'),(Join-Path $data 'CleanupRequests'),(Join-Path $data 'CleanupRuns'),(Join-Path $data 'WindowsUpdate') -Force | Out-Null
 if(!$PreinstalledApp){Get-ChildItem -LiteralPath $sourceApp -Force | Copy-Item -Destination $install -Recurse -Force}
 if(!$PreinstalledApp){
-    foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free')){
+    foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO')){
         $source=Join-Path $sourceTools $folder
         if(Test-Path -LiteralPath $source -PathType Container){
             $target=Join-Path (Join-Path $install 'Tools') $folder
@@ -25,6 +25,31 @@ if(!$PreinstalledApp){
             Get-ChildItem -LiteralPath $source -Force | Copy-Item -Destination $target -Recurse -Force
         }
     }
+}
+$pawnIoInstaller=Join-Path $sourceTools 'PawnIO\PawnIO_setup.exe'
+$pawnIoLog=Join-Path $data 'cpu-sensor-driver.txt'
+$pawnIoHash='1F519A22E47187F70A1379A48CA604981C4FCF694F4E65B734AAA74A9FBA3032'
+try {
+    $pawnIoSignature=Get-AuthenticodeSignature -LiteralPath $pawnIoInstaller
+    $pawnIoSigner=$pawnIoSignature.SignerCertificate
+    $actualHash=(Get-FileHash -LiteralPath $pawnIoInstaller -Algorithm SHA256).Hash
+    if($actualHash -ne $pawnIoHash -or $pawnIoSignature.Status -ne 'Valid' -or !$pawnIoSigner -or $pawnIoSigner.Thumbprint -ne 'F380DCC9F706E2756A5047B832FFE719E1BC35F5'){
+        [IO.File]::WriteAllText($pawnIoLog,'PawnIO не установлен: не прошла проверка хеша или цифровой подписи.',[Text.Encoding]::UTF8)
+    } else {
+        $pawnIoUninstall=Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO' -ErrorAction SilentlyContinue
+        if($pawnIoUninstall.DisplayVersion){
+            [IO.File]::WriteAllText($pawnIoLog,('PawnIO уже установлен, версия '+$pawnIoUninstall.DisplayVersion+'; существующий драйвер оставлен без изменений.'),[Text.Encoding]::UTF8)
+        } else {
+            $pawnIoProcess=Start-Process -FilePath $pawnIoInstaller -ArgumentList @('-install','-silent') -Wait -PassThru -WindowStyle Hidden
+            $installedVersion=(Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO' -ErrorAction SilentlyContinue).DisplayVersion
+            if($installedVersion){$pawnIoMessage='PawnIO '+$installedVersion+' установлен.'}
+            elseif($pawnIoProcess.ExitCode -eq 3010){$pawnIoMessage='PawnIO установлен; требуется перезагрузка Windows.'}
+            else{$pawnIoMessage='PawnIO не установлен (код '+$pawnIoProcess.ExitCode+'); температура CPU останется недоступна.'}
+            [IO.File]::WriteAllText($pawnIoLog,$pawnIoMessage,[Text.Encoding]::UTF8)
+        }
+    }
+} catch {
+    [IO.File]::WriteAllText($pawnIoLog,('PawnIO не установлен; установка приложения продолжена. '+$_.Exception.ToString()),[Text.Encoding]::UTF8)
 }
 $securityRoot=Join-Path $env:ProgramData 'ITSeti'
 & icacls.exe $securityRoot /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
@@ -42,7 +67,7 @@ if($LASTEXITCODE -ne 0){throw 'Could not configure inventory number access.'}
 $taskName='ITSeti-Maintenance-Full'
 $worker=Join-Path $install 'Backend\InstalledCheck.ps1'
 $taskTrigger=New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(20)
-$quickTrigger=New-ScheduledTaskTrigger -Daily -DaysInterval 14 -At ([DateTime]::Today.AddHours(3))
+$quickTrigger=New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(20)
 $autoFullTrigger=New-ScheduledTaskTrigger -Daily -DaysInterval 60 -At ([DateTime]::Today.AddHours(4))
 $taskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 $updateTaskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 15) -MultipleInstances IgnoreNew

@@ -111,7 +111,7 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         var installedTask = quickMode ? InstalledQuickTask : InstalledTask;
         if (IsInstalled && (!quickMode || HasInstalledQuickTask.Value))
         {
-            try { return await RunInstalledAsync(progress, installedTask); }
+            try { return await AddCpuTemperatureAsync(await RunInstalledAsync(progress, installedTask)); }
             catch (InstalledTaskUnavailableException ex)
             {
                 progress.Report(new($"Задача Windows недоступна ({ex.Message}). Проверка от текущей учётной записи"));
@@ -173,7 +173,7 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
             var finalMessages = ReadDiskMessages(root, ref diskLineCount);
             if (finalMessages.Count > 0) progress.Report(new("Дисковый тест завершён", Messages: finalMessages));
             var resultFile = Path.Combine(root, "result.json");
-            if (File.Exists(resultFile)) return await ReadSnapshot(resultFile);
+            if (File.Exists(resultFile)) return await AddCpuTemperatureAsync(await ReadSnapshot(resultFile));
             var errorFile = Path.Combine(root, "error.txt");
             var detail = File.Exists(errorFile) ? await File.ReadAllTextAsync(errorFile) : $"Код завершения: {process.ExitCode}. Журнал: {root}";
             throw new InvalidOperationException(detail);
@@ -182,6 +182,23 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
 
     private static async Task<DiagnosticSnapshot> ReadSnapshot(string path) =>
         JsonSerializer.Deserialize<DiagnosticSnapshot>(await File.ReadAllTextAsync(path)) ?? throw new InvalidDataException("Пустой результат проверки");
+
+    private static async Task<DiagnosticSnapshot> AddCpuTemperatureAsync(DiagnosticSnapshot snapshot)
+    {
+        var existing = snapshot.CpuTemperatureC ?? snapshot.Full?.CpuTemperatureC;
+        if (existing is not null)
+            return snapshot;
+
+        var reading = await CpuTemperatureReader.ReadAsync();
+        return WithCpuTemperature(snapshot, reading.TemperatureC, reading.Status);
+    }
+
+    private static DiagnosticSnapshot WithCpuTemperature(DiagnosticSnapshot snapshot, double? temperature, string status) => snapshot with
+    {
+        CpuTemperatureC = temperature,
+        CpuTemperatureStatus = status,
+        Full = snapshot.Full is null ? null : snapshot.Full with { CpuTemperatureC = temperature }
+    };
 
     private static IReadOnlyList<string> ReadDiskMessages(string root, ref int seen)
     {

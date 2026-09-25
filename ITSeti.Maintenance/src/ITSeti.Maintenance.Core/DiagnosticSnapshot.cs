@@ -14,7 +14,7 @@ public sealed record DiagnosticSnapshot(
     ulong TotalMemoryBytes, ulong AvailableMemoryBytes, List<DiskSnapshot> Disks, List<string> Notes,
     FullDiagnosticDetails? Full = null, List<PhysicalDiskDetails>? QuickDisks = null,
     DateTimeOffset? LastBootAt = null, string? WindowsEdition = null, string? WindowsRelease = null,
-    int? WindowsBuild = null)
+    int? WindowsBuild = null, double? CpuTemperatureC = null, string? CpuTemperatureStatus = null)
 {
     public double MemoryUsedPercent => TotalMemoryBytes > 0
         ? 100.0 * (TotalMemoryBytes - AvailableMemoryBytes) / TotalMemoryBytes : 0;
@@ -32,10 +32,47 @@ public sealed record DiagnosticSnapshot(
             return incomplete ? result + " · неполные данные" : result;
         }
     }
+
+    public string HistoryDetailLabel
+    {
+        get
+        {
+            var details = DiagnosticRules.GetFindings(this).Take(3).ToList();
+            if (Full is { } full)
+            {
+                details.AddRange(full.Events.Where(item => item.Level <= 2).OrderBy(item => item.Level)
+                    .Take(2).Select(item => $"{item.LevelLabel}: {item.Provider} #{item.Id}"));
+                details.AddRange(full.Processes.Take(2).Select(process =>
+                {
+                    var name = !string.IsNullOrWhiteSpace(process.Description)
+                        ? process.Description
+                        : Path.GetFileNameWithoutExtension(process.Name);
+                    return string.IsNullOrWhiteSpace(process.Publisher) ? $"Процесс: {name}" : $"Процесс: {name} · {process.Publisher}";
+                }));
+            }
+
+            if (details.Count == 0) return ResultLabel;
+            var result = string.Join(" · ", details.Distinct(StringComparer.CurrentCultureIgnoreCase));
+            return result.Length <= 360 ? result : result[..357] + "...";
+        }
+    }
 }
 
 public sealed record PhysicalDiskDetails(string Model, string MediaType, string Health);
-public sealed record SmartDiskDetails(string Model, string Status, string Letters, string MediaType, string TransferMode);
+public sealed record SmartDiskDetails(string Model, string Status, string Letters, string MediaType, string TransferMode, long? PowerOnHours = null);
+public static class DiskLifetime
+{
+    public const long WarningThresholdHours = 60_000;
+
+    public static bool ExceedsWarning(long? hours) => hours is > WarningThresholdHours;
+
+    public static string Format(long? hours)
+    {
+        if (hours is not long value || value < 0) return "";
+        var daysTotal = value / 24;
+        return $"{value:N0} ч (около {daysTotal / 365} г. {daysTotal % 365} дн.)";
+    }
+}
 public sealed record ProcessDetails(string Name, string Description, string Publisher, string Signature, string Path);
 public sealed record MemoryProcessDetails(string DisplayName, string ProcessName, long WorkingSetBytes, string Publisher)
 {
@@ -58,7 +95,7 @@ public sealed record FullDiagnosticDetails(string CpuName, string GpuName, bool 
     List<PhysicalDiskDetails> PhysicalDisks, List<SmartDiskDetails> SmartDisks,
     List<ProcessDetails> Processes, List<EventDetails> Events, int ProcessUnavailable, int EventUnavailable,
     bool EventLimited, DiskBenchmark Benchmark, string ReportDirectory, List<MemoryProcessDetails>? TopMemoryProcesses = null,
-    ResourceSampleSummary? ResourceSampling = null, string? MemoryType = null);
+    ResourceSampleSummary? ResourceSampling = null, string? MemoryType = null, double? CpuTemperatureC = null);
 
 public sealed record DiagnosticProgress(string Stage, DiagnosticSnapshot? Snapshot = null, IReadOnlyList<string>? Messages = null);
 public interface IFullDiagnosticsRunner
