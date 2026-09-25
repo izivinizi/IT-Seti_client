@@ -33,6 +33,6 @@ public static class TreeSizeLauncher
         return exe;
     }
 
-    internal static ProcessStartInfo CreateStartInfo(string exe, string volume, bool? currentProcessElevated = null) =>
-        ElevatedProcessLauncher.CreateStartInfo(exe, Path.GetDirectoryName(exe)!, volume, currentProcessElevated);
+    internal static ProcessStartInfo CreateStartInfo(string exe, string volume) =>
+        ElevatedProcessLauncher.CreateStartInfo(exe, Path.GetDirectoryName(exe)!, volume);
 }

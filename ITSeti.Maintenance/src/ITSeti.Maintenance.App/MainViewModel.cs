@@ -3,7 +3,9 @@ using System.ComponentModel;
 using System.IO;
 using System.Net.NetworkInformation;
 using System.Security.Principal;
+using System.Text.RegularExpressions;
 using System.Windows.Data;
+using System.Windows.Media;
 using Microsoft.Win32;
 using ITSeti.Maintenance.Core;
 using ITSeti.Maintenance.Infrastructure;
@@ -18,10 +20,25 @@ public sealed record DiskOverviewGroup(string Model, string MediaType, string He
     public bool HasPowerOnHours => PowerOnHours.HasValue;
     public string LifetimeLabel => DiskLifetime.Format(PowerOnHours);
     public string LifetimeWarning => DiskLifetime.ExceedsWarning(PowerOnHours) ? "Наработка выше 60 000 часов" : "";
+    public Brush HealthBrush => Regex.IsMatch(Health, "Caution|Bad|Unhealthy|Warning|Error|Тревог|Плох", RegexOptions.IgnoreCase)
+        ? Brushes.Firebrick
+        : Regex.IsMatch(Health, "Good|Healthy|Норма|Хорош", RegexOptions.IgnoreCase) ? Brushes.SeaGreen : Brushes.SlateGray;
 }
 
 public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore history, IFullDiagnosticsRunner? fullRunner = null, UserCleanupRunner? cleanupRunner = null) : INotifyPropertyChanged
 {
+    private static readonly Brush MetricGoodBrush = CreateBrush(24, 132, 91);
+    private static readonly Brush MetricWarningBrush = CreateBrush(183, 121, 31);
+    private static readonly Brush MetricCriticalBrush = CreateBrush(190, 56, 56);
+    private static readonly Brush MetricNeutralBrush = CreateBrush(20, 65, 158);
+
+    private static Brush CreateBrush(byte red, byte green, byte blue)
+    {
+        var brush = new SolidColorBrush(Color.FromRgb(red, green, blue));
+        brush.Freeze();
+        return brush;
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
     public ObservableCollection<DiagnosticSnapshot> History { get; } = [];
     public ObservableCollection<DiskSnapshot> Disks { get; } = [];
@@ -351,18 +368,19 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             return string.Join(" · ", parts);
         }
     }
-    public IReadOnlyList<UserIssue> UserIssues => DiagnosticRules.GetUserIssues(UserDiagnosticSnapshot ?? new DiagnosticSnapshot(Guid.Empty, DateTimeOffset.MinValue, "", -1, 0, 0, [], []));
+    public IReadOnlyList<UserIssue> UserIssues => busy || Selected is null ? [] : DiagnosticRules.GetUserIssues(Selected);
     public IReadOnlyList<UserIssue> UserVisibleIssues => UserIssues.Take(2).ToArray();
     public bool HasMoreUserIssues => UserIssues.Count > 2;
     public string MoreUserIssuesLabel => $"Все причины ({UserIssues.Count})";
-    public string UserIssueHeading => UserDiagnosticSnapshot is null ? "Результаты проверки" : UserIssues.Count > 0 ? "Что может мешать работе" : UserCoverage.Length > 0 ? "Проверено не всё" : "Проблем не обнаружено";
-    public string UserIssueDetail => Selected is null && live is null ? "Проверка ещё не выполнялась" : UserIssues.Count > 0 ? $"Найдено {UserIssues.Count} возможных причин" : UserCoverage.Length > 0 ? "Доступные показатели без замечаний" : "По измеренным показателям замечаний нет";
+    public string UserIssueHeading => busy ? "Проверка выполняется" : Selected is null ? "Проверка ещё не выполнялась" : UserIssues.Count > 0 ? "Что может мешать работе" : UserCoverage.Length > 0 ? "Проверено не всё" : "Проблем не обнаружено";
+    public string UserIssueDetail => busy ? "Собираем и проверяем показатели компьютера" : Selected is null ? "Результат появится после первой проверки" : UserIssues.Count > 0 ? $"Найдено {UserIssues.Count} возможных причин" : UserCoverage.Length > 0 ? "Доступные показатели без замечаний" : "По измеренным показателям замечаний нет";
     public string UserCoverage
     {
         get
         {
-            var full = UserDiagnosticSnapshot?.Full;
-            if (full is null) return Selected is not null && UserDiagnosticSnapshot is { QuickDisks: not { Count: > 0 } }
+            if (busy || Selected is null) return "";
+            var full = Selected.Full;
+            if (full is null) return Selected.QuickDisks is not { Count: > 0 }
                 ? "Не удалось проверить состояние дисков. Подробности доступны инженеру." : "";
             var lines = new List<string>();
             if (full.Benchmark is { State: "Failed" or "Skipped" }) lines.Add("скорость диска");
@@ -428,19 +446,72 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private static string BriefMaintenanceStatus(string value)
     {
         var firstLine = value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "Нет данных";
-        return firstLine.Length <= 210 ? firstLine : firstLine[..207] + "...";
+        if (!firstLine.StartsWith("Пользователь:", StringComparison.OrdinalIgnoreCase)) return ShortStatus(firstLine, 140);
+        var systemSeparator = firstLine.IndexOf(" | Система:", StringComparison.OrdinalIgnoreCase);
+        if (systemSeparator < 0) systemSeparator = firstLine.IndexOf(" | Администратор:", StringComparison.OrdinalIgnoreCase);
+        if (systemSeparator < 0) return ShortStatus(firstLine, 140);
+        var user = firstLine["Пользователь:".Length..systemSeparator].Trim(' ', '|');
+        var system = firstLine[(firstLine.IndexOf(':', systemSeparator) + 1)..].Trim();
+        return $"{SummarizeCleanupPart("Профиль", user)} · {SummarizeCleanupPart("Система", system)}";
     }
+    private static string SummarizeCleanupPart(string label, string value)
+    {
+        if (value.StartsWith("Завершена", StringComparison.OrdinalIgnoreCase)) return $"{label}: выполнена";
+        if (value.StartsWith("Окно очистки закрыто", StringComparison.OrdinalIgnoreCase)) return $"{label}: окно закрыто";
+        var code = Regex.Match(value, @"Код\s+(\d+)", RegexOptions.IgnoreCase);
+        if (code.Success)
+        {
+            var delta = Regex.Match(value, @"изменение свободного места\s+([+-]?\d+(?:[\.,]\d+)?)\s*ГБ", RegexOptions.IgnoreCase);
+            return delta.Success
+                ? $"{label}: код {code.Groups[1].Value}, свободное место {delta.Groups[1].Value} ГБ"
+                : $"{label}: код {code.Groups[1].Value}";
+        }
+        if (value.Contains("не очищены", StringComparison.OrdinalIgnoreCase) || value.StartsWith("Не выполнена", StringComparison.OrdinalIgnoreCase))
+            return ShortStatus($"{label}: {value}", 140);
+        return ShortStatus($"{label}: {value}", 100);
+    }
+    private static string ShortStatus(string value, int maxLength) => value.Length <= maxLength ? value : value[..(maxLength - 1)] + "…";
     public bool CanOpenRepairLog => SystemRepairRunner.LatestLogPath is not null;
     public string? RepairLogPath => SystemRepairRunner.LatestLogPath;
     public string Status => status;
     public string Cpu => Selected?.CpuLabel ?? "—";
+    public Brush CpuStatusBrush => Selected is null ? MetricNeutralBrush :
+        (Selected.CpuTemperatureC ?? Selected.Full?.CpuTemperatureC) is >= 90 ? MetricCriticalBrush :
+        (Selected.CpuTemperatureC ?? Selected.Full?.CpuTemperatureC) is > 80 || Selected.Full?.ResourceSampling?.CpuHighSamples >= 5 ? MetricWarningBrush : MetricGoodBrush;
     public string CpuDetail => $"{Selected?.Full?.CpuName ?? LocalCpuName} · {FormatCpuTemperature(Selected?.CpuTemperatureC ?? Selected?.Full?.CpuTemperatureC)}";
     public string Gpu => Selected?.Full?.GpuName ?? "Нет данных";
     public string MemoryType => Selected?.Full?.MemoryType is { Length: > 0 } type ? type : "Тип DDR не определён";
     public string Memory => Selected?.MemoryLabel ?? "—";
+    public Brush MemoryStatusBrush => Selected is null ? MetricNeutralBrush :
+        Selected.Full?.ResourceSampling is { LowAvailableSamples: >= 5, PagingHighSamples: >= 3 } ? MetricCriticalBrush :
+        Selected.Full?.ResourceSampling?.MemoryHighSamples >= 5 ? MetricWarningBrush : MetricGoodBrush;
     public string MemoryDetail => Selected is null || Selected.TotalMemoryBytes == 0 ? "Замер не выполнен"
         : $"Свободно {Selected.AvailableMemoryBytes / 1073741824.0:N1} из {Selected.TotalMemoryBytes / 1073741824.0:N1} ГБ";
     public string DiskCount => Selected?.Disks.Count.ToString() ?? "—";
+    public Brush DiskStatusBrush
+    {
+        get
+        {
+            if (Selected is null) return MetricNeutralBrush;
+            var drive = (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").TrimEnd('\\');
+            var disk = Selected.Disks.FirstOrDefault(item => string.Equals(item.Name.TrimEnd('\\'), drive, StringComparison.OrdinalIgnoreCase));
+            if (Selected.Full?.SmartDisks.Any(item => Regex.IsMatch(item.Status, "Caution|Bad|Тревог|Плох", RegexOptions.IgnoreCase)) == true ||
+                Selected.Full?.PhysicalDisks.Any(item => Regex.IsMatch(item.Health, "Warning|Unhealthy|Degraded|Pred Fail|Error|Тревог|Плох", RegexOptions.IgnoreCase)) == true ||
+                disk is { FreeBytes: < 5L * 1073741824 }) return MetricCriticalBrush;
+            if (disk is { FreeBytes: < 15L * 1073741824 }) return MetricWarningBrush;
+            return MetricGoodBrush;
+        }
+    }
+    public Brush BenchmarkReadBrush
+    {
+        get
+        {
+            var benchmark = Selected?.Full?.Benchmark;
+            if (benchmark is not { State: "Completed", Read: double }) return MetricNeutralBrush;
+            var issue = DiagnosticRules.GetUserIssues(Selected!).FirstOrDefault(item => item.Title == "Системный диск читает данные медленно");
+            return issue?.Severity switch { "Critical" => MetricCriticalBrush, "Warning" => MetricWarningBrush, _ => MetricGoodBrush };
+        }
+    }
     public string DiskDetail => Selected is null ? "Нет данных" : $"Разделов с нехваткой места: {Selected.Disks.Count(d => d.FreeBytes < 15L * 1073741824)}";
     public string SystemDiskSummary
     {
@@ -804,10 +875,10 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public async Task OpenLowSpaceScanAsync()
     {
         if (busy || LowSpaceDisk is not { } disk) return;
-        userStatusOverride = "Запуск TreeSize Free с правами администратора…";
+        userStatusOverride = "Открываем TreeSize Free без запроса UAC…";
         Notify();
         await TreeSizeLauncher.StartScanAsync(disk.Name);
-        userStatusOverride = $"TreeSize Free запущен от администратора для диска {disk.Name.TrimEnd('\\')}.";
+        userStatusOverride = $"TreeSize Free открыт для диска {disk.Name.TrimEnd('\\')} с правами текущей учётной записи.";
         Notify();
     }
 

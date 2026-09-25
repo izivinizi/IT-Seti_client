@@ -8,25 +8,16 @@ internal static class ElevatedProcessLauncher
     public static bool IsCurrentProcessElevated =>
         new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
 
-    public static ProcessStartInfo CreateStartInfo(string executable, string workingDirectory,
-        string? argument = null, bool? currentProcessElevated = null)
+    public static ProcessStartInfo CreateStartInfo(string executable, string workingDirectory, string? argument = null)
     {
-        var elevated = currentProcessElevated ?? IsCurrentProcessElevated;
         var start = new ProcessStartInfo(executable)
         {
-            UseShellExecute = !elevated,
+            UseShellExecute = false,
             WorkingDirectory = workingDirectory,
-            Arguments = elevated ? "" : argument ?? ""
+            Arguments = ""
         };
 
-        if (elevated)
-        {
-            if (argument is not null) start.ArgumentList.Add(argument);
-        }
-        else
-        {
-            start.Verb = "runas";
-        }
+        if (argument is not null) start.ArgumentList.Add(argument);
 
         return start;
     }

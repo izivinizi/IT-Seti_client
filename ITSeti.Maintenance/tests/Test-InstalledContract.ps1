@@ -56,10 +56,13 @@ if($counterFunction.Count -ne 1){throw 'Resource counter delta helper was not fo
 if((CounterDelta 20 10) -ne 10 -or $null -ne (CounterDelta 10 20)){throw 'Reset performance counters must be ignored, not treated as 32-bit rollover.'}
 $install=[IO.File]::ReadAllText((Join-Path $Root 'Install-Maintenance.ps1'),[Text.Encoding]::UTF8)
 $uninstall=[IO.File]::ReadAllText((Join-Path $Root 'Uninstall-Maintenance.ps1'),[Text.Encoding]::UTF8)
-foreach($name in @('Full','QuickFull','AutoFullRepair','Repair','Cleanup','DisableUpdates','RestoreUpdates','Update','Temperature')) {
+foreach($name in @('Full','QuickFull','AutoFullRepair','Repair','Cleanup','OrganizationSetup','DisableUpdates','RestoreUpdates','Update','Temperature')) {
     if(!$uninstall.Contains("'ITSeti-Maintenance-$name'")){throw "Uninstall leaves behind task $name."}
 }
 if($install -notmatch 'Register-ScheduledTask' -or $install -notmatch "-UserId 'S-1-5-18'" -or $install -notmatch 'LogonType ServiceAccount' -or $install -notmatch 'GRGX;;;BU' -or $install -notmatch 'icacls.exe') {throw 'Installed task privilege boundary is missing.'}
+if($install -notmatch 'ITSeti-Maintenance-OrganizationSetup' -or $install -notmatch 'InstalledOrganizationSetup.ps1' -or
+   $install -notmatch 'OrganizationSetupRequests' -or $install -notmatch 'OrganizationSetupRuns' -or
+   $install -notmatch 'Install-OrganizationSoftware.ps1') {throw 'Verified organization software installation task is missing.'}
 if(!$install.Contains('install.log') -or !$install.Contains('install-status.txt') -or !$install.Contains('throw "Не удалось зарегистрировать обязательную задачу')) {throw 'A failed required SYSTEM task must abort installation with logged details.'}
 if(!$install.Contains("'ITSeti-Maintenance-Temperature'") -or !$install.Contains('cpu-temperature.json') -or !$install.Contains("-Execute (Join-Path `$install 'ITSeti.Maintenance.exe')")) {throw 'The SYSTEM CPU-temperature task is not installed.'}
 $tempSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\CpuTemperatureCache.cs'),[Text.Encoding]::UTF8)
@@ -72,9 +75,19 @@ $diskTools=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infra
 $elevatedLauncher=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\ElevatedProcessLauncher.cs'),[Text.Encoding]::UTF8)
 if(!$treeSize.Contains('ElevatedProcessLauncher.CreateStartInfo') -or $treeSize -match 'RunAsInvoker' -or
    !$diskTools.Contains('ElevatedProcessLauncher.CreateStartInfo') -or $diskTools -match 'RunAsInvoker' -or
-   !$elevatedLauncher.Contains('UseShellExecute = !elevated') -or !$elevatedLauncher.Contains('start.Verb = "runas"') -or
-   !$elevatedLauncher.Contains('IsInRole(WindowsBuiltInRole.Administrator)')) {
-    throw 'Interactive utilities must inherit an existing elevated token or request standard UAC elevation.'
+   !$elevatedLauncher.Contains('UseShellExecute = false') -or $elevatedLauncher.Contains('Verb = "runas"')) {
+    throw 'Interactive tools must start in the current desktop session without requesting UAC.'
+}
+$organizationRunner=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\OrganizationSetupRunner.cs'),[Text.Encoding]::UTF8)
+$organizationWorker=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledOrganizationSetup.ps1'),[Text.Encoding]::UTF8)
+if($organizationRunner -match 'Verb\s*=\s*"runas"' -or !$organizationRunner.Contains('ITSeti-Maintenance-OrganizationSetup') -or
+   $organizationWorker -notmatch 'Install-OrganizationSoftware.ps1' -or $organizationWorker -notmatch 'installer-result.txt') {
+    throw 'Organization software installation must use the verified SYSTEM task instead of an interactive elevation prompt.'
+}
+$updateRunner=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\ApplicationUpdateRunner.cs'),[Text.Encoding]::UTF8)
+if($updateRunner -match 'Verb\s*=\s*"runas"' -or !$updateRunner.Contains('ITSeti-Maintenance-Update') -or
+   !$install.Contains('ITSeti-Maintenance-OrganizationSetup') -or !$install.Contains('ITSeti-Maintenance-Update')) {
+    throw 'Software installation and application updates must use installed SYSTEM tasks without UAC prompts.'
 }
 $installerDefinition=[IO.File]::ReadAllText((Join-Path $Root 'Installer.iss'),[Text.Encoding]::UTF8)
 if($installerDefinition -notmatch '(?m)^PrivilegesRequired=admin$') {throw 'Setup must require administrator rights.'}

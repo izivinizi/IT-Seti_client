@@ -53,21 +53,32 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         {
             if (HasVisibleWindow(exe)) return $"{name}: окно уже открыто. Закройте его перед повторным запуском от администратора.";
             var start = ElevatedProcessLauncher.CreateStartInfo(exe, Path.GetDirectoryName(exe)!);
+            var launchContext = ElevatedProcessLauncher.IsCurrentProcessElevated
+                ? "с правами администратора"
+                : "без повышения прав";
             using var launched = await Task.Run(() => Process.Start(start))
                 ?? throw new InvalidOperationException("Windows не запустила программу");
             for (var attempt = 0; attempt < 20; attempt++)
             {
                 if (HasVisibleWindow(exe))
-                    return $"{name}: окно открыто с правами администратора";
+                    return $"{name}: окно открыто {launchContext}";
                 if (launched.HasExited)
+                {
+                    if (!ElevatedProcessLauncher.IsCurrentProcessElevated && launched.ExitCode == 0)
+                        return $"{name}: программа завершилась без окна. Возможно, для запуска требуется токен администратора; UAC не запрашивался.";
                     return $"{name}: программа завершилась без окна (код {launched.ExitCode}).";
+                }
                 await Task.Delay(250);
             }
-            return $"{name}: процесс запущен с правами администратора, окно не появилось за 5 секунд.";
+            return $"{name}: процесс запущен {launchContext}, окно не появилось за 5 секунд.";
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
         {
             return $"{name}: запуск от администратора отменён в окне контроля учётных записей.";
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 740)
+        {
+            return $"{name}: Windows требует права администратора для этого окна. UAC не запрашивался; фоновая проверка использует системную задачу.";
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or UnauthorizedAccessException)
         {

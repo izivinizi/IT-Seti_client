@@ -10,6 +10,7 @@ if(Test-Path -LiteralPath $updatePolicy){try {& $updatePolicy -Action Restore | 
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-FullRepair' /F | Out-Null
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-Repair' /F | Out-Null
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-Cleanup' /F | Out-Null
+& schtasks.exe /Delete /TN 'ITSeti-Maintenance-OrganizationSetup' /F | Out-Null
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-AutoFullRepair' /F | Out-Null
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-DisableUpdates' /F | Out-Null
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-RestoreUpdates' /F | Out-Null

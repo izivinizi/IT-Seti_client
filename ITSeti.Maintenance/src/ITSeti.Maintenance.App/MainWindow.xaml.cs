@@ -273,7 +273,8 @@ public partial class MainWindow : Window
         try
         {
             ViewModel.SetSetupStatus("Установка ПО выполняется…");
-            var exitCode = await OrganizationSetupRunner.RunBaseAsync(source!);
+            var progress = new Progress<string>(ViewModel.SetSetupStatus);
+            var exitCode = await OrganizationSetupRunner.RunBaseAsync(source!, progress);
             ViewModel.RefreshSetupAudit(source);
             var message = exitCode == 0 ? "Установка завершена. Проверьте состояние компонентов." : $"Установщик вернул код {exitCode}. Проверьте C:\\ProgramData\\ITSETI\\install.log.";
             ViewModel.SetSetupStatus(message);
@@ -297,35 +298,6 @@ public partial class MainWindow : Window
         }
         ViewModel.RefreshSetupAudit(dialog.FolderName);
     }
-    private async void LaunchSetupMenu_Click(object sender, RoutedEventArgs e)
-    {
-        var source = ViewModel.SetupSourcePath;
-        if (source is null) return;
-        var launcher = Path.Combine(source, "Установить.vbs");
-        try
-        {
-            ViewModel.SetSoftwareActionStatus("Проверка комплекта ИТ-Сети перед запуском…");
-            var problems = await OrganizationSetupRunner.CheckAsync(source);
-            if (problems.Count > 0)
-            {
-                var details = string.Join(Environment.NewLine, problems);
-                ViewModel.SetSoftwareActionStatus("Запуск установщика заблокирован проверкой комплекта.");
-                MessageBox.Show(this, details, "Комплект ИТ-Сети не прошёл проверку", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-            if (!File.Exists(launcher)) throw new FileNotFoundException("В комплекте нет Установить.vbs.", launcher);
-            Process.Start(new ProcessStartInfo(launcher)
-            {
-                UseShellExecute = true,
-                WorkingDirectory = source
-            });
-            ViewModel.SetSoftwareActionStatus("Открыто меню установки ПО ИТ-Сети.");
-        }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or UnauthorizedAccessException or IOException)
-        {
-            ViewModel.SetSoftwareActionStatus("Не удалось открыть меню установщика: " + ex.Message);
-        }
-    }
     private async void LaunchDiskInfo_Click(object sender, RoutedEventArgs e) => await LaunchDiskToolAsync(diskInfo: true);
     private async void LaunchDiskMark_Click(object sender, RoutedEventArgs e) => await LaunchDiskToolAsync(diskInfo: false);
     private async void LaunchTreeSize_Click(object sender, RoutedEventArgs e)
@@ -334,9 +306,9 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(volume)) return;
         try
         {
-            ViewModel.SetSoftwareActionStatus("Запуск TreeSize Free с правами администратора…");
+            ViewModel.SetSoftwareActionStatus("Открываем TreeSize Free без запроса UAC…");
             await TreeSizeLauncher.StartScanAsync(volume);
-            ViewModel.SetSoftwareActionStatus($"TreeSize Free запущен от администратора для {volume}.");
+            ViewModel.SetSoftwareActionStatus($"TreeSize Free открыт для {volume} с правами текущей учётной записи.");
         }
         catch (Exception ex)
         {

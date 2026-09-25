@@ -9,7 +9,7 @@
     <Compile Remove="Backend\NativeDiskMark.cs" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="Backend\FullCheckWorker.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Backend\FullCheckWorker.ps1;Backend\InstalledOrganizationSetup.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\Set-WindowsAutomaticUpdates.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\Update-Application.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\HeadlessDiskWorker.ps1;Backend\InstalledCheck.ps1;Backend\InstalledRepair.ps1;Backend\InstalledCleanup.ps1;Backend\DirectRepair.ps1;Backend\AppCleanupWorker.ps1;Backend\ResourceSampler.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

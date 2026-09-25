@@ -34,7 +34,8 @@ foreach($relative in @('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDi
 }
 $install=$InstallRoot
 $installStage='Создание каталогов и копирование файлов'
-New-Item -ItemType Directory -Path $install,$data,(Join-Path $data 'Runs'),(Join-Path $data 'Repairs'),(Join-Path $data 'CleanupRequests'),(Join-Path $data 'CleanupRuns'),(Join-Path $data 'WindowsUpdate') -Force | Out-Null
+New-Item -ItemType Directory -Path $install,$data,(Join-Path $data 'Runs'),(Join-Path $data 'Repairs'),(Join-Path $data 'CleanupRequests'),(Join-Path $data 'CleanupRuns'),(Join-Path $data 'WindowsUpdate'),(Join-Path $data 'OrganizationSetupRequests'),(Join-Path $data 'OrganizationSetupRuns') -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $install 'Backend') -Force | Out-Null
 if(!$PreinstalledApp){Get-ChildItem -LiteralPath $sourceApp -Force | Copy-Item -Destination $install -Recurse -Force}
 if(!$PreinstalledApp){
     foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO')){
@@ -46,6 +47,9 @@ if(!$PreinstalledApp){
         }
     }
 }
+$organizationVerifier=Join-Path $PackageRoot 'Install-OrganizationSoftware.ps1'
+if(!(Test-Path -LiteralPath $organizationVerifier -PathType Leaf)){throw 'Organization setup verifier is missing from the installer package.'}
+Copy-Item -LiteralPath $organizationVerifier -Destination (Join-Path $install 'Backend\Install-OrganizationSoftware.ps1') -Force
 $pawnIoInstaller=Join-Path $sourceTools 'PawnIO\PawnIO_setup.exe'
 $pawnIoLog=Join-Path $data 'cpu-sensor-driver.txt'
 $pawnIoHash='1F519A22E47187F70A1379A48CA604981C4FCF694F4E65B734AAA74A9FBA3032'
@@ -82,6 +86,12 @@ if($LASTEXITCODE -ne 0){throw 'Could not allow cleanup requests.'}
 $cleanupRuns=Join-Path $data 'CleanupRuns'
 & icacls.exe $cleanupRuns /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Could not secure cleanup results.'}
+$organizationRequests=Join-Path $data 'OrganizationSetupRequests'
+& icacls.exe $organizationRequests /grant:r '*S-1-5-32-545:(OI)(CI)M' | Out-Null
+if($LASTEXITCODE -ne 0){throw 'Could not allow organization setup requests.'}
+$organizationRuns=Join-Path $data 'OrganizationSetupRuns'
+& icacls.exe $organizationRuns /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+if($LASTEXITCODE -ne 0){throw 'Could not secure organization setup results.'}
 $inventory=Join-Path $data 'inventory.txt'
 if(!(Test-Path -LiteralPath $inventory -PathType Leaf)){[IO.File]::WriteAllText($inventory,'',[Text.Encoding]::ASCII)}
 & icacls.exe $inventory /grant '*S-1-5-32-545:M' | Out-Null
@@ -101,13 +111,13 @@ try {
     $powershell=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $scheduler=New-Object -ComObject Schedule.Service
     $scheduler.Connect()
-    foreach($name in @($taskName,'ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair','ITSeti-Maintenance-Cleanup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates','ITSeti-Maintenance-Update',$temperatureTaskName)){
+    foreach($name in @($taskName,'ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair','ITSeti-Maintenance-Cleanup','ITSeti-Maintenance-OrganizationSetup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates','ITSeti-Maintenance-Update',$temperatureTaskName)){
         $installStage="Регистрация задачи $name"
         $isTemperatureTask=$name -eq $temperatureTaskName
         if($isTemperatureTask){
             $taskAction=New-ScheduledTaskAction -Execute (Join-Path $install 'ITSeti.Maintenance.exe') -Argument ('--cpu-temperature-probe "'+(Join-Path $data 'cpu-temperature.json')+'"')
         }else{
-            $script=if($name -eq 'ITSeti-Maintenance-Repair'){Join-Path $install 'Backend\InstalledRepair.ps1'}elseif($name -eq 'ITSeti-Maintenance-Cleanup'){Join-Path $install 'Backend\InstalledCleanup.ps1'}elseif($name -eq 'ITSeti-Maintenance-Update'){Join-Path $install 'Backend\Update-Application.ps1'}elseif($name -match 'Updates$'){Join-Path $install 'Backend\Set-WindowsAutomaticUpdates.ps1'}else{$worker}
+            $script=if($name -eq 'ITSeti-Maintenance-Repair'){Join-Path $install 'Backend\InstalledRepair.ps1'}elseif($name -eq 'ITSeti-Maintenance-Cleanup'){Join-Path $install 'Backend\InstalledCleanup.ps1'}elseif($name -eq 'ITSeti-Maintenance-OrganizationSetup'){Join-Path $install 'Backend\InstalledOrganizationSetup.ps1'}elseif($name -eq 'ITSeti-Maintenance-Update'){Join-Path $install 'Backend\Update-Application.ps1'}elseif($name -match 'Updates$'){Join-Path $install 'Backend\Set-WindowsAutomaticUpdates.ps1'}else{$worker}
             $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$script+'"'
             if($name -eq 'ITSeti-Maintenance-QuickFull'){$arguments+=' -Quick'}
             if($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$arguments+=' -StartRepair'}

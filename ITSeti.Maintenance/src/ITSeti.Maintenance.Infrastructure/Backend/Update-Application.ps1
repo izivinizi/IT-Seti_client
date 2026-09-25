@@ -13,7 +13,7 @@ $currentText = (Get-Item -LiteralPath $appAssemblyPath).VersionInfo.FileVersion
 $currentVersion = [Version]($currentText -replace '\.\d+$', '')
 $manifestUrl = "https://github.com/$repository/releases/latest/download/release.json"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$release = Invoke-RestMethod -Uri $manifestUrl -Headers @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/0.9.6'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache' } -TimeoutSec 30
+$release = Invoke-RestMethod -Uri $manifestUrl -Headers @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/0.10.1'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache' } -TimeoutSec 30
 $versionText = [string]$release.version
 $tag = [string]$release.tag
 if ($versionText -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$' -or $tag -cne "v$versionText") { throw 'Update manifest contains an invalid version or tag.' }

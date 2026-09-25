@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace ITSeti.Maintenance.Infrastructure;
 
@@ -133,20 +134,64 @@ public static class OrganizationSetupRunner
     [DllImport("wintrust.dll", ExactSpelling = true, PreserveSig = true, SetLastError = false)]
     private static extern uint WinVerifyTrust(IntPtr window, ref Guid actionId, IntPtr trustData);
 
-    public static async Task<int> RunBaseAsync(string source)
+    private const string InstallTask = "ITSeti-Maintenance-OrganizationSetup";
+    private static readonly string MaintenanceRoot = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance");
+
+    public static async Task<int> RunBaseAsync(string source, IProgress<string>? progress = null)
     {
         var problems = await CheckAsync(source);
         if (problems.Count > 0) throw new InvalidOperationException(string.Join(Environment.NewLine, problems));
-        var script = Path.Combine(source, "system", "Install.ps1");
-        var command = "& '" + script.Replace("'", "''") + "' -Silent; exit $LASTEXITCODE";
-        using var run = new Process { StartInfo = new ProcessStartInfo("powershell.exe")
+        var requestRoot = Path.Combine(MaintenanceRoot, "OrganizationSetupRequests");
+        var resultRoot = Path.Combine(MaintenanceRoot, "OrganizationSetupRuns");
+        if (!Directory.Exists(requestRoot) || !Directory.Exists(resultRoot))
+            throw new InvalidOperationException("Системная установка не настроена. Переустановите приложение от администратора.");
+
+        var id = Guid.NewGuid().ToString("N");
+        var request = Path.Combine(requestRoot, id + ".json");
+        var result = Path.Combine(resultRoot, id, "result.txt");
+        await File.WriteAllTextAsync(request, JsonSerializer.Serialize(new { Source = Path.GetFullPath(source) }), new UTF8Encoding(false));
+        try
         {
-            Arguments = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes(command)),
-            UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Hidden
-        } };
-        try { run.Start(); }
-        catch (Win32Exception ex) { throw new InvalidOperationException("Повышение прав не подтверждено: " + ex.Message, ex); }
-        await run.WaitForExitAsync();
-        return run.ExitCode;
+            using var task = new Process
+            {
+                StartInfo = new ProcessStartInfo("schtasks.exe")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    ArgumentList = { "/Run", "/TN", InstallTask }
+                }
+            };
+            try { task.Start(); }
+            catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or UnauthorizedAccessException)
+            {
+                throw new InvalidOperationException("Не удалось запустить установленную системную задачу.", ex);
+            }
+            var output = task.StandardOutput.ReadToEndAsync();
+            var errors = task.StandardError.ReadToEndAsync();
+            await task.WaitForExitAsync();
+            if (task.ExitCode != 0)
+                throw new InvalidOperationException($"Не удалось запустить системную установку: {(await errors).Trim()} {(await output).Trim()}");
+
+            progress?.Report("Системная установка запущена. Проверяем подписанные пакеты…");
+            var deadline = DateTime.UtcNow.AddMinutes(90);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (File.Exists(result))
+                {
+                    var status = (await File.ReadAllTextAsync(result)).Trim();
+                    if (status == "OK") return 0;
+                    throw new InvalidOperationException(status.Length > 0 ? status : "Установка завершилась без результата.");
+                }
+                await Task.Delay(1500);
+            }
+            throw new TimeoutException("Системная установка не завершилась за 90 минут.");
+        }
+        finally
+        {
+            try { File.Delete(request); } catch (IOException) { }
+        }
     }
 }

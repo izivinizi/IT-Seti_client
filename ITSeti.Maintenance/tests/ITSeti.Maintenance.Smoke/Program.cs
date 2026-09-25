@@ -58,8 +58,13 @@ internal static class Program
                     throw new Exception("First app launch did not populate live disk capacity");
                 if (window.ViewModel.Selected is null && window.ViewModel.UserCoverage.Length > 0)
                     throw new Exception("Live-only status incorrectly reports diagnostic coverage errors");
+                if (window.ViewModel.Selected is null && window.ViewModel.UserIssueHeading != "Проверка ещё не выполнялась")
+                    throw new Exception("The initial user screen must not imply that a diagnostic has completed");
                 var initialHistoryCount = window.ViewModel.History.Count;
-                await window.ViewModel.RunQuickAsync();
+                var firstRun = window.ViewModel.RunQuickAsync();
+                if (window.ViewModel.UserIssueHeading != "Проверка выполняется")
+                    throw new Exception("The user screen must show an in-progress diagnostic state");
+                await firstRun;
                 var first = window.ViewModel.Selected ?? throw new Exception("No snapshot produced");
                 if (first.TotalMemoryBytes == 0 || first.CpuPercent is < 0 or > 100 || first.Disks.Count == 0 || first.QuickDisks is not { Count: > 0 }
                     || first.LastBootAt is null || first.LastBootAt > first.StartedAt)
@@ -205,15 +210,12 @@ internal static class Program
                 if (window.ViewModel.SetupComponents.Count != 4) throw new Exception("Organization software audit missing components");
                 window.ViewModel.SetSetupMode(true);
                 if (window.ViewModel.SetupComponents.Count != 6) throw new Exception("Acceptance mode inventory missing");
-                var treeStart = TreeSizeLauncher.CreateStartInfo(@"C:\Tools\TreeSizeFree.exe", @"C:\", currentProcessElevated: false);
-                if (!treeStart.UseShellExecute || treeStart.Verb != "runas" || treeStart.Arguments != @"C:\")
-                    throw new Exception("TreeSize must request administrator rights when the app is not elevated");
-                var elevatedTreeStart = TreeSizeLauncher.CreateStartInfo(@"C:\Tools\TreeSizeFree.exe", @"C:\", currentProcessElevated: true);
-                if (elevatedTreeStart.UseShellExecute || elevatedTreeStart.ArgumentList.Single() != @"C:\")
-                    throw new Exception("TreeSize must inherit the application's elevated token without another UAC prompt");
-                var diskToolStart = ElevatedProcessLauncher.CreateStartInfo(@"C:\Tools\DiskInfo64.exe", @"C:\Tools", currentProcessElevated: false);
-                if (!diskToolStart.UseShellExecute || diskToolStart.Verb != "runas")
-                    throw new Exception("Disk utilities must request administrator rights from a normal session");
+                var treeStart = TreeSizeLauncher.CreateStartInfo(@"C:\Tools\TreeSizeFree.exe", @"C:\");
+                if (treeStart.UseShellExecute || treeStart.Verb.Length > 0 || treeStart.ArgumentList.Single() != @"C:\")
+                    throw new Exception("TreeSize must launch in the current user session without UAC");
+                var diskToolStart = ElevatedProcessLauncher.CreateStartInfo(@"C:\Tools\DiskInfo64.exe", @"C:\Tools");
+                if (diskToolStart.UseShellExecute || diskToolStart.Verb.Length > 0)
+                    throw new Exception("Disk utilities must launch in the current user session without UAC");
                 window.ViewModel.SetSetupMode(false);
                 var detectedSetup = OrganizationSoftwareAudit.FindSource();
                 if (File.Exists(@"F:\Service\ITSETI-Setup\system\Install.ps1")
@@ -222,8 +224,6 @@ internal static class Program
                 await AssertSetupSignatureCheck(output);
                 foreach (var name in new[] { "InstallSetupButton", "LaunchDiskInfoButton", "LaunchDiskMarkButton", "LaunchTreeSizeButton" })
                     if (window.FindName(name) is not Button { IsEnabled: true }) throw new Exception($"ПО action is unavailable: {name}");
-                if (((Button)window.FindName("LaunchSetupMenuButton")!).IsEnabled != window.ViewModel.HasSetupSource)
-                    throw new Exception("Setup menu availability does not match the detected package source");
                 AssertDiskToolResolution(output);
                 window.UpdateLayout();
                 await Task.Delay(250);
@@ -347,6 +347,8 @@ internal static class Program
     {
         var names = new[] { "DiskMark64", "DiskInfo64" };
         var previous = names.SelectMany(Process.GetProcessesByName).Select(p => { using (p) return p.Id; }).ToHashSet();
+        var elevated = new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent())
+            .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
         try
         {
             var runner = new FullDiagnosticsRunner(Path.GetFullPath("Tools"));
@@ -354,9 +356,14 @@ internal static class Program
             {
                 var result = runner.LaunchInteractiveDiskToolAsync(diskInfo).GetAwaiter().GetResult();
                 Console.WriteLine(result);
-                if (!result.Contains("окно открыто") && !result.Contains("окно уже открыто"))
+                var opened = result.Contains("окно открыто") || result.Contains("окно уже открыто");
+                if (elevated && !opened)
+                    throw new Exception(result);
+                if (!elevated && !opened && !result.Contains("токен администратора")
+                    && !result.Contains("Windows требует права администратора"))
                     throw new Exception(result);
             }
+            if (!elevated) Console.WriteLine("PASS: standard-user launch made no UAC request; privileged GUI tools were refused clearly.");
             return 0;
         }
         finally
