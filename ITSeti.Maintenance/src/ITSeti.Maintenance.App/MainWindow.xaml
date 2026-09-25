@@ -9,28 +9,28 @@
   </Style>
   <Style x:Key="UserSecondaryButton" TargetType="Button" BasedOn="{StaticResource UserPrimaryButton}"><Setter Property="Background" Value="#EAF1FF"/><Setter Property="Foreground" Value="#14419E"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button"><Border x:Name="Surface" Background="{TemplateBinding Background}" CornerRadius="6" Padding="18"><ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Stretch"/></Border><ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Background" Value="#DCE8FF"/></Trigger><Trigger Property="IsPressed" Value="True"><Setter TargetName="Surface" Property="Background" Value="#C9DCFF"/></Trigger><Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Opacity" Value="0.55"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style>
   <Style x:Key="MetricProgress" TargetType="ProgressBar"><Setter Property="Height" Value="7"/><Setter Property="Background" Value="#E6EDF2"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Maximum" Value="100"/></Style>
-  <Style x:Key="SectionHeading" TargetType="TextBlock"><Setter Property="FontSize" Value="18"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Foreground" Value="#143C87"/></Style>
-  <Style x:Key="SecondaryText" TargetType="TextBlock"><Setter Property="FontSize" Value="15"/><Setter Property="Foreground" Value="#465C70"/><Setter Property="TextWrapping" Value="Wrap"/></Style>
-  <Style TargetType="Button"><Setter Property="Background" Value="White"/><Setter Property="Foreground" Value="#14419E"/><Setter Property="BorderBrush" Value="#C7D5E5"/><Setter Property="BorderThickness" Value="1"/><Setter Property="FontSize" Value="15"/><Setter Property="FontWeight" Value="SemiBold"/></Style>
-  <Style TargetType="TextBox"><Setter Property="FontSize" Value="15"/></Style>
-  <Style TargetType="ComboBox"><Setter Property="FontSize" Value="15"/></Style>
-  <Style TargetType="DataGrid"><Setter Property="AutoGenerateColumns" Value="False"/><Setter Property="CanUserAddRows" Value="False"/><Setter Property="IsReadOnly" Value="True"/><Setter Property="GridLinesVisibility" Value="Horizontal"/><Setter Property="HorizontalGridLinesBrush" Value="#E6EDF2"/><Setter Property="AlternatingRowBackground" Value="#F7FAFD"/><Setter Property="RowHeight" Value="40"/><Setter Property="ColumnHeaderHeight" Value="38"/><Setter Property="FontSize" Value="14"/><Setter Property="HeadersVisibility" Value="Column"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Background" Value="White"/></Style>
-  <Style x:Key="AdminNavItem" TargetType="ListBoxItem"><Setter Property="Padding" Value="12,10"/><Setter Property="Margin" Value="0,2"/><Setter Property="FontSize" Value="15"/><Setter Property="Foreground" Value="#36556C"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><Border x:Name="NavBackground" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}"><ContentPresenter/></Border><ControlTemplate.Triggers><Trigger Property="IsSelected" Value="True"><Setter TargetName="NavBackground" Property="Background" Value="#EAF1FF"/><Setter Property="Foreground" Value="#14419E"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="NavBackground" Property="Background" Value="#F1F6FC"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style>
+  <Style x:Key="SectionHeading" TargetType="TextBlock"><Setter Property="FontSize" Value="20"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Foreground" Value="#143C87"/></Style>
+  <Style x:Key="SecondaryText" TargetType="TextBlock"><Setter Property="FontSize" Value="16"/><Setter Property="Foreground" Value="#354A5E"/><Setter Property="TextWrapping" Value="Wrap"/></Style>
+  <Style TargetType="Button"><Setter Property="Background" Value="White"/><Setter Property="Foreground" Value="#14419E"/><Setter Property="BorderBrush" Value="#C7D5E5"/><Setter Property="BorderThickness" Value="1"/><Setter Property="FontSize" Value="16"/><Setter Property="FontWeight" Value="SemiBold"/></Style>
+  <Style TargetType="TextBox"><Setter Property="FontSize" Value="16"/></Style>
+  <Style TargetType="ComboBox"><Setter Property="FontSize" Value="16"/></Style>
+  <Style TargetType="DataGrid"><Setter Property="AutoGenerateColumns" Value="False"/><Setter Property="CanUserAddRows" Value="False"/><Setter Property="IsReadOnly" Value="True"/><Setter Property="GridLinesVisibility" Value="Horizontal"/><Setter Property="HorizontalGridLinesBrush" Value="#E6EDF2"/><Setter Property="AlternatingRowBackground" Value="#F7FAFD"/><Setter Property="RowHeight" Value="40"/><Setter Property="ColumnHeaderHeight" Value="38"/><Setter Property="FontSize" Value="16"/><Setter Property="HeadersVisibility" Value="Column"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Background" Value="White"/></Style>
+  <Style x:Key="AdminNavItem" TargetType="ListBoxItem"><Setter Property="Padding" Value="12,10"/><Setter Property="Margin" Value="0,2"/><Setter Property="FontSize" Value="16"/><Setter Property="Foreground" Value="#263C52"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><Border x:Name="NavBackground" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}"><ContentPresenter/></Border><ControlTemplate.Triggers><Trigger Property="IsSelected" Value="True"><Setter TargetName="NavBackground" Property="Background" Value="#EAF1FF"/><Setter Property="Foreground" Value="#14419E"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="NavBackground" Property="Background" Value="#F1F6FC"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style>
  </Window.Resources>
  <Grid>
-  <Grid x:Name="UserShell" Background="#F3F6F8" TextElement.FontSize="15">
+  <Grid x:Name="UserShell" Background="#F3F6F8" TextElement.FontSize="16">
    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
    <Border Background="White" BorderBrush="#DDE6EB" BorderThickness="0,0,0,1" Padding="24,12">
     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="158"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
      <Image Source="Assets/logo.png" Width="142" Height="76" Stretch="Uniform" HorizontalAlignment="Left"/>
      <StackPanel Grid.Column="1" Margin="10,0,22,0" VerticalAlignment="Center">
-      <StackPanel Orientation="Horizontal"><TextBlock Text="{Binding ComputerName}" FontSize="15" FontWeight="SemiBold" Foreground="#143C87" VerticalAlignment="Center"/><TextBlock Text="{Binding UserInventoryLabel}" Foreground="#465C70" FontSize="14" Margin="16,0,0,0" VerticalAlignment="Center"/><Button Click="CopyInventory_Click" Visibility="{Binding HasInventoryNumber, Converter={StaticResource BoolVisibility}}" ToolTip="Скопировать инвентарный номер" AutomationProperties.Name="Скопировать инвентарный номер" Width="24" Height="24" Padding="0" Margin="4,0,0,0" BorderThickness="0" Background="Transparent" Cursor="Hand"><TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="14"/></Button></StackPanel>
+      <StackPanel Orientation="Horizontal"><TextBlock Text="{Binding ComputerName}" FontSize="16" FontWeight="SemiBold" Foreground="#143C87" VerticalAlignment="Center"/><TextBlock Text="{Binding UserInventoryLabel}" Foreground="#354A5E" FontSize="14" Margin="16,0,0,0" VerticalAlignment="Center"/><Button Click="CopyInventory_Click" Visibility="{Binding HasInventoryNumber, Converter={StaticResource BoolVisibility}}" ToolTip="Скопировать инвентарный номер" AutomationProperties.Name="Скопировать инвентарный номер" Width="24" Height="24" Padding="0" Margin="4,0,0,0" BorderThickness="0" Background="Transparent" Cursor="Hand"><TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="14"/></Button></StackPanel>
       <Grid Margin="0,3,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-       <TextBlock Text="{Binding UserRmsLabel}" Foreground="#465C70" FontSize="14" TextTrimming="CharacterEllipsis" MaxWidth="220" VerticalAlignment="Center"/>
+       <TextBlock Text="{Binding UserRmsLabel}" Foreground="#354A5E" FontSize="14" TextTrimming="CharacterEllipsis" MaxWidth="220" VerticalAlignment="Center"/>
        <Button Grid.Column="1" Click="CopyRms_Click" Visibility="{Binding HasRmsId, Converter={StaticResource BoolVisibility}}" ToolTip="Скопировать номер RMS" AutomationProperties.Name="Скопировать номер RMS" Width="24" Height="24" Padding="0" Margin="4,0,0,0" BorderThickness="0" Background="Transparent" Cursor="Hand"><TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="14"/></Button>
-       <TextBlock Grid.Column="2" Text="{Binding UserIpLabel}" ToolTip="{Binding UserIpTooltip}" Foreground="#465C70" FontSize="14" Margin="14,0,0,0" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+       <TextBlock Grid.Column="2" Text="{Binding UserIpLabel}" ToolTip="{Binding UserIpTooltip}" Foreground="#354A5E" FontSize="14" Margin="14,0,0,0" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
       </Grid>
-      <TextBlock Text="{Binding UserUptimeLabel}" Foreground="#465C70" FontSize="14" Margin="0,5,0,0"/>
+      <TextBlock Text="{Binding UserUptimeLabel}" Foreground="#354A5E" FontSize="14" Margin="0,5,0,0"/>
      </StackPanel>
      <Button x:Name="AdminModeButton" Grid.Column="2" Click="ShowAdminPrompt_Click" Width="38" Height="38" Padding="0" VerticalAlignment="Center" ToolTip="Режим инженера" Cursor="Hand" Background="#F3F6F8" BorderBrush="#DDE6EB" AutomationProperties.Name="Режим инженера">
       <TextBlock Text="&#xE72E;" FontFamily="Segoe MDL2 Assets" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/>
@@ -43,34 +43,34 @@
     <StackPanel>
      <TextBlock Text="Проблемы с компьютером?" FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="20" FontWeight="SemiBold" Foreground="#143C87" TextWrapping="Wrap" Margin="0,0,0,22"/>
      <Button Style="{StaticResource UserPrimaryButton}" Height="74" Click="RunUserFull_Click" IsEnabled="{Binding CanRunFull}" ToolTip="Проверить оборудование, диски, процессы и события">
-      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE9D9;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="White" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Выполнить проверку" FontSize="15" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center" TextWrapping="Wrap"/></Grid>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE9D9;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="White" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Выполнить проверку" FontSize="16" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center" TextWrapping="Wrap"/></Grid>
      </Button>
       <Button Style="{StaticResource UserSecondaryButton}" Height="88" Margin="0,10,0,0" Click="RunCleanup_Click" IsEnabled="{Binding CanRunCleanup}" ToolTip="Корзина, временные файлы и кэш пользователя; системно: обновления Windows, оптимизация доставки и пакеты драйверов">
-      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><StackPanel Grid.Column="1" VerticalAlignment="Center"><TextBlock Text="Выполнить очистку" FontSize="15" FontWeight="SemiBold" Foreground="#14419E"/><TextBlock Text="Корзина · временные файлы" FontSize="14" Foreground="#3F6680" Margin="0,5,0,0"/></StackPanel></Grid>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><StackPanel Grid.Column="1" VerticalAlignment="Center"><TextBlock Text="Выполнить очистку" FontSize="16" FontWeight="SemiBold" Foreground="#14419E"/><TextBlock Text="Корзина · временные файлы" FontSize="14" Foreground="#354F68" Margin="0,5,0,0"/></StackPanel></Grid>
      </Button>
      <Button x:Name="SupportButton" Style="{StaticResource UserSecondaryButton}" Height="72" Margin="0,10,0,0" Click="ShowSupport_Click" ToolTip="Способы связи с ИТ-Сети">
-      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE8F2;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Оставить заявку" FontSize="15" FontWeight="SemiBold" Foreground="#14419E" VerticalAlignment="Center"/></Grid>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE8F2;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Оставить заявку" FontSize="16" FontWeight="SemiBold" Foreground="#14419E" VerticalAlignment="Center"/></Grid>
      </Button>
     </StackPanel>
     <Border Grid.Column="2" Background="White" BorderBrush="#E1EAF0" BorderThickness="1" CornerRadius="6" Padding="24,20">
       <StackPanel>
-       <TextBlock Text="Состояние компьютера" FontSize="18" FontWeight="SemiBold" Foreground="#143C87" Margin="0,0,0,20"/>
-       <Grid Margin="0,0,0,16"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Процессор" FontSize="15" Foreground="#40586B"/><TextBlock Grid.Column="1" Text="{Binding UserCpuLabel}" FontSize="18" FontWeight="SemiBold" Foreground="#143C87"/></Grid>
+       <TextBlock Text="Состояние компьютера" FontSize="20" FontWeight="SemiBold" Foreground="#143C87" Margin="0,0,0,20"/>
+       <Grid Margin="0,0,0,16"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Процессор" FontSize="16" Foreground="#30475A"/><TextBlock Grid.Column="1" Text="{Binding UserCpuLabel}" FontSize="20" FontWeight="SemiBold" Foreground="#143C87"/></Grid>
        <ProgressBar Style="{StaticResource MetricProgress}" Value="{Binding UserCpuValue, Mode=OneWay}" Foreground="#326EFF" Margin="0,-8,0,4"/>
-       <TextBlock Text="{Binding UserCpuNameAndTemperature}" Foreground="#36556C" FontSize="15" TextWrapping="Wrap" Margin="0,0,0,4"/>
-       <TextBlock Text="{Binding UserCpuDetail}" Foreground="#465C70" FontSize="15" Margin="0,0,0,18" TextWrapping="Wrap"/>
-       <Grid Margin="0,0,0,16"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Оперативная память" FontSize="15" Foreground="#40586B"/><TextBlock Grid.Column="1" Text="{Binding UserMemoryLabel}" FontSize="18" FontWeight="SemiBold" Foreground="#143C87"/></Grid>
+       <TextBlock Text="{Binding UserCpuNameAndTemperature}" Foreground="#304E68" FontSize="16" TextWrapping="Wrap" Margin="0,0,0,4"/>
+       <TextBlock Text="{Binding UserCpuDetail}" Foreground="#354A5E" FontSize="16" Margin="0,0,0,18" TextWrapping="Wrap"/>
+       <Grid Margin="0,0,0,16"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Оперативная память" FontSize="16" Foreground="#30475A"/><TextBlock Grid.Column="1" Text="{Binding UserMemoryLabel}" FontSize="20" FontWeight="SemiBold" Foreground="#143C87"/></Grid>
        <ProgressBar Style="{StaticResource MetricProgress}" Value="{Binding UserMemoryValue, Mode=OneWay}" Foreground="#2C9F9A" Margin="0,-8,0,4"/>
-       <TextBlock Text="{Binding UserMemoryDetail}" Foreground="#465C70" FontSize="15" Margin="0,0,0,18"/>
-       <Grid Margin="0,0,0,16"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Системный диск" FontSize="15" Foreground="#40586B"/><TextBlock Grid.Column="1" Text="{Binding UserDiskLabel}" FontSize="18" FontWeight="SemiBold" Foreground="#143C87"/></Grid>
+       <TextBlock Text="{Binding UserMemoryDetail}" Foreground="#354A5E" FontSize="16" Margin="0,0,0,18"/>
+       <Grid Margin="0,0,0,16"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Системный диск" FontSize="16" Foreground="#30475A"/><TextBlock Grid.Column="1" Text="{Binding UserDiskLabel}" FontSize="20" FontWeight="SemiBold" Foreground="#143C87"/></Grid>
        <ProgressBar Style="{StaticResource MetricProgress}" Value="{Binding UserDiskValue, Mode=OneWay}" Foreground="#E1A236" Margin="0,-8,0,4"/>
-       <TextBlock Text="{Binding UserDiskDetail}" Foreground="#465C70" FontSize="15" Margin="0,0,0,4" TextWrapping="Wrap"/>
-       <TextBlock Text="{Binding UserDiskHealth}" Foreground="#465C70" FontSize="15" Margin="0,0,0,20" TextWrapping="Wrap"/>
+       <TextBlock Text="{Binding UserDiskDetail}" Foreground="#354A5E" FontSize="16" Margin="0,0,0,4" TextWrapping="Wrap"/>
+       <TextBlock Text="{Binding UserDiskHealth}" Foreground="#354A5E" FontSize="16" Margin="0,0,0,20" TextWrapping="Wrap"/>
        <Border BorderBrush="#E6EDF2" BorderThickness="0,1,0,0" Padding="0,16,0,0">
-        <StackPanel><TextBlock Text="{Binding UserIssueHeading}" FontSize="18" FontWeight="SemiBold" Foreground="#143C87"/><TextBlock Text="{Binding UserIssueDetail}" Foreground="#465C70" FontSize="15" Margin="0,5,0,12"/>
-         <ItemsControl ItemsSource="{Binding UserVisibleIssues}"><ItemsControl.ItemTemplate><DataTemplate><Border BorderBrush="#E6EDF2" BorderThickness="0,0,0,1" Padding="0,9"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="4"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Border Background="{Binding Accent}" CornerRadius="2"/><StackPanel Grid.Column="2"><TextBlock Text="{Binding Title}" FontSize="15" FontWeight="SemiBold" Foreground="#203A50" TextWrapping="Wrap"/><TextBlock Text="{Binding Detail}" FontSize="15" Foreground="#40586B" TextWrapping="Wrap" Margin="0,4,0,0"/></StackPanel></Grid></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+        <StackPanel><TextBlock Text="{Binding UserIssueHeading}" FontSize="20" FontWeight="SemiBold" Foreground="#143C87"/><TextBlock Text="{Binding UserIssueDetail}" Foreground="#354A5E" FontSize="16" Margin="0,5,0,12"/>
+         <ItemsControl ItemsSource="{Binding UserVisibleIssues}"><ItemsControl.ItemTemplate><DataTemplate><Border BorderBrush="#E6EDF2" BorderThickness="0,0,0,1" Padding="0,9"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="4"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Border Background="{Binding Accent}" CornerRadius="2"/><StackPanel Grid.Column="2"><TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold" Foreground="#203A50" TextWrapping="Wrap"/><TextBlock Text="{Binding Detail}" FontSize="16" Foreground="#30475A" TextWrapping="Wrap" Margin="0,4,0,0"/></StackPanel></Grid></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
          <Button x:Name="MoreIssuesButton" Content="{Binding MoreUserIssuesLabel}" Visibility="{Binding HasMoreUserIssues, Converter={StaticResource BoolVisibility}}" Click="ShowAllIssues_Click" HorizontalAlignment="Left" Background="Transparent" BorderThickness="0" Padding="0,8,0,0" Cursor="Hand"/>
-         <TextBlock Text="{Binding UserCoverage}" Foreground="#465C70" FontSize="15" TextWrapping="Wrap" Margin="0,12,0,0"/>
+         <TextBlock Text="{Binding UserCoverage}" Foreground="#354A5E" FontSize="16" TextWrapping="Wrap" Margin="0,12,0,0"/>
          <StackPanel Orientation="Horizontal" Margin="0,12,0,0" Visibility="{Binding HasLowDiskSpace, Converter={StaticResource BoolVisibility}}">
           <Button Click="RunCleanup_Click" IsEnabled="{Binding CanRunCleanup}" Content="Очистить" Padding="9,6" Margin="0,0,8,0" ToolTip="Удалить временные файлы и очистить корзину"/>
           <Button Click="OpenLowSpaceScan_Click" IsEnabled="{Binding CanRun}" Content="{Binding LowSpaceActionLabel}" Padding="9,6" ToolTip="Просканировать выбранный диск в TreeSize Free с административными правами"/>
@@ -82,16 +82,16 @@
     </Grid>
     </ScrollViewer>
    <Border Grid.Row="2" Background="White" BorderBrush="#DDE6EB" BorderThickness="0,1,0,0" Padding="28,14">
-    <StackPanel><TextBlock Text="{Binding UserStatus}" Foreground="#40586B" TextWrapping="Wrap" ToolTip="{Binding UserStatus}" FontSize="15"/><TextBlock Text="{Binding UserLiveSummary}" Foreground="#143C87" TextWrapping="Wrap" FontSize="15" Margin="0,4,0,0"/><ProgressBar Height="3" IsIndeterminate="True" Foreground="#326EFF" Background="#E6EDF2" BorderThickness="0" Margin="0,9,0,0" Visibility="{Binding IsBusy, Converter={StaticResource BoolVisibility}}"/></StackPanel>
+    <StackPanel><TextBlock Text="{Binding UserStatus}" Foreground="#30475A" TextWrapping="Wrap" ToolTip="{Binding UserStatus}" FontSize="16"/><TextBlock Text="{Binding UserLiveSummary}" Foreground="#143C87" TextWrapping="Wrap" FontSize="16" Margin="0,4,0,0"/><ProgressBar Height="3" IsIndeterminate="True" Foreground="#326EFF" Background="#E6EDF2" BorderThickness="0" Margin="0,9,0,0" Visibility="{Binding IsBusy, Converter={StaticResource BoolVisibility}}"/></StackPanel>
    </Border>
   </Grid>
-  <Grid x:Name="AdminShell" Visibility="Collapsed" TextElement.FontSize="15">
+  <Grid x:Name="AdminShell" Visibility="Collapsed" TextElement.FontSize="16">
    <Grid.ColumnDefinitions><ColumnDefinition Width="208"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
    <Border Background="White" BorderBrush="#DDE6EB" BorderThickness="0,0,1,0" Padding="18,22">
     <DockPanel LastChildFill="True">
      <StackPanel DockPanel.Dock="Top">
       <Image Source="Assets/logo.png" Width="142" Height="68" Stretch="Uniform" HorizontalAlignment="Left"/>
-      <TextBlock Text="РЕЖИМ ИНЖЕНЕРА" FontSize="14" Foreground="#465C70" Margin="0,12,0,18"/>
+      <TextBlock Text="РЕЖИМ ИНЖЕНЕРА" FontSize="14" Foreground="#354A5E" Margin="0,12,0,18"/>
       <TextBlock Text="{Binding ComputerName}" FontWeight="SemiBold" Foreground="#143C87" TextWrapping="Wrap" Margin="0,0,0,16"/>
       <Border BorderBrush="#E1EAF0" BorderThickness="0,0,0,1" Margin="0,0,0,14"/>
      </StackPanel>
@@ -123,9 +123,9 @@
       <StackPanel Margin="22,20">
        <Grid Margin="0,0,0,20">
         <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-         <StackPanel><TextBlock Text="ПРОЦЕССОР" Foreground="#465C70" FontSize="14"/><TextBlock Text="{Binding Cpu}" Foreground="{Binding CpuStatusBrush}" FontSize="24" FontWeight="SemiBold" Margin="0,6,0,3"/><TextBlock Text="{Binding CpuDetail}" Style="{StaticResource SecondaryText}"/></StackPanel>
-         <StackPanel Grid.Column="1" Margin="16,0"><TextBlock Text="ОПЕРАТИВНАЯ ПАМЯТЬ" Foreground="#465C70" FontSize="14"/><TextBlock Text="{Binding Memory}" Foreground="{Binding MemoryStatusBrush}" FontSize="24" FontWeight="SemiBold" Margin="0,6,0,3"/><TextBlock Text="{Binding MemoryDetail}" Style="{StaticResource SecondaryText}"/></StackPanel>
-         <StackPanel Grid.Column="2" Margin="16,0,0,0"><TextBlock Text="РАЗДЕЛЫ" Foreground="#465C70" FontSize="14"/><TextBlock Text="{Binding DiskCount}" Foreground="{Binding DiskStatusBrush}" FontSize="24" FontWeight="SemiBold" Margin="0,6,0,3"/><TextBlock Text="{Binding DiskDetail}" Style="{StaticResource SecondaryText}"/></StackPanel>
+         <StackPanel><TextBlock Text="ПРОЦЕССОР" Foreground="#354A5E" FontSize="14"/><TextBlock Text="{Binding Cpu}" Foreground="{Binding CpuStatusBrush}" FontSize="24" FontWeight="SemiBold" Margin="0,6,0,3"/><TextBlock Text="{Binding CpuDetail}" Style="{StaticResource SecondaryText}"/></StackPanel>
+         <StackPanel Grid.Column="1" Margin="16,0"><TextBlock Text="ОПЕРАТИВНАЯ ПАМЯТЬ" Foreground="#354A5E" FontSize="14"/><TextBlock Text="{Binding Memory}" Foreground="{Binding MemoryStatusBrush}" FontSize="24" FontWeight="SemiBold" Margin="0,6,0,3"/><TextBlock Text="{Binding MemoryDetail}" Style="{StaticResource SecondaryText}"/></StackPanel>
+         <StackPanel Grid.Column="2" Margin="16,0,0,0"><TextBlock Text="РАЗДЕЛЫ" Foreground="#354A5E" FontSize="14"/><TextBlock Text="{Binding DiskCount}" Foreground="{Binding DiskStatusBrush}" FontSize="24" FontWeight="SemiBold" Margin="0,6,0,3"/><TextBlock Text="{Binding DiskDetail}" Style="{StaticResource SecondaryText}"/></StackPanel>
        </Grid>
        <Border BorderBrush="#DDE6EB" BorderThickness="0,1,0,0" Padding="0,14,0,0" Margin="0,0,0,16">
         <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -151,24 +151,24 @@
        <ItemsControl ItemsSource="{Binding DiskGroups}"><ItemsControl.ItemTemplate><DataTemplate>
         <Border BorderBrush="#DDE6EB" BorderThickness="1" CornerRadius="4" Padding="14" Margin="0,0,0,12">
          <StackPanel>
-          <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="{Binding Model}" FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock Grid.Column="1" Text="{Binding MediaType}" Foreground="#465C70" Margin="12,0,0,0"/></Grid>
+          <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="{Binding Model}" FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock Grid.Column="1" Text="{Binding MediaType}" Foreground="#354A5E" Margin="12,0,0,0"/></Grid>
            <TextBlock Text="{Binding Health}" Foreground="{Binding HealthBrush}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-          <TextBlock Text="{Binding TransferMode}" Foreground="#465C70" TextWrapping="Wrap" Margin="0,3,0,5"/>
-          <StackPanel Orientation="Horizontal" Visibility="{Binding HasPowerOnHours, Converter={StaticResource BoolVisibility}}" Margin="0,0,0,3"><TextBlock Text="Наработка: " Foreground="#465C70"/><TextBlock Text="{Binding LifetimeLabel}" Foreground="#465C70"/></StackPanel>
+          <TextBlock Text="{Binding TransferMode}" Foreground="#354A5E" TextWrapping="Wrap" Margin="0,3,0,5"/>
+          <StackPanel Orientation="Horizontal" Visibility="{Binding HasPowerOnHours, Converter={StaticResource BoolVisibility}}" Margin="0,0,0,3"><TextBlock Text="Наработка: " Foreground="#354A5E"/><TextBlock Text="{Binding LifetimeLabel}" Foreground="#354A5E"/></StackPanel>
           <TextBlock Text="{Binding LifetimeWarning}" Foreground="#B7791F" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,3"/>
           <ItemsControl ItemsSource="{Binding Partitions}"><ItemsControl.ItemTemplate><DataTemplate>
-           <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="54"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="{Binding Name}" FontWeight="SemiBold"/><StackPanel Grid.Column="1" Orientation="Horizontal"><TextBlock Text="{Binding Capacity}" Foreground="#465C70"/><TextBlock Text=" · " Foreground="#465C70"/><TextBlock Text="{Binding Usage}" Foreground="#36556C"/></StackPanel></Grid>
+           <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="54"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="{Binding Name}" FontWeight="SemiBold"/><StackPanel Grid.Column="1" Orientation="Horizontal"><TextBlock Text="{Binding Capacity}" Foreground="#354A5E"/><TextBlock Text=" · " Foreground="#354A5E"/><TextBlock Text="{Binding Usage}" Foreground="#304E68"/></StackPanel></Grid>
           </DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
          </StackPanel>
         </Border>
        </DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
       <TextBlock Text="Последовательный тест" Style="{StaticResource SectionHeading}" Margin="0,20,0,10"/>
-      <TextBlock Text="{Binding BenchmarkTitle}" Foreground="#4A5B68"/>
+      <TextBlock Text="{Binding BenchmarkTitle}" Foreground="#2D4354"/>
       <Grid Margin="0,10,0,10"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-        <StackPanel><TextBlock Text="ЧТЕНИЕ" Foreground="#465C70" FontSize="14"/><TextBlock Text="{Binding BenchmarkRead}" Foreground="{Binding BenchmarkReadBrush}" FontSize="24" FontWeight="SemiBold" Margin="0,5,0,0"/></StackPanel>
-        <StackPanel Grid.Column="1"><TextBlock Text="ЗАПИСЬ" Foreground="#465C70" FontSize="14"/><TextBlock Text="{Binding BenchmarkWrite}" FontSize="24" FontWeight="SemiBold" Margin="0,5,0,0"/></StackPanel>
+        <StackPanel><TextBlock Text="ЧТЕНИЕ" Foreground="#354A5E" FontSize="14"/><TextBlock Text="{Binding BenchmarkRead}" Foreground="{Binding BenchmarkReadBrush}" FontSize="24" FontWeight="SemiBold" Margin="0,5,0,0"/></StackPanel>
+        <StackPanel Grid.Column="1"><TextBlock Text="ЗАПИСЬ" Foreground="#354A5E" FontSize="14"/><TextBlock Text="{Binding BenchmarkWrite}" FontSize="24" FontWeight="SemiBold" Margin="0,5,0,0"/></StackPanel>
       </Grid>
-      <TextBlock Text="{Binding BenchmarkState}" TextWrapping="Wrap" Foreground="#4A5B68"/>
+      <TextBlock Text="{Binding BenchmarkState}" TextWrapping="Wrap" Foreground="#2D4354"/>
      </StackPanel></ScrollViewer>
     </TabItem>
     <TabItem Header="Сеть">
@@ -190,7 +190,7 @@
     </TabItem>
     <TabItem Header="Процессы">
      <Grid Margin="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-      <TextBlock Text="{Binding ProcessStatus}" Foreground="#4A5B68" Margin="0,0,0,12" TextWrapping="Wrap"/>
+      <TextBlock Text="{Binding ProcessStatus}" Foreground="#2D4354" Margin="0,0,0,12" TextWrapping="Wrap"/>
       <DataGrid Grid.Row="1" ItemsSource="{Binding Processes}" SelectionMode="Single"><DataGrid.Columns>
        <DataGridTextColumn Header="Процесс" Binding="{Binding Name}" Width="130"/><DataGridTextColumn Header="Название" Binding="{Binding Description}" Width="*"/><DataGridTextColumn Header="Издатель" Binding="{Binding Publisher}" Width="220"/><DataGridTextColumn Header="Подпись" Binding="{Binding Signature}" Width="90"/>
       </DataGrid.Columns></DataGrid>
@@ -199,7 +199,7 @@
     <TabItem Header="События">
      <Grid Margin="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="2*"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
       <Grid Margin="0,0,0,12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-       <TextBlock Text="{Binding EventStatus}" Foreground="#4A5B68" VerticalAlignment="Center" TextWrapping="Wrap"/>
+       <TextBlock Text="{Binding EventStatus}" Foreground="#2D4354" VerticalAlignment="Center" TextWrapping="Wrap"/>
        <ComboBox x:Name="EventLevelSelector" Grid.Column="1" Width="205" Height="32" SelectedIndex="0" SelectionChanged="EventLevel_Changed" ToolTip="Какие записи показывать">
         <ComboBoxItem Content="Только критические"/><ComboBoxItem Content="Критические и ошибки"/><ComboBoxItem Content="Все уровни"/>
        </ComboBox>
@@ -218,12 +218,12 @@
         <ComboBox x:Name="SetupModeSelector" Width="220" Height="34" SelectedIndex="0" SelectionChanged="SetupMode_Changed" VerticalContentAlignment="Center">
          <ComboBoxItem Content="Программы ИТ-Сети" Tag="Base"/><ComboBoxItem Content="Приёмка ПК" Tag="Accept"/>
         </ComboBox>
-        <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center"><TextBlock Text="{Binding SetupSummary}" Foreground="#2D4354"/><TextBlock Text="{Binding SetupSource}" Foreground="#465C70" FontSize="14" TextTrimming="CharacterEllipsis" ToolTip="{Binding SetupSource}"/></StackPanel>
+        <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center"><TextBlock Text="{Binding SetupSummary}" Foreground="#2D4354"/><TextBlock Text="{Binding SetupSource}" Foreground="#354A5E" FontSize="14" TextTrimming="CharacterEllipsis" ToolTip="{Binding SetupSource}"/></StackPanel>
         <StackPanel Grid.Column="2" Orientation="Horizontal"><Button Click="ChooseSetupSource_Click" Padding="10,7" ToolTip="Выбрать папку ITSETI-Setup" Margin="0,0,7,0"><TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets"/></Button><Button Click="RefreshSetupAudit_Click" Padding="10,7" ToolTip="Обновить сведения"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets"/></Button></StackPanel>
        </Grid>
        <TextBlock Text="{Binding SetupWarning}" TextWrapping="Wrap" Foreground="#896617" Margin="0,13,0,13"/>
        <Grid Margin="0,0,0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="1.2*"/><ColumnDefinition Width="1.2*"/><ColumnDefinition Width="3*"/><ColumnDefinition Width="1.2*"/></Grid.ColumnDefinitions>
-        <TextBlock Text="Компонент" FontWeight="SemiBold" Foreground="#40515F" Padding="5,7"/><TextBlock Grid.Column="1" Text="На ПК" FontWeight="SemiBold" Foreground="#40515F" Padding="5,7"/><TextBlock Grid.Column="2" Text="Проверка" FontWeight="SemiBold" Foreground="#40515F" Padding="5,7"/><TextBlock Grid.Column="3" Text="Комплект" FontWeight="SemiBold" Foreground="#40515F" Padding="5,7"/>
+        <TextBlock Text="Компонент" FontWeight="SemiBold" Foreground="#2D4354" Padding="5,7"/><TextBlock Grid.Column="1" Text="На ПК" FontWeight="SemiBold" Foreground="#2D4354" Padding="5,7"/><TextBlock Grid.Column="2" Text="Проверка" FontWeight="SemiBold" Foreground="#2D4354" Padding="5,7"/><TextBlock Grid.Column="3" Text="Комплект" FontWeight="SemiBold" Foreground="#2D4354" Padding="5,7"/>
        </Grid>
        <ItemsControl ItemsSource="{Binding SetupComponents}"><ItemsControl.ItemTemplate><DataTemplate>
         <Border BorderBrush="#E6EDF2" BorderThickness="0,1,0,0" Padding="0,2"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="1.2*"/><ColumnDefinition Width="1.2*"/><ColumnDefinition Width="3*"/><ColumnDefinition Width="1.2*"/></Grid.ColumnDefinitions>
@@ -246,13 +246,13 @@
         <ComboBox x:Name="TreeSizeVolumeSelector" ItemsSource="{Binding TreeSizeVolumes}" SelectedItem="{Binding SelectedTreeSizeVolume, UpdateSourceTrigger=PropertyChanged}" Width="100" Height="36" VerticalContentAlignment="Center" ToolTip="Локальный диск для анализа"/>
          <Button x:Name="LaunchTreeSizeButton" Click="LaunchTreeSize_Click" IsEnabled="{Binding CanLaunchTreeSize}" Padding="12,8" Margin="8,0,0,0" Cursor="Hand" Content="Запустить анализ" ToolTip="Запустить TreeSize Free для выбранного диска без запроса UAC"/>
        </StackPanel>
-       <TextBlock Text="{Binding SoftwareActionStatus}" Foreground="#465C70" TextWrapping="Wrap" Margin="0,3,0,0"/>
+       <TextBlock Text="{Binding SoftwareActionStatus}" Foreground="#354A5E" TextWrapping="Wrap" Margin="0,3,0,0"/>
        <TextBlock Text="Обновление приложения" Style="{StaticResource SectionHeading}" Margin="0,8,0,8"/>
        <WrapPanel>
         <Button Click="CheckAppUpdates_Click" IsEnabled="{Binding CanCheckApplicationUpdates}" Padding="12,8" Margin="0,0,8,8" Cursor="Hand" Content="Проверить обновления"/>
         <Button Click="InstallAppUpdate_Click" IsEnabled="{Binding CanInstallApplicationUpdate}" Padding="12,8" Margin="0,0,8,8" Background="#326EFF" Foreground="White" BorderThickness="0" Cursor="Hand" Content="Обновить из GitHub"/>
        </WrapPanel>
-       <TextBlock Text="{Binding ApplicationUpdateStatus}" Foreground="#465C70" TextWrapping="Wrap" Margin="0,3,0,0"/>
+       <TextBlock Text="{Binding ApplicationUpdateStatus}" Foreground="#354A5E" TextWrapping="Wrap" Margin="0,3,0,0"/>
        <TextBlock Text="Проверка версии также выполняется при полной диагностике." Style="{StaticResource SecondaryText}" Margin="0,3,0,0"/>
        </StackPanel>
        <TextBlock x:Name="AcceptanceWarning" Text="Приёмка с изменением прав пока заблокирована: не проверен служебный вход." TextWrapping="Wrap" Foreground="#896617" Margin="0,8,0,0" Visibility="{Binding SetupAcceptanceMode, Converter={StaticResource BoolVisibility}}"/>
@@ -262,7 +262,7 @@
     <TabItem Header="История">
      <Grid Margin="20">
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="2*"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-      <TextBlock Text="{Binding HistoryCount}" Foreground="#4A5B68" Margin="0,0,0,16"/>
+      <TextBlock Text="{Binding HistoryCount}" Foreground="#2D4354" Margin="0,0,0,16"/>
       <DataGrid Grid.Row="1" ItemsSource="{Binding History}" SelectedItem="{Binding Selected}" SelectionMode="Single" RowHeight="NaN" MinRowHeight="62">
        <DataGrid.Columns>
         <DataGridTextColumn Header="Дата проверки" Binding="{Binding DateLabel}" Width="170"/>
@@ -284,7 +284,7 @@
        <Button Grid.Column="1" Click="RefreshDebug_Click" Padding="9,7" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="Обновить этапы и файлы" Cursor="Hand"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets"/></Button>
        <Button Grid.Column="2" Click="OpenDebugDirectory_Click" IsEnabled="{Binding CanOpenDebugDirectory}" Padding="9,7" VerticalAlignment="Center" ToolTip="Открыть папку проверки" Cursor="Hand"><TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets"/></Button>
       </Grid>
-      <StackPanel Grid.Row="1" Margin="0,0,0,12"><TextBlock Text="{Binding DebugStage, StringFormat=Последний этап: {0}}" Foreground="#435568" TextWrapping="Wrap"/><TextBlock Text="{Binding DebugErrorLine}" Foreground="#9B3F3F" TextWrapping="Wrap" Margin="0,4,0,0"/></StackPanel>
+      <StackPanel Grid.Row="1" Margin="0,0,0,12"><TextBlock Text="{Binding DebugStage, StringFormat=Последний этап: {0}}" Foreground="#354A5E" TextWrapping="Wrap"/><TextBlock Text="{Binding DebugErrorLine}" Foreground="#9B3F3F" TextWrapping="Wrap" Margin="0,4,0,0"/></StackPanel>
       <DataGrid Grid.Row="2" ItemsSource="{Binding DebugSteps}" RowHeight="NaN" MinRowHeight="38" SelectionMode="Single">
        <DataGrid.Columns>
         <DataGridTextColumn Header="Этап" Binding="{Binding Name}" Width="195"/>
@@ -302,14 +302,14 @@
      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <StackPanel Margin="22,20">
        <TextBlock Text="Очистка Windows" Style="{StaticResource SectionHeading}"/>
-       <TextBlock Text="Корзина, временные файлы, кэш, эскизы и файлы обновлений при наличии прав." Foreground="#465C70" Margin="0,8,0,12" TextWrapping="Wrap"/>
+       <TextBlock Text="Корзина, временные файлы, кэш, эскизы и файлы обновлений при наличии прав." Foreground="#354A5E" Margin="0,8,0,12" TextWrapping="Wrap"/>
        <Button Click="RunCleanup_Click" IsEnabled="{Binding CanRunCleanup}" Content="Выполнить очистку" Padding="14,9" HorizontalAlignment="Left" Cursor="Hand"/>
        <TextBlock Text="Результат очистки" FontWeight="SemiBold" Margin="0,15,0,5"/>
        <TextBlock Text="{Binding CleanupStatus}" TextWrapping="Wrap" Foreground="#2D4354"/>
        <Button Click="ShowCleanupDetails_Click" Content="Подробности" HorizontalAlignment="Left" Padding="8,5" Margin="0,7,0,0"/>
        <Border BorderBrush="#DDE6EB" BorderThickness="0,1,0,0" Margin="0,24,0,20"/>
        <TextBlock Text="Обновления Windows" Style="{StaticResource SectionHeading}"/>
-       <TextBlock Text="Проверка только показывает доступные обновления. Отключение запрещает автоматическую установку; обновляйте Windows вручную." Foreground="#465C70" Margin="0,8,0,12" TextWrapping="Wrap"/>
+       <TextBlock Text="Проверка только показывает доступные обновления. Отключение запрещает автоматическую установку; обновляйте Windows вручную." Foreground="#354A5E" Margin="0,8,0,12" TextWrapping="Wrap"/>
        <WrapPanel>
         <Button Click="CheckWindowsUpdates_Click" IsEnabled="{Binding CanCheckWindowsUpdates}" Content="Проверить обновления" Padding="14,9" Margin="0,0,8,8"/>
         <Button Click="DisableWindowsUpdates_Click" IsEnabled="{Binding CanChangeWindowsUpdatePolicy}" Content="Отключить автообновления" Padding="14,9" Margin="0,0,8,8"/>
@@ -321,7 +321,7 @@
        <TextBlock Text="{Binding WindowsUpdatePolicyStatus}" TextWrapping="Wrap" Foreground="#2D4354"/>
        <Border BorderBrush="#DDE6EB" BorderThickness="0,1,0,0" Margin="0,24,0,20"/>
        <TextBlock Text="Восстановление Windows" Style="{StaticResource SectionHeading}"/>
-       <TextBlock Text="DISM и SFC запускаются только отдельно. Работают в фоне; автоматической перезагрузки нет." Foreground="#465C70" Margin="0,8,0,12" TextWrapping="Wrap"/>
+       <TextBlock Text="DISM и SFC запускаются только отдельно. Работают в фоне; автоматической перезагрузки нет." Foreground="#354A5E" Margin="0,8,0,12" TextWrapping="Wrap"/>
        <StackPanel Orientation="Horizontal">
         <Button Click="RunRepair_Click" IsEnabled="{Binding CanRunRepair}" Content="Запустить восстановление" Padding="14,9" Cursor="Hand"/>
         <Button Click="RefreshMaintenance_Click" ToolTip="Обновить результаты" Padding="9,7" Margin="8,0,0,0" Cursor="Hand"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets"/></Button>
@@ -336,21 +336,21 @@
     <TabItem Header="Ход проверки" x:Name="ProgressTab">
      <Grid Margin="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
       <TextBlock Text="Полная проверка" Style="{StaticResource SectionHeading}"/>
-      <StackPanel Grid.Row="1" Margin="0,8,0,16"><TextBlock Text="{Binding CheckProgressPhase}" FontSize="15" Foreground="#36556C"/><ProgressBar Height="5" IsIndeterminate="True" Margin="0,10,0,0" Foreground="#326EFF" Background="#E6EDF2" Visibility="{Binding CheckProgressIsRunning, Converter={StaticResource BoolVisibility}}"/></StackPanel>
-      <ListBox x:Name="CheckProgressList" Grid.Row="2" ItemsSource="{Binding CheckProgressEntries}" BorderBrush="#DDE6EB" BorderThickness="1" Background="White" FontSize="15" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Grid.Row="1" Margin="0,8,0,16"><TextBlock Text="{Binding CheckProgressPhase}" FontSize="16" Foreground="#304E68"/><ProgressBar Height="5" IsIndeterminate="True" Margin="0,10,0,0" Foreground="#326EFF" Background="#E6EDF2" Visibility="{Binding CheckProgressIsRunning, Converter={StaticResource BoolVisibility}}"/></StackPanel>
+      <ListBox x:Name="CheckProgressList" Grid.Row="2" ItemsSource="{Binding CheckProgressEntries}" BorderBrush="#DDE6EB" BorderThickness="1" Background="White" FontSize="16" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
        <ListBox.ItemTemplate><DataTemplate><Grid Margin="10,8"><Grid.ColumnDefinitions><ColumnDefinition Width="72"/><ColumnDefinition Width="105"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-        <TextBlock Text="{Binding Time}" Foreground="#465C70"/><TextBlock Grid.Column="1" Text="{Binding Source}" FontWeight="SemiBold" Foreground="#14419E"/><TextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap" Foreground="#203A50"/>
+        <TextBlock Text="{Binding Time}" Foreground="#354A5E"/><TextBlock Grid.Column="1" Text="{Binding Source}" FontWeight="SemiBold" Foreground="#14419E"/><TextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap" Foreground="#203A50"/>
        </Grid></DataTemplate></ListBox.ItemTemplate>
       </ListBox>
      </Grid>
     </TabItem>
    </TabControl>
-   <TextBlock Grid.Row="2" Text="{Binding Status}" TextWrapping="Wrap" Foreground="#43515D" FontSize="14" Margin="0,12,0,0"/>
+   <TextBlock Grid.Row="2" Text="{Binding Status}" TextWrapping="Wrap" Foreground="#354A5E" FontSize="14" Margin="0,12,0,0"/>
   </Grid>
   </Grid>
   <Grid x:Name="AdminUnlock" Visibility="Collapsed" Background="#990F2341">
    <Border Width="360" MaxWidth="360" Padding="28" Background="White" CornerRadius="8" HorizontalAlignment="Center" VerticalAlignment="Center">
-    <StackPanel><TextBlock Text="Режим инженера" FontSize="20" FontWeight="SemiBold" Foreground="#143C87"/><TextBlock Text="Пароль доступа к подробной диагностике" Foreground="#496273" Margin="0,7,0,18" TextWrapping="Wrap"/><PasswordBox x:Name="AdminPassword" Height="38" Padding="10,7" FontSize="15" KeyDown="AdminPassword_KeyDown"/><TextBlock x:Name="AdminError" Foreground="#C64D4D" Margin="0,8,0,0" Visibility="Collapsed"/><StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,22,0,0"><Button Click="CancelAdmin_Click" Content="Отмена" Padding="14,8" Margin="0,0,8,0"/><Button x:Name="UnlockButton" Click="UnlockAdmin_Click" Content="Войти" Padding="18,8" Background="#326EFF" Foreground="White" BorderThickness="0"/></StackPanel></StackPanel>
+    <StackPanel><TextBlock Text="Режим инженера" FontSize="20" FontWeight="SemiBold" Foreground="#143C87"/><TextBlock Text="Пароль доступа к подробной диагностике" Foreground="#354A5E" Margin="0,7,0,18" TextWrapping="Wrap"/><PasswordBox x:Name="AdminPassword" Height="38" Padding="10,7" FontSize="16" KeyDown="AdminPassword_KeyDown"/><TextBlock x:Name="AdminError" Foreground="#C64D4D" Margin="0,8,0,0" Visibility="Collapsed"/><StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,22,0,0"><Button Click="CancelAdmin_Click" Content="Отмена" Padding="14,8" Margin="0,0,8,0"/><Button x:Name="UnlockButton" Click="UnlockAdmin_Click" Content="Войти" Padding="18,8" Background="#326EFF" Foreground="White" BorderThickness="0"/></StackPanel></StackPanel>
    </Border>
   </Grid>
  </Grid>

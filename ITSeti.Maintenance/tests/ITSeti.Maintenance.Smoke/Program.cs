@@ -22,6 +22,7 @@ internal static class Program
         if (args.Contains("--update-client-contract")) return CheckUpdateClientContract().GetAwaiter().GetResult();
         if (args.Contains("--interactive-disk-tools")) return CheckInteractiveDiskTools();
         var fullFixture = Environment.GetEnvironmentVariable("ITSETI_FULL_FIXTURE");
+        AssertCleanupSummaryFormatting();
         var output = Path.GetFullPath(Path.Combine("artifacts", "smoke-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")));
         Directory.CreateDirectory(output);
         var temperatureCachePath = Path.Combine(output, "temperature-cache.json");
@@ -60,9 +61,11 @@ internal static class Program
                     throw new Exception("Live-only status incorrectly reports diagnostic coverage errors");
                 if (window.ViewModel.Selected is null && window.ViewModel.UserIssueHeading != "Проверка ещё не выполнялась")
                     throw new Exception("The initial user screen must not imply that a diagnostic has completed");
+                if (window.ViewModel.UserIssueHeading.Contains("не всё", StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("The initial user screen must not claim that checks are incomplete");
                 var initialHistoryCount = window.ViewModel.History.Count;
                 var firstRun = window.ViewModel.RunQuickAsync();
-                if (window.ViewModel.UserIssueHeading != "Проверка выполняется")
+                if (window.ViewModel.UserIssueHeading != "Проверка выполняется" || window.ViewModel.UserCoverage.Length > 0)
                     throw new Exception("The user screen must show an in-progress diagnostic state");
                 await firstRun;
                 var first = window.ViewModel.Selected ?? throw new Exception("No snapshot produced");
@@ -110,6 +113,19 @@ internal static class Program
                         new DiskBenchmark("C:", "SSD", 300, 300, 2, "Completed", ""), "", [],
                         new ResourceSampleSummary(7, 7, 7, 0, 0, 95, 95, 0, null, null, 0, 0, ""))
                 };
+                var partial = first with
+                {
+                    CpuPercent = 10,
+                    TotalMemoryBytes = 16UL * 1073741824,
+                    AvailableMemoryBytes = 8UL * 1073741824,
+                    Disks = [new DiskSnapshot("C:\\", 100L * 1073741824, 50L * 1073741824)],
+                    LastBootAt = first.StartedAt - TimeSpan.FromDays(1),
+                    Full = new FullDiagnosticDetails("Test CPU", "Test GPU", false, [], [], [], [], 0, 0, false,
+                        new DiskBenchmark("C:", "Unknown", null, null, 2, "Skipped", ""), "", [])
+                };
+                window.ViewModel.Selected = partial;
+                if (window.ViewModel.UserIssueHeading != "Есть ограничения проверки")
+                    throw new Exception("The user screen must describe unavailable checks without claiming no diagnostic ran");
                 window.ViewModel.Selected = stressed;
                 window.UpdateLayout();
                 await Task.Delay(250);
@@ -246,7 +262,7 @@ internal static class Program
                 await Task.Delay(250);
                 Capture(window, Path.Combine(output, "compact.png"));
                 var tabs = Find<TabControl>(window) ?? throw new Exception("Tabs missing");
-                tabs.SelectedIndex = 1;
+                tabs.SelectedIndex = 6;
                 window.UpdateLayout();
                 await Task.Delay(250);
                 Capture(window, Path.Combine(output, "history.png"));
@@ -695,6 +711,18 @@ internal static class Program
     }
 
     private static void Click(Button button) => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+    private static void AssertCleanupSummaryFormatting()
+    {
+        var formatter = typeof(MainViewModel).GetMethod("BriefCleanupStatus",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?? throw new Exception("Cleanup summary formatter is missing");
+        string Format(string value) => (string)(formatter.Invoke(null, [value]) ?? "");
+        if (Format("Пользователь: Завершена; удалено 0 файлов | Система: Код 0; изменение свободного места 0,02 ГБ") != "Очистка выполнена")
+            throw new Exception("Successful cleanup summary includes implementation details");
+        if (Format("Пользователь: Завершена | Система: Файлы обновлений не очищены: доступа нет") != "Очистка профиля выполнена; системная очистка не выполнена")
+            throw new Exception("Partial cleanup summary does not explain the missing system cleanup");
+    }
 
     private static T? Find<T>(DependencyObject parent) where T : DependencyObject
     {

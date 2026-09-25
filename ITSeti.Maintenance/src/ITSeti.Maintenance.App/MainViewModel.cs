@@ -372,7 +372,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public IReadOnlyList<UserIssue> UserVisibleIssues => UserIssues.Take(2).ToArray();
     public bool HasMoreUserIssues => UserIssues.Count > 2;
     public string MoreUserIssuesLabel => $"Все причины ({UserIssues.Count})";
-    public string UserIssueHeading => busy ? "Проверка выполняется" : Selected is null ? "Проверка ещё не выполнялась" : UserIssues.Count > 0 ? "Что может мешать работе" : UserCoverage.Length > 0 ? "Проверено не всё" : "Проблем не обнаружено";
+    public string UserIssueHeading => busy ? "Проверка выполняется" : Selected is null ? "Проверка ещё не выполнялась" : UserIssues.Count > 0 ? "Что может мешать работе" : UserCoverage.Length > 0 ? "Есть ограничения проверки" : "Проблем не обнаружено";
     public string UserIssueDetail => busy ? "Собираем и проверяем показатели компьютера" : Selected is null ? "Результат появится после первой проверки" : UserIssues.Count > 0 ? $"Найдено {UserIssues.Count} возможных причин" : UserCoverage.Length > 0 ? "Доступные показатели без замечаний" : "По измеренным показателям замечаний нет";
     public string UserCoverage
     {
@@ -441,8 +441,29 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public bool IsBackgroundMaintenanceRunning => cleanupRunning || repairRunning;
     public string CleanupStatusDetails => cleanupResult ?? UserCleanupRunner.LatestSummary;
     public string RepairStatusDetails => repairResult ?? SystemRepairRunner.LatestStatus;
-    public string CleanupStatus => BriefMaintenanceStatus(CleanupStatusDetails);
+    public string CleanupStatus => BriefCleanupStatus(CleanupStatusDetails);
     public string StandaloneRepairStatus => BriefMaintenanceStatus(RepairStatusDetails);
+    private static string BriefCleanupStatus(string value)
+    {
+        var firstLine = value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "Нет данных";
+        if (!firstLine.StartsWith("Пользователь:", StringComparison.OrdinalIgnoreCase))
+            return firstLine.StartsWith("Очистка выполняется", StringComparison.OrdinalIgnoreCase) ? "Очистка выполняется" : ShortStatus(firstLine, 140);
+
+        var systemSeparator = firstLine.IndexOf(" | Система:", StringComparison.OrdinalIgnoreCase);
+        if (systemSeparator < 0) systemSeparator = firstLine.IndexOf(" | Администратор:", StringComparison.OrdinalIgnoreCase);
+        if (systemSeparator < 0) return ShortStatus(firstLine, 140);
+
+        var user = firstLine["Пользователь:".Length..systemSeparator].Trim();
+        var system = firstLine[(firstLine.IndexOf(':', systemSeparator) + 1)..].Trim();
+        var userSucceeded = user.StartsWith("Завершена", StringComparison.OrdinalIgnoreCase);
+        var code = Regex.Match(system, @"Код\s+(\d+)", RegexOptions.IgnoreCase);
+        var systemSucceeded = code.Success && code.Groups[1].Value == "0";
+
+        if (userSucceeded && systemSucceeded) return "Очистка выполнена";
+        if (userSucceeded) return "Очистка профиля выполнена; системная очистка не выполнена";
+        if (systemSucceeded) return "Системная очистка выполнена; очистка профиля не выполнена";
+        return "Очистка не выполнена: проверьте подробности";
+    }
     private static string BriefMaintenanceStatus(string value)
     {
         var firstLine = value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "Нет данных";

@@ -1,15 +1,15 @@
 <Application x:Class="ITSeti.Maintenance.App.App" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Application.Resources>
-    <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="Segoe UI"/><Setter Property="FontSize" Value="15"/><Setter Property="Foreground" Value="#252C32"/></Style>
+    <Style TargetType="TextBlock"><Setter Property="FontFamily" Value="Segoe UI"/><Setter Property="FontSize" Value="16"/><Setter Property="Foreground" Value="#203A50"/></Style>
     <Style TargetType="DataGrid">
       <Setter Property="AutoGenerateColumns" Value="False"/><Setter Property="IsReadOnly" Value="True"/><Setter Property="CanUserAddRows" Value="False"/>
       <Setter Property="CanUserDeleteRows" Value="False"/><Setter Property="HeadersVisibility" Value="Column"/><Setter Property="GridLinesVisibility" Value="Horizontal"/>
       <Setter Property="HorizontalGridLinesBrush" Value="#E5E8EB"/><Setter Property="RowHeight" Value="46"/><Setter Property="ColumnHeaderHeight" Value="38"/>
-      <Setter Property="BorderThickness" Value="0"/><Setter Property="Background" Value="White"/><Setter Property="FontSize" Value="15"/>
+      <Setter Property="BorderThickness" Value="0"/><Setter Property="Background" Value="White"/><Setter Property="FontSize" Value="16"/>
       <Setter Property="AlternatingRowBackground" Value="#F7F9FA"/>
     </Style>
-    <Style TargetType="DataGridColumnHeader"><Setter Property="Padding" Value="10,6"/><Setter Property="Background" Value="#EDF1F3"/><Setter Property="Foreground" Value="#3E4F5E"/></Style>
+    <Style TargetType="DataGridColumnHeader"><Setter Property="Padding" Value="10,6"/><Setter Property="Background" Value="#EDF1F3"/><Setter Property="Foreground" Value="#263C52"/></Style>
     <Style TargetType="DataGridCell"><Setter Property="Padding" Value="10,8"/><Setter Property="BorderThickness" Value="0"/></Style>
-    <Style TargetType="TabItem"><Setter Property="Padding" Value="18,9"/><Setter Property="FontSize" Value="15"/></Style>
+    <Style TargetType="TabItem"><Setter Property="Padding" Value="18,9"/><Setter Property="FontSize" Value="16"/></Style>
   </Application.Resources>
 </Application>
