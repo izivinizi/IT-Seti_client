@@ -3,7 +3,7 @@
 [Setup]
 AppId={{CFA7B53D-16A9-4D77-9D82-EE68369AB185}
 AppName=ИТ-Сети Обслуживание ПК
-AppVersion=0.9.0
+AppVersion=0.9.1
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance
 DefaultGroupName=ИТ-Сети
@@ -184,19 +184,24 @@ var
   ResultText: AnsiString;
   MaintenanceResult: String;
   MaintenanceText: AnsiString;
+  InstallStatusPath: String;
 begin
   if CurStep = ssPostInstall then
   begin
-    MaintenanceResult := ExpandConstant('{tmp}\maintenance-install-result.txt');
+    MaintenanceResult := ExpandConstant('{commonappdata}\ITSeti\Maintenance\install-error.txt');
+    DeleteFile(MaintenanceResult);
     if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
       '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\ITSeti-Package\Install-Maintenance.ps1') +
       '" -PackageRoot "' + ExpandConstant('{tmp}\ITSeti-Package') + '" -InstallRoot "' + ExpandConstant('{app}') + '" -PreinstalledApp -ResultFile "' + MaintenanceResult + '"',
       '', SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
     begin
       if not LoadStringFromFile(MaintenanceResult, MaintenanceText) then
-        MaintenanceText := 'Подробное сообщение не получено.';
-      RaiseException('Не удалось зарегистрировать обслуживание ПК. Код: ' + IntToStr(Code) + #13#10 + MaintenanceText);
+        MaintenanceText := 'PowerShell не записал подробности. Проверьте C:\ProgramData\ITSeti\Maintenance\install.log.';
+      RaiseException('Установка приложения не завершена. Код: ' + IntToStr(Code) + #13#10 + MaintenanceText);
     end;
+    InstallStatusPath := ExpandConstant('{commonappdata}\ITSeti\Maintenance\install-status.txt');
+    if LoadStringFromFile(InstallStatusPath, MaintenanceText) and (Pos('WARNING:', String(MaintenanceText)) = 1) then
+      MsgBox('Приложение установлено, но системные задачи недоступны. Обычная проверка остаётся доступна; подробности: C:\ProgramData\ITSeti\Maintenance\install.log', mbInformation, MB_OK);
     if Trim(InventoryEdit.Text) <> '' then
       if not SaveStringToFile(ExpandConstant('{commonappdata}\ITSeti\Maintenance\inventory.txt'),
         Trim(InventoryEdit.Text), False) then

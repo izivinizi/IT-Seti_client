@@ -46,8 +46,12 @@ try {
     if ($arguments.Length -gt 950) { throw 'Installer path is too long for secondary logon.' }
 
     Write-Host "Starting as $env:COMPUTERNAME\$($account.Name). Windows may ask for UAC confirmation."
+    $secondaryLogon=Get-Service -Name 'seclogon' -ErrorAction Stop
+    if($secondaryLogon.StartType -eq 'Disabled'){
+        throw 'Windows Secondary Logon service is disabled by policy; stored credentials cannot launch the installer until an administrator enables it.'
+    }
     $helper = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -Credential $credential `
-        -LoadUserProfile -WorkingDirectory $env:windir `
+        -WorkingDirectory $env:windir `
         -ArgumentList $arguments `
         -Wait -PassThru -ErrorAction Stop
     if ($helper.ExitCode -ne 0) { throw "Installer did not complete (code $($helper.ExitCode))." }
@@ -55,6 +59,11 @@ try {
     exit 0
 }
 catch {
-    Write-Host ('Installation failed: ' + $_.Exception.Message) -ForegroundColor Red
+    $exception=$_.Exception
+    $nativeCode=if($exception -is [ComponentModel.Win32Exception]){$exception.NativeErrorCode}else{$null}
+    $details='Installation failed: '+$exception.GetType().FullName+': '+$exception.Message
+    if($nativeCode -ne $null){$details+=' (Windows error '+$nativeCode+')'}
+    if($_.FullyQualifiedErrorId){$details+=' ['+$_.FullyQualifiedErrorId+']'}
+    Write-Host $details -ForegroundColor Red
     exit 1
 }

@@ -56,6 +56,9 @@ if($counterFunction.Count -ne 1){throw 'Resource counter delta helper was not fo
 if((CounterDelta 20 10) -ne 10 -or $null -ne (CounterDelta 10 20)){throw 'Reset performance counters must be ignored, not treated as 32-bit rollover.'}
 $install=[IO.File]::ReadAllText((Join-Path $Root 'Install-Maintenance.ps1'),[Text.Encoding]::UTF8)
 if($install -notmatch 'Register-ScheduledTask' -or $install -notmatch "-User 'SYSTEM'" -or $install -notmatch 'GRGX;;;BU' -or $install -notmatch 'icacls.exe') {throw 'Installed task privilege boundary is missing.'}
+if(!$install.Contains('install.log') -or !$install.Contains('install-status.txt') -or !$install.Contains('$taskErrors')) {throw 'Installation failures must be logged, and unavailable tasks must not abort app setup.'}
+$bootstrap=[IO.File]::ReadAllText((Join-Path $Root 'Install-ITSeti.ps1'),[Text.Encoding]::UTF8)
+if($bootstrap -match 'LoadUserProfile' -or !$bootstrap.Contains('NativeErrorCode') -or !$bootstrap.Contains("Get-Service -Name 'seclogon'")) {throw 'Credential bootstrap must avoid loading an unnecessary admin profile and report Windows logon errors.'}
 if($install -notmatch 'ITSeti-Maintenance-Quick' -or $install -notmatch 'CurrentVersion\\Run') {throw 'Quick-check startup is missing.'}
 $entry=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCheck.ps1'),[Text.Encoding]::UTF8)
 if(!$install.Contains('ITSeti-Maintenance-QuickFull') -or !$install.Contains('-Quick')) {throw 'Installed quick full-check task is missing.'}
