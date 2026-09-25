@@ -245,7 +245,7 @@
        <TextBlock Text="TreeSize Free" Style="{StaticResource SectionHeading}" Margin="0,8,0,8"/>
        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
         <ComboBox x:Name="TreeSizeVolumeSelector" ItemsSource="{Binding TreeSizeVolumes}" SelectedItem="{Binding SelectedTreeSizeVolume, UpdateSourceTrigger=PropertyChanged}" Width="100" Height="36" VerticalContentAlignment="Center" ToolTip="Локальный диск для анализа"/>
-        <Button x:Name="LaunchTreeSizeButton" Click="LaunchTreeSizeAdmin_Click" IsEnabled="{Binding CanLaunchTreeSize}" Padding="12,8" Margin="8,0,0,0" Cursor="Hand" Content="Открыть от администратора" ToolTip="Запустить анализ диска с запросом повышения прав Windows"/>
+        <Button x:Name="LaunchTreeSizeButton" Click="LaunchTreeSize_Click" IsEnabled="{Binding CanLaunchTreeSize}" Padding="12,8" Margin="8,0,0,0" Cursor="Hand" Content="Открыть без повышения прав" ToolTip="Запустить анализ диска от имени текущего пользователя без запроса UAC"/>
        </StackPanel>
        <TextBlock Text="{Binding SoftwareActionStatus}" Foreground="#587286" TextWrapping="Wrap" Margin="0,3,0,0"/>
        <TextBlock Text="Обновление приложения" Style="{StaticResource SectionHeading}" Margin="0,8,0,8"/>

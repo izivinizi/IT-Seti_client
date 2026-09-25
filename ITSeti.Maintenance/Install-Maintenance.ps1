@@ -86,8 +86,8 @@ if(!(Test-Path -LiteralPath $inventory -PathType Leaf)){[IO.File]::WriteAllText(
 & icacls.exe $inventory /grant '*S-1-5-32-545:M' | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Could not configure inventory number access.'}
 $installStage='Регистрация системных задач'
-$taskErrors=@()
 $taskName='ITSeti-Maintenance-Full'
+$temperatureTaskName='ITSeti-Maintenance-Temperature'
 $worker=Join-Path $install 'Backend\InstalledCheck.ps1'
 try {
     $taskTrigger=New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(20)
@@ -95,38 +95,41 @@ try {
     $autoFullTrigger=New-ScheduledTaskTrigger -Daily -DaysInterval 60 -At ([DateTime]::Today.AddHours(4))
     $taskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
     $updateTaskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 15) -MultipleInstances IgnoreNew
+    $temperatureTaskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew
     $scheduler=New-Object -ComObject Schedule.Service
     $scheduler.Connect()
-    foreach($name in @($taskName,'ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair','ITSeti-Maintenance-Cleanup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates','ITSeti-Maintenance-Update')){
+    foreach($name in @($taskName,'ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair','ITSeti-Maintenance-Cleanup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates','ITSeti-Maintenance-Update',$temperatureTaskName)){
         $installStage="Регистрация задачи $name"
-        $script=if($name -eq 'ITSeti-Maintenance-Repair'){Join-Path $install 'Backend\InstalledRepair.ps1'}elseif($name -eq 'ITSeti-Maintenance-Cleanup'){Join-Path $install 'Backend\InstalledCleanup.ps1'}elseif($name -eq 'ITSeti-Maintenance-Update'){Join-Path $install 'Backend\Update-Application.ps1'}elseif($name -match 'Updates$'){Join-Path $install 'Backend\Set-WindowsAutomaticUpdates.ps1'}else{$worker}
-        $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$script+'"'
-        if($name -eq 'ITSeti-Maintenance-QuickFull'){$arguments+=' -Quick'}
-        if($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$arguments+=' -StartRepair'}
-        if($name -eq 'ITSeti-Maintenance-DisableUpdates'){$arguments+=' -Action Disable'}
-        if($name -eq 'ITSeti-Maintenance-RestoreUpdates'){$arguments+=' -Action Restore'}
+        $isTemperatureTask=$name -eq $temperatureTaskName
+        if($isTemperatureTask){
+            $taskAction=New-ScheduledTaskAction -Execute (Join-Path $install 'ITSeti.Maintenance.exe') -Argument ('--cpu-temperature-probe "'+(Join-Path $data 'cpu-temperature.json')+'"')
+        }else{
+            $script=if($name -eq 'ITSeti-Maintenance-Repair'){Join-Path $install 'Backend\InstalledRepair.ps1'}elseif($name -eq 'ITSeti-Maintenance-Cleanup'){Join-Path $install 'Backend\InstalledCleanup.ps1'}elseif($name -eq 'ITSeti-Maintenance-Update'){Join-Path $install 'Backend\Update-Application.ps1'}elseif($name -match 'Updates$'){Join-Path $install 'Backend\Set-WindowsAutomaticUpdates.ps1'}else{$worker}
+            $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$script+'"'
+            if($name -eq 'ITSeti-Maintenance-QuickFull'){$arguments+=' -Quick'}
+            if($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$arguments+=' -StartRepair'}
+            if($name -eq 'ITSeti-Maintenance-DisableUpdates'){$arguments+=' -Action Disable'}
+            if($name -eq 'ITSeti-Maintenance-RestoreUpdates'){$arguments+=' -Action Restore'}
+            $taskAction=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments
+        }
         $trigger=if($name -eq 'ITSeti-Maintenance-QuickFull'){$quickTrigger}elseif($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$autoFullTrigger}else{$taskTrigger}
-        $taskAction=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments
-        $settings=if($name -eq 'ITSeti-Maintenance-Update'){$updateTaskSettings}else{$taskSettings}
-        $previousTask=Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+        $settings=if($name -eq 'ITSeti-Maintenance-Update'){$updateTaskSettings}elseif($isTemperatureTask){$temperatureTaskSettings}else{$taskSettings}
         try {
             Register-ScheduledTask -TaskName $name -Action $taskAction -Trigger $trigger -Settings $settings -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
             $task=$scheduler.GetFolder('\').GetTask($name)
             $task.SetSecurityDescriptor('D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;BU)',0)
             Write-InstallLog ("Задача $name зарегистрирована.")
         } catch {
-            $taskErrors+=($name+': '+$_.Exception.ToString())
             Write-InstallLog ("Не удалось зарегистрировать задачу $($name): "+$_.Exception.ToString())
-            if(!$previousTask){try {Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue} catch { }}
+            throw "Не удалось зарегистрировать обязательную задачу $name. $($_.Exception.Message)"
         }
     }
 } catch {
-    $taskErrors+=('Планировщик задач: '+$_.Exception.ToString())
-    Write-InstallLog ('Регистрация системных задач недоступна: '+$_.Exception.ToString())
+    Write-InstallLog ('Не удалось зарегистрировать обязательные системные задачи: '+$_.Exception.ToString())
+    throw
 }
 $installStage='Завершение установки'
-$statusText=if($taskErrors.Count -eq 0){'OK: системные задачи зарегистрированы.'}else{'WARNING: приложение установлено, системные задачи недоступны.'+[Environment]::NewLine+($taskErrors -join [Environment]::NewLine)}
-[IO.File]::WriteAllText((Join-Path $data 'install-status.txt'),$statusText,[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $data 'install-status.txt'),'OK: все обязательные системные задачи зарегистрированы.',[Text.UTF8Encoding]::new($false))
 $legacyTask=Get-ScheduledTask -TaskName 'ITSeti-Maintenance-FullRepair' -ErrorAction SilentlyContinue
 if($legacyTask){Unregister-ScheduledTask -TaskName 'ITSeti-Maintenance-FullRepair' -Confirm:$false}
 $runKey='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
@@ -147,4 +150,3 @@ if($PreinstalledApp){
 [IO.File]::WriteAllText((Join-Path $data 'installed.flag'),'ITSeti-Maintenance-Full',[Text.Encoding]::ASCII)
 if(!(Test-Path -LiteralPath (Join-Path $data 'installed.flag') -PathType Leaf)){throw 'Installation marker was not written.'}
 Write-Host "Installed to $install. Users may launch the application without elevation."
-if($taskErrors.Count -gt 0){Write-Host 'WARNING: privileged tasks could not be registered; details are in %ProgramData%\ITSeti\Maintenance\install.log.' -ForegroundColor Yellow}

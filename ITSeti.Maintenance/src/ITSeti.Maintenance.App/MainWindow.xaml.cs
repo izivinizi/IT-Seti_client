@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     private bool exitForUpdate;
     private DispatcherOperation? progressScroll;
     private bool closed;
+    private readonly DispatcherTimer liveMetricsTimer = new() { Interval = TimeSpan.FromSeconds(10) };
     public MainWindow() : this(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ITSeti", "Maintenance", "history.db")) { }
 
     public MainWindow(string databasePath)
@@ -35,10 +36,13 @@ public partial class MainWindow : Window
         };
         ViewModel.CheckProgressEntries.CollectionChanged += (_, _) => QueueProgressScroll();
         CheckProgressList.IsVisibleChanged += (_, _) => QueueProgressScroll();
-        Closed += (_, _) => { closed = true; progressScroll?.Abort(); };
+        liveMetricsTimer.Tick += async (_, _) => await ViewModel.RefreshLiveStatusAsync();
+        Closed += (_, _) => { closed = true; liveMetricsTimer.Stop(); progressScroll?.Abort(); };
         Loaded += async (_, _) =>
         {
             await ViewModel.InitializeAsync();
+            await ViewModel.RefreshLiveStatusAsync();
+            liveMetricsTimer.Start();
             initializationCompleted.TrySetResult();
         };
         Closing += (_, e) =>
@@ -324,18 +328,14 @@ public partial class MainWindow : Window
     }
     private async void LaunchDiskInfo_Click(object sender, RoutedEventArgs e) => await LaunchDiskToolAsync(diskInfo: true);
     private async void LaunchDiskMark_Click(object sender, RoutedEventArgs e) => await LaunchDiskToolAsync(diskInfo: false);
-    private void LaunchTreeSizeAdmin_Click(object sender, RoutedEventArgs e)
+    private void LaunchTreeSize_Click(object sender, RoutedEventArgs e)
     {
         var volume = ViewModel.SelectedTreeSizeVolume;
         if (string.IsNullOrWhiteSpace(volume)) return;
         try
         {
-            TreeSizeLauncher.StartElevatedScan(volume);
-            ViewModel.SetSoftwareActionStatus($"TreeSize Free запущен для {volume} с правами администратора.");
-        }
-        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
-        {
-            ViewModel.SetSoftwareActionStatus("Запрос повышения прав Windows отменён.");
+            TreeSizeLauncher.StartScan(volume);
+            ViewModel.SetSoftwareActionStatus($"TreeSize Free запущен для {volume} без запроса прав администратора.");
         }
         catch (Exception ex)
         {

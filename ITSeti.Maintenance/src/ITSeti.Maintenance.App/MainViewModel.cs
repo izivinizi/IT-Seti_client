@@ -128,6 +128,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private DiagnosticSnapshot? selected;
     private DiagnosticSnapshot? live;
     private bool busy;
+    private int liveRefreshRunning;
+    private DateTimeOffset nextTemperatureProbeUtc;
     private bool cleanupRunning;
     private bool repairRunning;
     private bool windowsUpdateActionRunning;
@@ -257,6 +259,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         }
     }
     private DiagnosticSnapshot? UserSnapshot => live ?? Selected;
+    private DiagnosticSnapshot? UserDiagnosticSnapshot => Selected ?? live;
     private DiskSnapshot? SystemDisk => UserSnapshot?.Disks.FirstOrDefault(d => d.Name.StartsWith(Environment.GetEnvironmentVariable("SystemDrive") ?? "C:", StringComparison.OrdinalIgnoreCase))
         ?? UserSnapshot?.Disks.OrderByDescending(d => d.UsedPercent).FirstOrDefault();
     private DiskSnapshot? LowSpaceDisk => UserSnapshot?.Disks.Where(d => d.TotalBytes > 0 && d.FreeBytes < 15L * 1073741824)
@@ -267,9 +270,9 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public double UserMemoryValue => Math.Clamp(UserSnapshot?.MemoryUsedPercent ?? 0, 0, 100);
     public double UserDiskValue => Math.Clamp(SystemDisk?.UsedPercent ?? 0, 0, 100);
     public string UserCpuLabel => UserSnapshot?.CpuLabel ?? "—";
-    public string UserCpuDetail => UserSnapshot?.Full?.ResourceSampling is { Samples: >= 6, Error: "" } sample
+    public string UserCpuDetail => UserDiagnosticSnapshot?.Full?.ResourceSampling is { Samples: >= 6, Error: "" } sample
         ? $"Средняя за 30 с: {sample.CpuAverage:N0}%"
-        : busy && UserSnapshot?.Full?.ResourceSampling is { Samples: > 0, Error: "" } liveSample
+        : busy && UserDiagnosticSnapshot?.Full?.ResourceSampling is { Samples: > 0, Error: "" } liveSample
             ? $"Среднее по текущим замерам: {liveSample.CpuAverage:N0}%" : "";
     private static readonly string LocalCpuName = ReadLocalCpuName();
     private static string ReadLocalCpuName()
@@ -277,7 +280,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         try { return Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\CentralProcessor\0")?.GetValue("ProcessorNameString")?.ToString()?.Trim() ?? "Модель процессора не определена"; }
         catch { return "Модель процессора не определена"; }
     }
-    public string UserCpuName => UserSnapshot?.Full?.CpuName is { Length: > 0 } name ? name : LocalCpuName;
+    public string UserCpuName => UserDiagnosticSnapshot?.Full?.CpuName is { Length: > 0 } name ? name : LocalCpuName;
     public string UserMemoryLabel => UserSnapshot?.MemoryLabel ?? "—";
     public string UserDiskLabel => SystemDisk?.Usage ?? "—";
     public string UserDiskDetail => SystemDisk is { } disk ? $"{disk.Name} · свободно {disk.FreeBytes / 1073741824.0:N1} ГБ" : "Нет данных о диске";
@@ -285,7 +288,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     {
         get
         {
-            var full = UserSnapshot?.Full;
+            var full = UserDiagnosticSnapshot?.Full;
             string state;
             if (full is not null)
             {
@@ -299,7 +302,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             }
             else
             {
-                var quick = UserSnapshot?.QuickDisks;
+                var quick = UserDiagnosticSnapshot?.QuickDisks;
                 if (quick?.Any(d => System.Text.RegularExpressions.Regex.IsMatch(d.Health, "Warning|Unhealthy|Degraded|Pred Fail|Error|Тревог|Плох", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) == true)
                     state = "Windows сообщает о проблеме с диском";
                 else state = quick is { Count: > 0 } ? "Состояние проверено по данным Windows" : "Состояние диска не проверено";
@@ -313,7 +316,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     {
         get
         {
-            var full = UserSnapshot?.Full;
+            var full = UserDiagnosticSnapshot?.Full;
             if (full is null) return null;
             var drive = SystemDisk?.Name.TrimEnd('\\') ?? (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:");
             return full.SmartDisks.FirstOrDefault(d =>
@@ -322,10 +325,19 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         }
     }
     public string UserCpuNameAndTemperature => $"{UserCpuName} · {FormatCpuTemperature(UserSnapshot?.CpuTemperatureC ?? UserSnapshot?.Full?.CpuTemperatureC)}";
-    public string UserMemoryDetail => UserSnapshot is { TotalMemoryBytes: > 0 } s
-        ? $"Свободно {s.AvailableMemoryBytes / 1073741824.0:N1} ГБ" + (s.Full?.ResourceSampling is { Samples: >= 6, Error: "" } sample ? $" · 30 с: {sample.MemoryAverage:N0}%"
-            : busy && s.Full?.ResourceSampling is { Samples: > 0, Error: "" } liveSample ? $" · среднее: {liveSample.MemoryAverage:N0}%" : "")
-        : "Нет данных о памяти";
+    public string UserMemoryDetail
+    {
+        get
+        {
+            if (UserSnapshot is not { TotalMemoryBytes: > 0 } current) return "Нет данных о памяти";
+            var text = $"Свободно {current.AvailableMemoryBytes / 1073741824.0:N1} ГБ";
+            if (UserDiagnosticSnapshot?.Full?.ResourceSampling is { Samples: >= 6, Error: "" } sample)
+                text += $" · 30 с: {sample.MemoryAverage:N0}%";
+            else if (busy && UserDiagnosticSnapshot?.Full?.ResourceSampling is { Samples: > 0, Error: "" } liveSample)
+                text += $" · среднее: {liveSample.MemoryAverage:N0}%";
+            return text;
+        }
+    }
     public string UserLiveSummary
     {
         get
@@ -339,18 +351,18 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             return string.Join(" · ", parts);
         }
     }
-    public IReadOnlyList<UserIssue> UserIssues => DiagnosticRules.GetUserIssues(UserSnapshot ?? new DiagnosticSnapshot(Guid.Empty, DateTimeOffset.MinValue, "", -1, 0, 0, [], []));
+    public IReadOnlyList<UserIssue> UserIssues => DiagnosticRules.GetUserIssues(UserDiagnosticSnapshot ?? new DiagnosticSnapshot(Guid.Empty, DateTimeOffset.MinValue, "", -1, 0, 0, [], []));
     public IReadOnlyList<UserIssue> UserVisibleIssues => UserIssues.Take(2).ToArray();
     public bool HasMoreUserIssues => UserIssues.Count > 2;
     public string MoreUserIssuesLabel => $"Все причины ({UserIssues.Count})";
-    public string UserIssueHeading => UserSnapshot is null ? "Результаты проверки" : UserIssues.Count > 0 ? "Что может мешать работе" : UserCoverage.Length > 0 ? "Проверено не всё" : "Проблем не обнаружено";
+    public string UserIssueHeading => UserDiagnosticSnapshot is null ? "Результаты проверки" : UserIssues.Count > 0 ? "Что может мешать работе" : UserCoverage.Length > 0 ? "Проверено не всё" : "Проблем не обнаружено";
     public string UserIssueDetail => Selected is null && live is null ? "Проверка ещё не выполнялась" : UserIssues.Count > 0 ? $"Найдено {UserIssues.Count} возможных причин" : UserCoverage.Length > 0 ? "Доступные показатели без замечаний" : "По измеренным показателям замечаний нет";
     public string UserCoverage
     {
         get
         {
-            var full = UserSnapshot?.Full;
-            if (full is null) return UserSnapshot is { QuickDisks: not { Count: > 0 } }
+            var full = UserDiagnosticSnapshot?.Full;
+            if (full is null) return Selected is not null && UserDiagnosticSnapshot is { QuickDisks: not { Count: > 0 } }
                 ? "Не удалось проверить состояние дисков. Подробности доступны инженеру." : "";
             var lines = new List<string>();
             if (full.Benchmark is { State: "Failed" or "Skipped" }) lines.Add("скорость диска");
@@ -976,6 +988,40 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         }
         catch (Exception ex) { status = $"Не удалось прочитать историю: {ex.Message}"; }
         finally { busy = false; Notify(); }
+    }
+
+    public async Task RefreshLiveStatusAsync()
+    {
+        if (busy || cleanupRunning || repairRunning || windowsUpdateActionRunning
+            || Interlocked.Exchange(ref liveRefreshRunning, 1) != 0) return;
+        try
+        {
+            if (DateTimeOffset.UtcNow >= nextTemperatureProbeUtc)
+            {
+                nextTemperatureProbeUtc = DateTimeOffset.UtcNow.AddSeconds(30);
+                await CpuTemperatureCache.RequestProbeAsync();
+            }
+
+            var snapshot = runner is WindowsDiagnosticsRunner windowsRunner
+                ? await windowsRunner.RunLiveAsync()
+                : await runner.RunAsync();
+            var temperature = CpuTemperatureCache.ReadFresh();
+            live = snapshot with
+            {
+                CpuTemperatureC = temperature?.TemperatureC ?? Selected?.CpuTemperatureC ?? Selected?.Full?.CpuTemperatureC,
+                CpuTemperatureStatus = temperature?.Status ?? Selected?.CpuTemperatureStatus ?? snapshot.CpuTemperatureStatus
+            };
+            Notify();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            if (live is null && Selected is null) status = "Не удалось получить текущие показатели: " + ex.Message;
+            Notify();
+        }
+        finally
+        {
+            Interlocked.Exchange(ref liveRefreshRunning, 0);
+        }
     }
 
     public async Task RunQuickAsync()

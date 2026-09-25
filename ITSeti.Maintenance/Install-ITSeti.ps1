@@ -17,7 +17,9 @@ try {
     }
 
     if (!(Test-Path -LiteralPath $credentialFile -PathType Leaf)) {
-        throw "Saved local administrator credentials are missing: $credentialFile"
+        Write-Host 'Saved administrator credentials were not found. Windows will request administrator approval.'
+        $installer = Start-Process -FilePath $setup -Verb RunAs -WorkingDirectory (Split-Path -Parent $setup) -Wait -PassThru -ErrorAction Stop
+        exit $installer.ExitCode
     }
     $xml = New-Object Xml.XmlDocument
     $xml.XmlResolver = $null
@@ -40,21 +42,23 @@ try {
 
     $secret = ConvertTo-SecureString $password -AsPlainText -Force
     $credential = New-Object Management.Automation.PSCredential (($env:COMPUTERNAME + '\' + $account.Name), $secret)
-    $helperScript = Join-Path $PSScriptRoot 'Install-ITSeti-Admin.ps1'
-    if (!(Test-Path -LiteralPath $helperScript -PathType Leaf)) { throw 'Administrator launcher is missing next to this script.' }
-    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $helperScript + '"'
-    if ($arguments.Length -gt 950) { throw 'Installer path is too long for secondary logon.' }
-
-    Write-Host "Starting as $env:COMPUTERNAME\$($account.Name). Windows may ask for UAC confirmation."
+    Write-Host "Starting installer as $env:COMPUTERNAME\$($account.Name). Windows may ask for UAC confirmation."
     $secondaryLogon=Get-Service -Name 'seclogon' -ErrorAction Stop
     if($secondaryLogon.StartType -eq 'Disabled'){
         throw 'Windows Secondary Logon service is disabled by policy; stored credentials cannot launch the installer until an administrator enables it.'
     }
-    $helper = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -Credential $credential `
-        -WorkingDirectory $env:windir `
-        -ArgumentList $arguments `
-        -Wait -PassThru -ErrorAction Stop
-    if ($helper.ExitCode -ne 0) { throw "Installer did not complete (code $($helper.ExitCode))." }
+    try {
+        $installer = Start-Process -FilePath $setup -Credential $credential `
+            -WorkingDirectory (Split-Path -Parent $setup) `
+            -Wait -PassThru -ErrorAction Stop
+    } catch {
+        Write-Host ("Не удалось запустить установщик от сохранённой учётной записи: " + $_.Exception.Message)
+        Write-Host 'Запускаю установщик через стандартное подтверждение UAC Windows.'
+        $installer = Start-Process -FilePath $setup -Verb RunAs `
+            -WorkingDirectory (Split-Path -Parent $setup) `
+            -Wait -PassThru -ErrorAction Stop
+    }
+    if ($installer.ExitCode -ne 0) { throw "Installer did not complete (code $($installer.ExitCode))." }
     Write-Host 'Installation completed.'
     exit 0
 }

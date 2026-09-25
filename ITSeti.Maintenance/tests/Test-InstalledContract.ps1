@@ -56,9 +56,20 @@ if($counterFunction.Count -ne 1){throw 'Resource counter delta helper was not fo
 if((CounterDelta 20 10) -ne 10 -or $null -ne (CounterDelta 10 20)){throw 'Reset performance counters must be ignored, not treated as 32-bit rollover.'}
 $install=[IO.File]::ReadAllText((Join-Path $Root 'Install-Maintenance.ps1'),[Text.Encoding]::UTF8)
 if($install -notmatch 'Register-ScheduledTask' -or $install -notmatch "-User 'SYSTEM'" -or $install -notmatch 'GRGX;;;BU' -or $install -notmatch 'icacls.exe') {throw 'Installed task privilege boundary is missing.'}
-if(!$install.Contains('install.log') -or !$install.Contains('install-status.txt') -or !$install.Contains('$taskErrors')) {throw 'Installation failures must be logged, and unavailable tasks must not abort app setup.'}
+if(!$install.Contains('install.log') -or !$install.Contains('install-status.txt') -or !$install.Contains('throw "Не удалось зарегистрировать обязательную задачу')) {throw 'A failed required SYSTEM task must abort installation with logged details.'}
+if(!$install.Contains("'ITSeti-Maintenance-Temperature'") -or !$install.Contains('cpu-temperature.json') -or !$install.Contains("-Execute (Join-Path `$install 'ITSeti.Maintenance.exe')")) {throw 'The SYSTEM CPU-temperature task is not installed.'}
+$tempSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\CpuTemperatureCache.cs'),[Text.Encoding]::UTF8)
+if(!$tempSource.Contains('DateTimeOffset.UtcNow - capturedAt') -or !$tempSource.Contains('ITSeti-Maintenance-Temperature') -or !$tempSource.Contains('"/Run"')) {throw 'Temperature cache expiry or on-demand SYSTEM probe is missing.'}
+$viewModel=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainViewModel.cs'),[Text.Encoding]::UTF8)
+$window=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml.cs'),[Text.Encoding]::UTF8)
+if(!$viewModel.Contains('RefreshLiveStatusAsync') -or !$viewModel.Contains('RunLiveAsync') -or !$window.Contains('TimeSpan.FromSeconds(10)')) {throw 'Initial and periodic live resource refresh is missing.'}
+$treeSize=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\TreeSizeLauncher.cs'),[Text.Encoding]::UTF8)
+if($treeSize -match '(?i)\b(runas|Verb\s*=\s*"runas")\b' -or !$treeSize.Contains('RunAsInvoker')) {throw 'TreeSize must launch without requesting administrator approval.'}
+$installerDefinition=[IO.File]::ReadAllText((Join-Path $Root 'Installer.iss'),[Text.Encoding]::UTF8)
+$diskTools=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\FullDiagnosticsRunner.cs'),[Text.Encoding]::UTF8)
+if($installerDefinition -notmatch '(?m)^PrivilegesRequired=admin$' -or !$diskTools.Contains('RunAsInvoker')) {throw 'Setup must require admin rights, while interactive disk tools launch without UAC.'}
 $bootstrap=[IO.File]::ReadAllText((Join-Path $Root 'Install-ITSeti.ps1'),[Text.Encoding]::UTF8)
-if($bootstrap -match 'LoadUserProfile' -or !$bootstrap.Contains('NativeErrorCode') -or !$bootstrap.Contains("Get-Service -Name 'seclogon'")) {throw 'Credential bootstrap must avoid loading an unnecessary admin profile and report Windows logon errors.'}
+if($bootstrap -match 'LoadUserProfile' -or !$bootstrap.Contains('NativeErrorCode') -or !$bootstrap.Contains("Get-Service -Name 'seclogon'") -or !$bootstrap.Contains('Start-Process -FilePath $setup -Credential $credential') -or !$bootstrap.Contains('Start-Process -FilePath $setup -Verb RunAs')) {throw 'Credential bootstrap must launch as the selected administrator and fall back to the Windows UAC prompt.'}
 if($install -notmatch 'ITSeti-Maintenance-Quick' -or $install -notmatch 'CurrentVersion\\Run') {throw 'Quick-check startup is missing.'}
 $entry=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCheck.ps1'),[Text.Encoding]::UTF8)
 if(!$install.Contains('ITSeti-Maintenance-QuickFull') -or !$install.Contains('-Quick')) {throw 'Installed quick full-check task is missing.'}

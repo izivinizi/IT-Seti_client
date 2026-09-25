@@ -22,10 +22,12 @@ public partial class App : Application
             if (outputIndex >= e.Args.Length) { Shutdown(2); return; }
             try
             {
-                var reading = await CpuTemperatureReader.ReadAsync();
+                var reading = (await CpuTemperatureReader.ReadAsync()) with { CapturedAtUtc = DateTimeOffset.UtcNow };
                 var output = Path.GetFullPath(e.Args[outputIndex]);
                 Directory.CreateDirectory(Path.GetDirectoryName(output)!);
-                await File.WriteAllTextAsync(output, JsonSerializer.Serialize(reading));
+                var temporary = output + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(reading));
+                File.Move(temporary, output, true);
                 Shutdown();
             }
             catch

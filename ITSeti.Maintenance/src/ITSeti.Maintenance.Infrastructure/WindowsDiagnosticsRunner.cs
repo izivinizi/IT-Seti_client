@@ -10,7 +10,11 @@ namespace ITSeti.Maintenance.Infrastructure;
 
 public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
 {
-    public Task<DiagnosticSnapshot> RunAsync(CancellationToken cancellationToken = default) => Task.Run(async () =>
+    public Task<DiagnosticSnapshot> RunAsync(CancellationToken cancellationToken = default) => CaptureAsync(true, true, cancellationToken);
+
+    public Task<DiagnosticSnapshot> RunLiveAsync(CancellationToken cancellationToken = default) => CaptureAsync(false, false, cancellationToken);
+
+    private static Task<DiagnosticSnapshot> CaptureAsync(bool includeDiskHealth, bool readTemperature, CancellationToken cancellationToken) => Task.Run(async () =>
     {
         var started = DateTimeOffset.Now;
         var before = ReadCpu();
@@ -34,10 +38,11 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             { notes.Add($"{drive.Name}: {ex.Message}"); }
         }
-        var physicalDisks = await ReadDiskHealthAsync(cancellationToken);
-        if (physicalDisks.Count == 0) notes.Add("Состояние накопителей через Windows определить не удалось. Для подробной проверки запустите полную диагностику.");
+        var physicalDisks = includeDiskHealth ? await ReadDiskHealthAsync(cancellationToken) : [];
+        if (includeDiskHealth && physicalDisks.Count == 0) notes.Add("Состояние накопителей через Windows определить не удалось. Для подробной проверки запустите полную диагностику.");
         var windows = ReadWindowsDetails();
-        var temperature = await CpuTemperatureReader.ReadAsync();
+        var temperature = readTemperature ? await CpuTemperatureReader.ReadAsync() : CpuTemperatureCache.ReadFresh()
+            ?? new CpuTemperatureReading(null, "Ожидается опрос системной задачи");
         return new DiagnosticSnapshot(Guid.NewGuid(), started, Environment.MachineName, cpu,
             memory.TotalPhysical, memory.AvailablePhysical, disks, notes, QuickDisks: physicalDisks,
             LastBootAt: DateTimeOffset.Now - TimeSpan.FromMilliseconds(Environment.TickCount64),

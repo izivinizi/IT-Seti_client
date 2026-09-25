@@ -13,7 +13,7 @@ $currentText = (Get-Item -LiteralPath $appAssemblyPath).VersionInfo.FileVersion
 $currentVersion = [Version]($currentText -replace '\.\d+$', '')
 $api = "https://api.github.com/repos/$repository/releases/latest"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$release = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/0.9.1'; 'Accept' = 'application/vnd.github+json' } -TimeoutSec 30
+$release = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/0.9.2'; 'Accept' = 'application/vnd.github+json' } -TimeoutSec 30
 if ($release.draft -or $release.prerelease) { throw 'Latest release is not a stable release.' }
 $tag = [string]$release.tag_name
 if ($tag -notmatch '^v?(\d+\.\d+\.\d+(?:\.\d+)?)$') { throw 'Release tag is not a supported version.' }

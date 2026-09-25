@@ -24,6 +24,13 @@ internal static class Program
         var fullFixture = Environment.GetEnvironmentVariable("ITSETI_FULL_FIXTURE");
         var output = Path.GetFullPath(Path.Combine("artifacts", "smoke-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")));
         Directory.CreateDirectory(output);
+        var temperatureCachePath = Path.Combine(output, "temperature-cache.json");
+        File.WriteAllText(temperatureCachePath, JsonSerializer.Serialize(new CpuTemperatureReading(62, "smoke", DateTimeOffset.UtcNow)));
+        if (CpuTemperatureCache.ReadFresh(temperatureCachePath)?.TemperatureC != 62)
+            throw new Exception("A fresh CPU temperature cache entry was rejected");
+        File.WriteAllText(temperatureCachePath, JsonSerializer.Serialize(new CpuTemperatureReading(62, "smoke", DateTimeOffset.UtcNow.AddMinutes(-3))));
+        if (CpuTemperatureCache.ReadFresh(temperatureCachePath) is not null)
+            throw new Exception("A stale CPU temperature cache entry was accepted");
         var database = Path.Combine(output, "history.db");
         var app = new ITSeti.Maintenance.App.App();
         app.InitializeComponent();
@@ -46,6 +53,11 @@ internal static class Program
                 Capture(support, Path.Combine(output, "support.png"));
                 support.Close();
                 while (!window.ViewModel.CanRun) await Task.Delay(50);
+                while (window.ViewModel.UserMemoryLabel == "—") await Task.Delay(50);
+                if (window.ViewModel.UserDiskDetail == "Нет данных о диске")
+                    throw new Exception("First app launch did not populate live disk capacity");
+                if (window.ViewModel.Selected is null && window.ViewModel.UserCoverage.Length > 0)
+                    throw new Exception("Live-only status incorrectly reports diagnostic coverage errors");
                 var initialHistoryCount = window.ViewModel.History.Count;
                 await window.ViewModel.RunQuickAsync();
                 var first = window.ViewModel.Selected ?? throw new Exception("No snapshot produced");
@@ -98,7 +110,7 @@ internal static class Program
                 await Task.Delay(250);
                 if (!window.ViewModel.HasMoreUserIssues || Find<ScrollViewer>(userShell)!.ExtentHeight <= normalExtent
                     || ((Button)window.FindName("MoreIssuesButton")!).Visibility != Visibility.Visible
-                    || !window.ViewModel.HasLowDiskSpace || window.ViewModel.LowSpaceActionLabel != "Что занимает C:")
+                    || !DiagnosticRules.GetUserIssues(stressed).Any(issue => issue.Title.Contains("мало места")))
                     throw new Exception("User window did not expand for multiple issues");
                 Capture(window, Path.Combine(output, "user-alerts.png"));
                 window.ViewModel.Selected = stressed with { Full = stressed.Full! with
@@ -196,9 +208,8 @@ internal static class Program
                 var treeStart = TreeSizeLauncher.CreateStartInfo(@"C:\Tools\TreeSizeFree.exe", @"C:\");
                 if (treeStart.UseShellExecute || treeStart.Verb.Length > 0 || treeStart.ArgumentList.Single() != @"C:\")
                     throw new Exception("TreeSize launch must scan the selected volume without elevation");
-                var elevatedTreeStart = TreeSizeLauncher.CreateElevatedStartInfo(@"C:\Tools\TreeSizeFree.exe", @"C:\");
-                if (!elevatedTreeStart.UseShellExecute || elevatedTreeStart.Verb != "runas" || elevatedTreeStart.ArgumentList.Single() != @"C:\")
-                    throw new Exception("Engineer TreeSize action must request Windows elevation for the selected volume");
+                if (treeStart.Environment["__COMPAT_LAYER"] != "RunAsInvoker")
+                    throw new Exception("TreeSize must not request elevation or trigger UAC");
                 window.ViewModel.SetSetupMode(false);
                 var detectedSetup = OrganizationSoftwareAudit.FindSource();
                 if (File.Exists(@"F:\Service\ITSETI-Setup\system\Install.ps1")

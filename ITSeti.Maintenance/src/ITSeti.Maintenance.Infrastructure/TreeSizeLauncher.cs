@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Security.Principal;
 using System.Text.RegularExpressions;
 
 namespace ITSeti.Maintenance.Infrastructure;
@@ -8,19 +7,9 @@ public static class TreeSizeLauncher
 {
     public static void StartScan(string volume)
     {
-        if (new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))
-            throw new InvalidOperationException("Для просмотра файлов без прав администратора откройте приложение из обычной учётной записи.");
         ValidateVolume(volume);
         var exe = ResolveExecutable();
         var info = CreateStartInfo(exe, volume);
-        using var process = Process.Start(info) ?? throw new InvalidOperationException("Не удалось открыть TreeSize Free.");
-    }
-
-    public static void StartElevatedScan(string volume)
-    {
-        ValidateVolume(volume);
-        var exe = ResolveExecutable();
-        var info = CreateElevatedStartInfo(exe, volume);
         using var process = Process.Start(info) ?? throw new InvalidOperationException("Не удалось открыть TreeSize Free.");
     }
 
@@ -50,18 +39,7 @@ public static class TreeSizeLauncher
             UseShellExecute = false,
             WorkingDirectory = Path.GetDirectoryName(exe)!
         };
-        info.ArgumentList.Add(volume);
-        return info;
-    }
-
-    internal static ProcessStartInfo CreateElevatedStartInfo(string exe, string volume)
-    {
-        var info = new ProcessStartInfo(exe)
-        {
-            UseShellExecute = true,
-            Verb = "runas",
-            WorkingDirectory = Path.GetDirectoryName(exe)!
-        };
+        info.Environment["__COMPAT_LAYER"] = "RunAsInvoker";
         info.ArgumentList.Add(volume);
         return info;
     }

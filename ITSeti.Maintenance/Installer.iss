@@ -3,7 +3,7 @@
 [Setup]
 AppId={{CFA7B53D-16A9-4D77-9D82-EE68369AB185}
 AppName=ИТ-Сети Обслуживание ПК
-AppVersion=0.9.1
+AppVersion=0.9.2
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance
 DefaultGroupName=ИТ-Сети
@@ -184,7 +184,6 @@ var
   ResultText: AnsiString;
   MaintenanceResult: String;
   MaintenanceText: AnsiString;
-  InstallStatusPath: String;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -199,9 +198,6 @@ begin
         MaintenanceText := 'PowerShell не записал подробности. Проверьте C:\ProgramData\ITSeti\Maintenance\install.log.';
       RaiseException('Установка приложения не завершена. Код: ' + IntToStr(Code) + #13#10 + MaintenanceText);
     end;
-    InstallStatusPath := ExpandConstant('{commonappdata}\ITSeti\Maintenance\install-status.txt');
-    if LoadStringFromFile(InstallStatusPath, MaintenanceText) and (Pos('WARNING:', String(MaintenanceText)) = 1) then
-      MsgBox('Приложение установлено, но системные задачи недоступны. Обычная проверка остаётся доступна; подробности: C:\ProgramData\ITSeti\Maintenance\install.log', mbInformation, MB_OK);
     if Trim(InventoryEdit.Text) <> '' then
       if not SaveStringToFile(ExpandConstant('{commonappdata}\ITSeti\Maintenance\inventory.txt'),
         Trim(InventoryEdit.Text), False) then

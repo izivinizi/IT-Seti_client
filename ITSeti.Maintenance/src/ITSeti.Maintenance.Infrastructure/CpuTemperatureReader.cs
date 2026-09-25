@@ -3,7 +3,7 @@ using Microsoft.Win32;
 
 namespace ITSeti.Maintenance.Infrastructure;
 
-public sealed record CpuTemperatureReading(double? TemperatureC, string Status);
+public sealed record CpuTemperatureReading(double? TemperatureC, string Status, DateTimeOffset? CapturedAtUtc = null);
 
 public static class CpuTemperatureReader
 {
