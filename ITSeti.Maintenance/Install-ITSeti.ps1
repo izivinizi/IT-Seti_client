@@ -1,8 +1,25 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $setup = Join-Path $PSScriptRoot 'ITSeti-Maintenance-Setup.exe'
 $credentialFile = Join-Path (Split-Path -Parent $PSScriptRoot) 'admin-credentials.private.xml'
 if (!(Test-Path -LiteralPath $credentialFile -PathType Leaf)) {
     $credentialFile = Join-Path $PSScriptRoot 'admin-credentials.private.xml'
+}
+
+function Start-AdministratorHelper([string]$PowerShell,[string]$Helper,[pscredential]$Credential) {
+    $start = New-Object Diagnostics.ProcessStartInfo $PowerShell
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.WorkingDirectory = Join-Path $env:WINDIR 'System32'
+    $start.UserName = $Credential.GetNetworkCredential().UserName
+    $start.Domain = $env:COMPUTERNAME
+    $start.Password = $Credential.Password
+    $start.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $Helper + '"'
+    $process = [Diagnostics.Process]::Start($start)
+    if (!$process) { throw 'Windows did not start the administrator helper.' }
+    try {
+        $process.WaitForExit()
+        return [pscustomobject]@{ ExitCode = $process.ExitCode }
+    } finally { $process.Dispose() }
 }
 
 try {
@@ -21,6 +38,7 @@ try {
         $installer = Start-Process -FilePath $setup -Verb RunAs -WorkingDirectory (Split-Path -Parent $setup) -Wait -PassThru -ErrorAction Stop
         exit $installer.ExitCode
     }
+    try {
     $xml = New-Object Xml.XmlDocument
     $xml.XmlResolver = $null
     $xml.Load([IO.Path]::GetFullPath($credentialFile))
@@ -34,7 +52,7 @@ try {
     if (!$administrators) { throw 'Local Administrators group was not found.' }
     $adminSids = @($administrators.GetRelated('Win32_UserAccount') | ForEach-Object { $_.SID })
     $account = $null
-    foreach ($candidate in @($requestedName, 'Admin', 'it-seti') | Select-Object -Unique) {
+    foreach ($candidate in @($requestedName, 'Admin', 'it-seti', 'user') | Select-Object -Unique) {
         $found = @($accounts | Where-Object { $adminSids -contains $_.SID -and $_.Name -ieq $candidate })
         if ($found.Count -eq 1) { $account = $found[0]; break }
     }
@@ -47,10 +65,13 @@ try {
     if($secondaryLogon.StartType -eq 'Disabled'){
         throw 'Windows Secondary Logon service is disabled by policy; stored credentials cannot launch the installer until an administrator enables it.'
     }
-    try {
-        $installer = Start-Process -FilePath $setup -Credential $credential `
-            -WorkingDirectory (Split-Path -Parent $setup) `
-            -Wait -PassThru -ErrorAction Stop
+        # A credential logon has a filtered token. Elevate inside that account.
+        $helper = Join-Path $PSScriptRoot 'Install-ITSeti-Admin.ps1'
+        if (!(Test-Path -LiteralPath $helper -PathType Leaf)) { throw 'Administrator launch helper is missing.' }
+        $powershell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $installer = Start-AdministratorHelper -PowerShell $powershell -Helper $helper -Credential $credential
+        if ($installer.ExitCode -eq 9001) { throw 'Administrator helper could not launch the installer.' }
+        if ($installer.ExitCode -ne 0) { exit $installer.ExitCode }
     } catch {
         Write-Host ("Не удалось запустить установщик от сохранённой учётной записи: " + $_.Exception.Message)
         Write-Host 'Запускаю установщик через стандартное подтверждение UAC Windows.'
@@ -63,7 +84,7 @@ try {
     exit 0
 }
 catch {
-    $exception=$_.Exception
+    $exception=$_.Exception.GetBaseException()
     $nativeCode=if($exception -is [ComponentModel.Win32Exception]){$exception.NativeErrorCode}else{$null}
     $details='Installation failed: '+$exception.GetType().FullName+': '+$exception.Message
     if($nativeCode -ne $null){$details+=' (Windows error '+$nativeCode+')'}

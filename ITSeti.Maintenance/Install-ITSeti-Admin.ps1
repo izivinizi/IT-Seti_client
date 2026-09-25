@@ -6,6 +6,8 @@ try {
     exit $installer.ExitCode
 }
 catch {
-    Write-Host ('Administrator launch failed: ' + $_.Exception.Message) -ForegroundColor Red
-    exit 1
+    $exception = $_.Exception.GetBaseException()
+    Write-Host ('Administrator launch failed: ' + $exception.Message) -ForegroundColor Red
+    if ($exception -is [ComponentModel.Win32Exception] -and $exception.NativeErrorCode -eq 1223) { exit 1223 }
+    exit 9001
 }

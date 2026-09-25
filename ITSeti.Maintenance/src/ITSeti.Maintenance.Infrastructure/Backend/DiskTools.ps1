@@ -1,4 +1,4 @@
-function Find-Tool([string]$Relative) {
+﻿function Find-Tool([string]$Relative) {
     $path = Join-Path $ToolsRoot $Relative
     if(!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "Не найдено: $path. Укажите -ToolsRoot с корнем флешки." }
     return (Resolve-Path -LiteralPath $path).ProviderPath

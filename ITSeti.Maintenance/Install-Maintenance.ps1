@@ -1,4 +1,4 @@
-param([string]$PackageRoot=$PSScriptRoot,[string]$InstallRoot=(Join-Path $env:ProgramFiles 'ITSeti Maintenance'),[switch]$PreinstalledApp,[string]$ResultFile='')
+﻿param([string]$PackageRoot=$PSScriptRoot,[string]$InstallRoot=(Join-Path $env:ProgramFiles 'ITSeti Maintenance'),[switch]$PreinstalledApp,[string]$ResultFile='')
 $ErrorActionPreference='Stop'
 $installStage='Инициализация'
 $data=Join-Path $env:ProgramData 'ITSeti\Maintenance'
@@ -24,6 +24,7 @@ trap {
 $installStage='Проверка прав администратора'
 $admin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if(!$admin){throw 'Run this installer once as administrator.'}
+Remove-Item -LiteralPath (Join-Path $data 'installed.flag'),(Join-Path $data 'install-status.txt') -Force -ErrorAction SilentlyContinue
 $installStage='Проверка файлов приложения и инструментов'
 $sourceApp=if($PreinstalledApp){$InstallRoot}else{Join-Path $PackageRoot 'App'}
 $sourceTools=if($PreinstalledApp){Join-Path $InstallRoot 'Tools'}else{Join-Path $PackageRoot 'Tools'}
@@ -93,9 +94,11 @@ try {
     $taskTrigger=New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(20)
     $quickTrigger=New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(20)
     $autoFullTrigger=New-ScheduledTaskTrigger -Daily -DaysInterval 60 -At ([DateTime]::Today.AddHours(4))
-    $taskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
-    $updateTaskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 15) -MultipleInstances IgnoreNew
+    $taskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 3) -MultipleInstances IgnoreNew
+    $updateTaskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew
     $temperatureTaskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew
+    $taskPrincipal=New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
+    $powershell=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $scheduler=New-Object -ComObject Schedule.Service
     $scheduler.Connect()
     foreach($name in @($taskName,'ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair','ITSeti-Maintenance-Cleanup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates','ITSeti-Maintenance-Update',$temperatureTaskName)){
@@ -110,14 +113,23 @@ try {
             if($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$arguments+=' -StartRepair'}
             if($name -eq 'ITSeti-Maintenance-DisableUpdates'){$arguments+=' -Action Disable'}
             if($name -eq 'ITSeti-Maintenance-RestoreUpdates'){$arguments+=' -Action Restore'}
-            $taskAction=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments
+            if(!(Test-Path -LiteralPath $script -PathType Leaf)){throw "Task script is missing: $script"}
+            $taskAction=New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $install
         }
         $trigger=if($name -eq 'ITSeti-Maintenance-QuickFull'){$quickTrigger}elseif($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$autoFullTrigger}else{$taskTrigger}
         $settings=if($name -eq 'ITSeti-Maintenance-Update'){$updateTaskSettings}elseif($isTemperatureTask){$temperatureTaskSettings}else{$taskSettings}
         try {
-            Register-ScheduledTask -TaskName $name -Action $taskAction -Trigger $trigger -Settings $settings -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+            Register-ScheduledTask -TaskName $name -Action $taskAction -Trigger $trigger -Settings $settings -Principal $taskPrincipal -Force | Out-Null
             $task=$scheduler.GetFolder('\').GetTask($name)
             $task.SetSecurityDescriptor('D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;BU)',0)
+            $registered=Get-ScheduledTask -TaskName $name -ErrorAction Stop
+            $registeredSid=if($registered.Principal.UserId -eq 'S-1-5-18'){'S-1-5-18'}else{([Security.Principal.NTAccount]$registered.Principal.UserId).Translate([Security.Principal.SecurityIdentifier]).Value}
+            if($registeredSid -ne 'S-1-5-18' -or $registered.Principal.LogonType -ne 'ServiceAccount' -or $registered.Principal.RunLevel -ne 'Highest'){
+                throw "Task $name has an invalid execution identity."
+            }
+            if(@($registered.Actions).Count -ne 1 -or $registered.Actions.Execute -ne $taskAction.Execute -or $registered.Actions.Arguments -ne $taskAction.Arguments){
+                throw "Task $name has an invalid command."
+            }
             Write-InstallLog ("Задача $name зарегистрирована.")
         } catch {
             Write-InstallLog ("Не удалось зарегистрировать задачу $($name): "+$_.Exception.ToString())
@@ -129,7 +141,6 @@ try {
     throw
 }
 $installStage='Завершение установки'
-[IO.File]::WriteAllText((Join-Path $data 'install-status.txt'),'OK: все обязательные системные задачи зарегистрированы.',[Text.UTF8Encoding]::new($false))
 $legacyTask=Get-ScheduledTask -TaskName 'ITSeti-Maintenance-FullRepair' -ErrorAction SilentlyContinue
 if($legacyTask){Unregister-ScheduledTask -TaskName 'ITSeti-Maintenance-FullRepair' -Confirm:$false}
 $runKey='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
@@ -148,5 +159,6 @@ if($PreinstalledApp){
     }
 }
 [IO.File]::WriteAllText((Join-Path $data 'installed.flag'),'ITSeti-Maintenance-Full',[Text.Encoding]::ASCII)
+[IO.File]::WriteAllText((Join-Path $data 'install-status.txt'),'OK: все обязательные системные задачи зарегистрированы.',[Text.UTF8Encoding]::new($false))
 if(!(Test-Path -LiteralPath (Join-Path $data 'installed.flag') -PathType Leaf)){throw 'Installation marker was not written.'}
 Write-Host "Installed to $install. Users may launch the application without elevation."

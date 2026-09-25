@@ -1,4 +1,4 @@
-function Test-AllowedPublisher([string]$Publisher) {
+﻿function Test-AllowedPublisher([string]$Publisher) {
     if(!$Publisher){return $false}
     $value=($Publisher -replace '[^\p{L}\p{Nd}]','').ToUpperInvariant()
     foreach($entry in $script:AllowedPublishers) {
@@ -118,7 +118,8 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
     } catch {$s.Notes += ('Оборудование/нагрузка: '+$_.Exception.Message)}
     if($Live){Write-Host ("ПК: $env:COMPUTERNAME"); Show-InitialSection 1}
     if($StartDiskTest) {
-        if($script:Admin){try {Start-DiskToolsBackground} catch {$script:DiskFailure=$_.Exception.Message}}
+        if($script:ForbidInteractiveDiskTools){$script:DiskFailure='Интерактивный CrystalDiskMark отключён в автоматической проверке; используется фоновый DiskSpd.'}
+        elseif($script:Admin){try {Start-DiskToolsBackground} catch {$script:DiskFailure=$_.Exception.Message}}
         else {$script:DiskFailure='Пропущен: для автоматического теста диска нужны права администратора.'}
     }
     try {

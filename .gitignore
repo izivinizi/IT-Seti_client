@@ -2,6 +2,7 @@
 !/.gitignore
 !/README.md
 !/ITSeti.Maintenance/
+!/release.json
 
 # Local credentials and machine-specific state
 /AdminCredentials.ps1

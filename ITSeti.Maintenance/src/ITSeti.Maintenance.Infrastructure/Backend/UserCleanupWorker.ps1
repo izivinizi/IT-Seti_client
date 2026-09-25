@@ -1,4 +1,4 @@
-param([string]$JobRoot,[string]$SignalRoot=$JobRoot,[switch]$TestOnly)
+﻿param([string]$JobRoot,[string]$SignalRoot=$JobRoot,[switch]$TestOnly)
 $ErrorActionPreference='Stop'
 function Status([string]$Text) { $Text | Set-Content -LiteralPath (Join-Path $JobRoot 'user-status.txt') -Encoding UTF8 }
 try {

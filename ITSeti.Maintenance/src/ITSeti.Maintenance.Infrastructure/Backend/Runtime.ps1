@@ -1,4 +1,4 @@
-function Enter-MaintenanceRun([string]$Name='Global\ServiceMaintenance-AutoRun',[switch]$AllowBackgroundMaintenance) {
+﻿function Enter-MaintenanceRun([string]$Name='Global\ServiceMaintenance-AutoRun',[switch]$AllowBackgroundMaintenance) {
     $script:RunMutex=$null
     try {
         $security=New-Object Security.AccessControl.MutexSecurity

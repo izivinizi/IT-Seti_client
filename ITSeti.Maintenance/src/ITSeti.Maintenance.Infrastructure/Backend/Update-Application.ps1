@@ -11,22 +11,24 @@ if (!(Test-Path -LiteralPath $appPath -PathType Leaf) -or !(Test-Path -LiteralPa
 
 $currentText = (Get-Item -LiteralPath $appAssemblyPath).VersionInfo.FileVersion
 $currentVersion = [Version]($currentText -replace '\.\d+$', '')
-$api = "https://api.github.com/repos/$repository/releases/latest"
+$manifestUrl = "https://github.com/$repository/releases/latest/download/release.json"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$release = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/0.9.2'; 'Accept' = 'application/vnd.github+json' } -TimeoutSec 30
-if ($release.draft -or $release.prerelease) { throw 'Latest release is not a stable release.' }
-$tag = [string]$release.tag_name
-if ($tag -notmatch '^v?(\d+\.\d+\.\d+(?:\.\d+)?)$') { throw 'Release tag is not a supported version.' }
-$latestVersion = [Version]$Matches[1]
+$release = Invoke-RestMethod -Uri $manifestUrl -Headers @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/0.9.5'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache' } -TimeoutSec 30
+$versionText = [string]$release.version
+$tag = [string]$release.tag
+if ($versionText -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$' -or $tag -cne "v$versionText") { throw 'Update manifest contains an invalid version or tag.' }
+$latestVersion = [Version]$versionText
 if ($latestVersion -le $currentVersion) { exit 0 }
 
-$asset = @($release.assets | Where-Object { $_.name -ceq $assetName }) | Select-Object -First 1
-if (!$asset -or $asset.state -ne 'uploaded' -or $asset.size -lt 1 -or $asset.size -gt 500000000) { throw 'Release installer is missing or has an invalid size.' }
-if ([string]$asset.digest -notmatch '^sha256:([0-9a-fA-F]{64})$') { throw 'Release does not publish a SHA-256 digest.' }
+$manifestAssetName = [string]$release.assetName
+if ($manifestAssetName -cne $assetName -or [string]$release.size -notmatch '^\d+$') { throw 'Update manifest has no valid installer size.' }
+$assetSize = [long]$release.size
+if ($assetSize -lt 1 -or $assetSize -gt 500000000) { throw 'Update manifest has no valid installer size.' }
+if ([string]$release.digest -notmatch '^sha256:([0-9a-fA-F]{64})$') { throw 'Update manifest has no valid SHA-256 digest.' }
 $expectedHash = $Matches[1].ToUpperInvariant()
-$encodedTag = [Uri]::EscapeDataString($tag)
-$expectedUrl = "https://github.com/$repository/releases/download/$encodedTag/$assetName"
-if ([string]$asset.browser_download_url -cne $expectedUrl) { throw 'Release download URL did not match the trusted repository.' }
+$expectedUrl = "https://github.com/$repository/releases/download/$tag/$assetName"
+$downloadUrl = [string]$release.downloadUrl
+if ($downloadUrl -cne $expectedUrl) { throw 'Release download URL did not match the trusted repository.' }
 
 $deadline = [DateTime]::UtcNow.AddMinutes(4)
 do {
@@ -45,7 +47,8 @@ New-Item -ItemType Directory -Path $updateRoot -Force | Out-Null
 $installer = Join-Path $updateRoot 'ITSeti-Maintenance-Setup.exe'
 $partial = $installer + '.download'
 try {
-    Invoke-WebRequest -Uri $expectedUrl -OutFile $partial -UseBasicParsing -TimeoutSec 600
+    Invoke-WebRequest -Uri $downloadUrl -OutFile $partial -UseBasicParsing -TimeoutSec 600
+    if ((Get-Item -LiteralPath $partial).Length -ne $assetSize) { throw 'Downloaded installer size does not match the release manifest.' }
     $actualHash = (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash
     if ($actualHash -cne $expectedHash) { throw 'Installer SHA-256 does not match the public GitHub release metadata.' }
     Move-Item -LiteralPath $partial -Destination $installer -Force

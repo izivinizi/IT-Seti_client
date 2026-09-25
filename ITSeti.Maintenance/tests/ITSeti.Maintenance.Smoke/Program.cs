@@ -293,23 +293,24 @@ internal static class Program
 
     private static async Task<int> CheckUpdateClientContract()
     {
-        static string Payload(string tag, string digest) => $$"""
-            {"draft":false,"prerelease":false,"tag_name":"{{tag}}","assets":[
-              {"name":"ITSeti-Maintenance-Setup.exe","size":12345,"state":"uploaded","digest":"{{digest}}"}]}
+        static string Payload(string version, string digest, string? url = null) => $$"""
+            {"version":"{{version}}","tag":"v{{version}}","assetName":"ITSeti-Maintenance-Setup.exe",
+             "size":12345,"digest":"{{digest}}","downloadUrl":"{{url ?? $"https://github.com/izivinizi/IT-Seti_client/releases/download/v{version}/ITSeti-Maintenance-Setup.exe"}}"}
             """;
         static HttpClient For(string payload) => new(new FakeReleaseHandler(payload));
 
         const string digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        var newer = new GitHubReleaseClient(For(Payload("v0.9.0", digest)), "https://unit.test/latest");
+        var newer = new GitHubReleaseClient(For(Payload("0.9.5", digest)), "https://unit.test/latest");
         var update = await newer.GetUpdateAsync(new Version(0, 8, 0));
-        if (update?.Version != new Version(0, 9, 0) || update.Digest != digest || update.Size != 12345)
-            throw new Exception("Valid newer GitHub release was not accepted");
+        if (update?.Version != new Version(0, 9, 5) || update.Digest != digest || update.Size != 12345 ||
+            update.DownloadUrl != "https://github.com/izivinizi/IT-Seti_client/releases/download/v0.9.5/ITSeti-Maintenance-Setup.exe")
+            throw new Exception("Valid GitHub release manifest was not accepted");
 
-        var current = new GitHubReleaseClient(For(Payload("v0.9.0", digest)), "https://unit.test/latest");
-        if (await current.GetUpdateAsync(new Version(0, 9, 0, 0)) is not null)
+        var current = new GitHubReleaseClient(For(Payload("0.9.5", digest)), "https://unit.test/latest");
+        if (await current.GetUpdateAsync(new Version(0, 9, 5, 0)) is not null)
             throw new Exception("Current release was incorrectly offered as an update");
 
-        var invalid = new GitHubReleaseClient(For(Payload("v0.9.0", "sha256:invalid")), "https://unit.test/latest");
+        var invalid = new GitHubReleaseClient(For(Payload("0.9.5", "sha256:invalid")), "https://unit.test/latest");
         try
         {
             await invalid.GetUpdateAsync(new Version(0, 8, 0));
@@ -317,7 +318,15 @@ internal static class Program
         }
         catch (InvalidDataException) { }
 
-        Console.WriteLine("PASS: GitHub release version, stable asset and SHA-256 contract.");
+        var untrustedUrl = new GitHubReleaseClient(For(Payload("0.9.5", digest, "https://attacker.invalid/setup.exe")), "https://unit.test/latest");
+        try
+        {
+            await untrustedUrl.GetUpdateAsync(new Version(0, 8, 0));
+            throw new Exception("Installer URL outside the trusted GitHub repository was accepted");
+        }
+        catch (InvalidDataException) { }
+
+        Console.WriteLine("PASS: GitHub release manifest version, trusted URL and SHA-256 contract.");
         return 0;
     }
 

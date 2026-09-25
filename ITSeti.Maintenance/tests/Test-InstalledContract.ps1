@@ -1,4 +1,4 @@
-param([string]$Root)
+﻿param([string]$Root)
 $ErrorActionPreference='Stop'
 $worker=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\HeadlessDiskWorker.ps1'
 $source=[IO.File]::ReadAllText($worker,[Text.Encoding]::UTF8)
@@ -55,7 +55,11 @@ if($counterFunction.Count -ne 1){throw 'Resource counter delta helper was not fo
 . ([scriptblock]::Create($counterFunction[0].Extent.Text))
 if((CounterDelta 20 10) -ne 10 -or $null -ne (CounterDelta 10 20)){throw 'Reset performance counters must be ignored, not treated as 32-bit rollover.'}
 $install=[IO.File]::ReadAllText((Join-Path $Root 'Install-Maintenance.ps1'),[Text.Encoding]::UTF8)
-if($install -notmatch 'Register-ScheduledTask' -or $install -notmatch "-User 'SYSTEM'" -or $install -notmatch 'GRGX;;;BU' -or $install -notmatch 'icacls.exe') {throw 'Installed task privilege boundary is missing.'}
+$uninstall=[IO.File]::ReadAllText((Join-Path $Root 'Uninstall-Maintenance.ps1'),[Text.Encoding]::UTF8)
+foreach($name in @('Full','QuickFull','AutoFullRepair','Repair','Cleanup','DisableUpdates','RestoreUpdates','Update','Temperature')) {
+    if(!$uninstall.Contains("'ITSeti-Maintenance-$name'")){throw "Uninstall leaves behind task $name."}
+}
+if($install -notmatch 'Register-ScheduledTask' -or $install -notmatch "-UserId 'S-1-5-18'" -or $install -notmatch 'LogonType ServiceAccount' -or $install -notmatch 'GRGX;;;BU' -or $install -notmatch 'icacls.exe') {throw 'Installed task privilege boundary is missing.'}
 if(!$install.Contains('install.log') -or !$install.Contains('install-status.txt') -or !$install.Contains('throw "Не удалось зарегистрировать обязательную задачу')) {throw 'A failed required SYSTEM task must abort installation with logged details.'}
 if(!$install.Contains("'ITSeti-Maintenance-Temperature'") -or !$install.Contains('cpu-temperature.json') -or !$install.Contains("-Execute (Join-Path `$install 'ITSeti.Maintenance.exe')")) {throw 'The SYSTEM CPU-temperature task is not installed.'}
 $tempSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\CpuTemperatureCache.cs'),[Text.Encoding]::UTF8)
@@ -69,7 +73,7 @@ $installerDefinition=[IO.File]::ReadAllText((Join-Path $Root 'Installer.iss'),[T
 $diskTools=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\FullDiagnosticsRunner.cs'),[Text.Encoding]::UTF8)
 if($installerDefinition -notmatch '(?m)^PrivilegesRequired=admin$' -or !$diskTools.Contains('RunAsInvoker')) {throw 'Setup must require admin rights, while interactive disk tools launch without UAC.'}
 $bootstrap=[IO.File]::ReadAllText((Join-Path $Root 'Install-ITSeti.ps1'),[Text.Encoding]::UTF8)
-if($bootstrap -match 'LoadUserProfile' -or !$bootstrap.Contains('NativeErrorCode') -or !$bootstrap.Contains("Get-Service -Name 'seclogon'") -or !$bootstrap.Contains('Start-Process -FilePath $setup -Credential $credential') -or !$bootstrap.Contains('Start-Process -FilePath $setup -Verb RunAs')) {throw 'Credential bootstrap must launch as the selected administrator and fall back to the Windows UAC prompt.'}
+if($bootstrap -match 'LoadUserProfile' -or !$bootstrap.Contains('NativeErrorCode') -or !$bootstrap.Contains("Get-Service -Name 'seclogon'") -or !$bootstrap.Contains('Start-AdministratorHelper -PowerShell $powershell') -or !$bootstrap.Contains('[Diagnostics.Process]::Start($start)') -or !$bootstrap.Contains('Start-Process -FilePath $setup -Verb RunAs')) {throw 'Credential bootstrap must launch as the selected administrator and fall back to the Windows UAC prompt.'}
 if($install -notmatch 'ITSeti-Maintenance-Quick' -or $install -notmatch 'CurrentVersion\\Run') {throw 'Quick-check startup is missing.'}
 $entry=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCheck.ps1'),[Text.Encoding]::UTF8)
 if(!$install.Contains('ITSeti-Maintenance-QuickFull') -or !$install.Contains('-Quick')) {throw 'Installed quick full-check task is missing.'}
@@ -87,14 +91,18 @@ $updaterSource=[IO.File]::ReadAllText($updater,[Text.Encoding]::UTF8)
 if(!$install.Contains('ITSeti-Maintenance-Update') -or !$install.Contains('Update-Application.ps1') -or
    !$updaterSource.Contains('S-1-5-18') -or !$updaterSource.Contains('Get-FileHash') -or
    !$updaterSource.Contains('ITSeti-Maintenance-Setup.exe') -or !$updaterSource.Contains('ITSeti.Maintenance.dll') -or
-   !$updaterSource.Contains('Split-Path $PSScriptRoot -Parent') -or $updaterSource -match 'runas') {
+   !$updaterSource.Contains('Split-Path $PSScriptRoot -Parent') -or
+   !$updaterSource.Contains('/releases/latest/download/release.json') -or
+   !$updaterSource.Contains('downloadUrl') -or $updaterSource -match 'api\.github\.com|runas') {
     throw 'Application update task must be fixed, SYSTEM-only, and validate release SHA-256.'
 }
 $releaseClient=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\GitHubReleaseClient.cs') -Raw
 $releaseRunner=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\ApplicationUpdateRunner.cs') -Raw
-if($releaseClient -notmatch 'api\.github\.com/repos/izivinizi/IT-Seti_client/releases/latest' -or
-   $releaseClient -notmatch 'sha256:' -or $releaseRunner -notmatch 'ITSeti-Maintenance-Update' -or $releaseRunner -match '"runas"') {
-    throw 'GitHub release check or no-UAC task launcher is missing.'
+if($releaseClient -notmatch '/releases/latest/download/release\.json' -or
+   $releaseClient -match 'api\.github\.com' -or $releaseClient -notmatch 'sha256:' -or
+   $releaseClient -notmatch 'releases/download/\{tag\}/\{InstallerName\}' -or
+   $releaseRunner -notmatch 'ITSeti-Maintenance-Update' -or $releaseRunner -match '"runas"') {
+    throw 'Rate-limit-free GitHub release manifest or no-UAC task launcher is missing.'
 }
 $updatePolicy=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Set-WindowsAutomaticUpdates.ps1'
 $updateTokens=$null;$updateErrors=$null

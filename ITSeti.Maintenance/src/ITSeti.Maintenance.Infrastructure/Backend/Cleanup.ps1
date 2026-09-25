@@ -1,4 +1,4 @@
-$script:UserCleanupNames = @('Recycle Bin','Temporary Files','Thumbnail Cache','Internet Cache Files','Internet Cache','D3D Shader Cache')
+﻿$script:UserCleanupNames = @('Recycle Bin','Temporary Files','Thumbnail Cache','Internet Cache Files','Internet Cache','D3D Shader Cache')
 $script:CleanupNames = $script:UserCleanupNames + @('Delivery Optimization Files','Update Cleanup','Device Driver Packages')
 function New-CleanupProfile([string[]]$Names) {
     $keys=@(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches' -ErrorAction Stop)

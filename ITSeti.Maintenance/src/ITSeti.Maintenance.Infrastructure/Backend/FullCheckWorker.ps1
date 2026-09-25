@@ -8,6 +8,7 @@ $script:Admin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsI
 $script:CompactOutput=$true
 $script:DiskTestPasses=2
 $script:QuietDiskTools=$true
+$script:ForbidInteractiveDiskTools=$true
 $script:SkipWindowsUpdateChange=[bool]($SkipDiskTests -or $SkipDiskBenchmark)
 $started=[DateTimeOffset]::Now.ToString('o')
 $id=[guid]::NewGuid().ToString()
