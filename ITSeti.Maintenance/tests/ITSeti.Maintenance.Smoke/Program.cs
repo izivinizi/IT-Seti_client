@@ -205,11 +205,15 @@ internal static class Program
                 if (window.ViewModel.SetupComponents.Count != 4) throw new Exception("Organization software audit missing components");
                 window.ViewModel.SetSetupMode(true);
                 if (window.ViewModel.SetupComponents.Count != 6) throw new Exception("Acceptance mode inventory missing");
-                var treeStart = TreeSizeLauncher.CreateStartInfo(@"C:\Tools\TreeSizeFree.exe", @"C:\");
-                if (treeStart.UseShellExecute || treeStart.Verb.Length > 0 || treeStart.ArgumentList.Single() != @"C:\")
-                    throw new Exception("TreeSize launch must scan the selected volume without elevation");
-                if (treeStart.Environment["__COMPAT_LAYER"] != "RunAsInvoker")
-                    throw new Exception("TreeSize must not request elevation or trigger UAC");
+                var treeStart = TreeSizeLauncher.CreateStartInfo(@"C:\Tools\TreeSizeFree.exe", @"C:\", currentProcessElevated: false);
+                if (!treeStart.UseShellExecute || treeStart.Verb != "runas" || treeStart.Arguments != @"C:\")
+                    throw new Exception("TreeSize must request administrator rights when the app is not elevated");
+                var elevatedTreeStart = TreeSizeLauncher.CreateStartInfo(@"C:\Tools\TreeSizeFree.exe", @"C:\", currentProcessElevated: true);
+                if (elevatedTreeStart.UseShellExecute || elevatedTreeStart.ArgumentList.Single() != @"C:\")
+                    throw new Exception("TreeSize must inherit the application's elevated token without another UAC prompt");
+                var diskToolStart = ElevatedProcessLauncher.CreateStartInfo(@"C:\Tools\DiskInfo64.exe", @"C:\Tools", currentProcessElevated: false);
+                if (!diskToolStart.UseShellExecute || diskToolStart.Verb != "runas")
+                    throw new Exception("Disk utilities must request administrator rights from a normal session");
                 window.ViewModel.SetSetupMode(false);
                 var detectedSetup = OrganizationSoftwareAudit.FindSource();
                 if (File.Exists(@"F:\Service\ITSETI-Setup\system\Install.ps1")
@@ -350,8 +354,7 @@ internal static class Program
             {
                 var result = runner.LaunchInteractiveDiskToolAsync(diskInfo).GetAwaiter().GetResult();
                 Console.WriteLine(result);
-                if (!result.Contains("окно открыто") && !result.Contains("окно уже открыто") &&
-                    !(diskInfo && result.Contains("без запроса UAC", StringComparison.Ordinal)))
+                if (!result.Contains("окно открыто") && !result.Contains("окно уже открыто"))
                     throw new Exception(result);
             }
             return 0;
@@ -427,6 +430,16 @@ internal static class Program
             .Any(i => i.Severity == "Critical" && i.Title.Contains("требует проверки")))
             throw new Exception("Windows disk health missing from full user result");
         if (DiagnosticRules.GetFindings(snapshot).Count != 1) throw new Exception("SSD read threshold failed");
+        var process = new ProcessDetails("AmneziaVPN.exe", "AmneziaVPN Service", "Amnezia", "Valid", @"C:\Apps\AmneziaVPN.exe");
+        var withLogAndProcess = snapshot with { Full = full with
+        {
+            Events = [new EventDetails("System", "Service Control Manager", 7024, 2, "now", "verbose event text")],
+            Processes = [process]
+        } };
+        if (withLogAndProcess.HistoryDetailLabel.Contains("Amnezia", StringComparison.OrdinalIgnoreCase)
+            || withLogAndProcess.HistoryDetailLabel.Length > 260
+            || !withLogAndProcess.HistoryDetailLabel.Contains("Service Control Manager #7024", StringComparison.Ordinal))
+            throw new Exception("History must contain concise issue facts, not process lists or verbose event text");
         if (DiskLifetime.ExceedsWarning(60_000) || !DiskLifetime.ExceedsWarning(60_001)
             || !DiskLifetime.Format(60_000).Contains("6 г. 310 дн.", StringComparison.Ordinal))
             throw new Exception("Drive power-on hour threshold or years/days conversion failed");
@@ -564,6 +577,25 @@ internal static class Program
             || !model.SystemDiskSummary.Contains("Samsung SSD", StringComparison.OrdinalIgnoreCase)
             || !model.SystemDiskSummary.Contains("наработ", StringComparison.OrdinalIgnoreCase))
             throw new Exception("Compact system disk summary omitted model or lifetime");
+        var comparisonProcess = new ProcessDetails("AmneziaVPN.exe", "AmneziaVPN Service", "Amnezia", "Valid", @"C:\Apps\AmneziaVPN.exe");
+        var previous = snapshot with { StartedAt = DateTimeOffset.Now.AddMinutes(-2), Full = full with
+        {
+            Processes = [new ProcessDetails("explorer.exe", "Windows Explorer", "Microsoft", "Valid", @"C:\Windows\explorer.exe")],
+            Benchmark = full.Benchmark with { Read = 245, Write = 180 }
+        } };
+        var current = snapshot with { StartedAt = DateTimeOffset.Now, Full = full with
+        {
+            Processes = [previous.Full!.Processes[0], comparisonProcess],
+            Events = [new EventDetails("System", "Service Control Manager", 7024, 2, "now", "message")],
+            Benchmark = full.Benchmark with { Read = 250, Write = 185 }
+        } };
+        model.History.Add(previous);
+        model.History.Add(current);
+        model.Selected = current;
+        var comparisonLines = model.Comparison.Split([Environment.NewLine], StringSplitOptions.RemoveEmptyEntries);
+        if (comparisonLines[^1] != "Новые процессы вне списка: AmneziaVPN Service (Amnezia)"
+            || model.Comparison.Contains("Эти цифры меняются", StringComparison.Ordinal))
+            throw new Exception("Comparison must be concise and place newly observed processes last");
         if (!((TabControl)System.Windows.Application.Current.Windows.OfType<MainWindow>().First().FindName("AdminTabs")!).Items
                 .OfType<TabItem>().Any(item => Equals(item.Header, "Сеть")))
             throw new Exception("Network tab is missing");

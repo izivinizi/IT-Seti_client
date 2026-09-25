@@ -51,23 +51,23 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         if (exe is null) return $"{name}: совместимый файл запуска не найден в {root}";
         try
         {
-            if (HasVisibleWindow(exe)) return $"{name}: окно уже открыто";
-            var start = new ProcessStartInfo(exe)
-            {
-                UseShellExecute = false,
-                WorkingDirectory = Path.GetDirectoryName(exe)!
-            };
-            start.Environment["__COMPAT_LAYER"] = "RunAsInvoker";
-            using var launched = Process.Start(start) ?? throw new InvalidOperationException("Windows не запустила программу");
+            if (HasVisibleWindow(exe)) return $"{name}: окно уже открыто. Закройте его перед повторным запуском от администратора.";
+            var start = ElevatedProcessLauncher.CreateStartInfo(exe, Path.GetDirectoryName(exe)!);
+            using var launched = await Task.Run(() => Process.Start(start))
+                ?? throw new InvalidOperationException("Windows не запустила программу");
             for (var attempt = 0; attempt < 20; attempt++)
             {
                 if (HasVisibleWindow(exe))
-                    return $"{name}: окно открыто";
+                    return $"{name}: окно открыто с правами администратора";
                 if (launched.HasExited)
-                    return $"{name}: утилита закрылась без окна (код {launched.ExitCode}); запуск без повышения прав, без запроса UAC. Эта версия программы требует административный запуск.";
+                    return $"{name}: программа завершилась без окна (код {launched.ExitCode}).";
                 await Task.Delay(250);
             }
-            return $"{name}: процесс запущен, но окно не появилось за 5 секунд; запуск без повышения прав, без запроса UAC";
+            return $"{name}: процесс запущен с правами администратора, окно не появилось за 5 секунд.";
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            return $"{name}: запуск от администратора отменён в окне контроля учётных записей.";
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or UnauthorizedAccessException)
         {

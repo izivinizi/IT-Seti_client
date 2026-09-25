@@ -740,14 +740,14 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             if (Selected is null) return "Нет данных для сравнения";
             var previous = History.FirstOrDefault(h => h.StartedAt < Selected.StartedAt && h.ComputerName == Selected.ComputerName && h.KindLabel == Selected.KindLabel);
             if (previous is null) return "Предыдущей проверки этого типа пока нет";
-            var lines = new List<string> { $"Предыдущая: {previous.DateLabel}", $"Загрузка процессора: {previous.CpuLabel} → {Selected.CpuLabel}; занято памяти: {previous.MemoryLabel} → {Selected.MemoryLabel}. Эти цифры меняются во время работы компьютера." };
+            var lines = new List<string> { $"Предыдущая: {previous.DateLabel}", $"CPU: {previous.CpuLabel} → {Selected.CpuLabel}; ОЗУ: {previous.MemoryLabel} → {Selected.MemoryLabel}" };
             foreach (var disk in Selected.Disks)
             {
                 var match = previous.Disks.Where(d => d.TotalBytes == disk.TotalBytes &&
                     (disk.VolumeId.Length > 0
                         ? string.Equals(d.VolumeId, disk.VolumeId, StringComparison.OrdinalIgnoreCase)
                         : string.Equals(d.Name.TrimEnd('\\'), disk.Name.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))).ToList();
-                if (match.Count == 1) lines.Add($"{disk.Name} свободно: {match[0].FreeBytes / 1073741824.0:N1} → {disk.FreeBytes / 1073741824.0:N1} ГБ. Изменение между проверками, не результат очистки.");
+                if (match.Count == 1) lines.Add($"{disk.Name} свободно: {match[0].FreeBytes / 1073741824.0:N1} → {disk.FreeBytes / 1073741824.0:N1} ГБ");
             }
             if (previous.Full is { } old && Selected.Full is { } current)
             {
@@ -760,16 +760,9 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                 var newErrors = current.Events.Where(item => item.Level <= 2 && !oldKeys.Contains(EventIdentity(item)))
                     .GroupBy(item => (item.Provider, item.Id, item.Level)).Select(group => group.First()).ToArray();
                 lines.Add(newErrors.Length == 0
-                    ? "Новых критических ошибок Windows в выборке нет."
-                    : "Новые ошибки Windows: " + string.Join(", ", newErrors.Take(5).Select(item => $"{item.Provider} #{item.Id} ({item.LevelLabel.ToLowerInvariant()})"))
+                    ? "Новые ошибки Windows: нет"
+                    : "Новые ошибки Windows: " + string.Join(", ", newErrors.Take(5).Select(item => $"{item.Provider} #{item.Id}"))
                         + (newErrors.Length > 5 ? $" и ещё {newErrors.Length - 5}" : ""));
-
-                var oldProcesses = old.Processes.Select(item => item.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                var newProcesses = current.Processes.Where(item => !oldProcesses.Contains(item.Name)).ToArray();
-                if (newProcesses.Length > 0)
-                    lines.Add("Новые процессы вне списка: " + string.Join(", ", newProcesses.Take(5).Select(DescribeProcess))
-                        + (newProcesses.Length > 5 ? $" и ещё {newProcesses.Length - 5}" : "") + ". Это не означает, что программы вредоносные.");
-                else lines.Add("Новых процессов вне списка нет.");
 
                 var oldRead = old.Benchmark;
                 var currentRead = current.Benchmark;
@@ -781,6 +774,13 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                     if (oldRead.Write.HasValue && currentRead.Write.HasValue)
                         lines.Add($"Скорость записи: {oldRead.Write:N0} → {currentRead.Write:N0} МБ/с.");
                 }
+
+                var oldProcesses = old.Processes.Select(item => item.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var newProcesses = current.Processes.Where(item => !oldProcesses.Contains(item.Name)).ToArray();
+                lines.Add(newProcesses.Length == 0
+                    ? "Новые процессы вне списка: нет"
+                    : "Новые процессы вне списка: " + string.Join(", ", newProcesses.Take(5).Select(DescribeProcess))
+                        + (newProcesses.Length > 5 ? $" и ещё {newProcesses.Length - 5}" : ""));
             }
             return string.Join(Environment.NewLine, lines);
         }
@@ -801,11 +801,13 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public Task RunUserFullAsync() => RunFullCoreAsync(true);
     public Task RunScheduledUserQuickAsync() => RunFullCoreAsync(true, true);
 
-    public void OpenLowSpaceScan()
+    public async Task OpenLowSpaceScanAsync()
     {
         if (busy || LowSpaceDisk is not { } disk) return;
-        TreeSizeLauncher.StartScan(disk.Name);
-        userStatusOverride = $"Открыт анализ диска {disk.Name.TrimEnd('\\')} без прав администратора.";
+        userStatusOverride = "Запуск TreeSize Free с правами администратора…";
+        Notify();
+        await TreeSizeLauncher.StartScanAsync(disk.Name);
+        userStatusOverride = $"TreeSize Free запущен от администратора для диска {disk.Name.TrimEnd('\\')}.";
         Notify();
     }
 

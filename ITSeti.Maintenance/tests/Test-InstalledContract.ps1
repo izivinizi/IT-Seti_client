@@ -68,10 +68,16 @@ $viewModel=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\M
 $window=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml.cs'),[Text.Encoding]::UTF8)
 if(!$viewModel.Contains('RefreshLiveStatusAsync') -or !$viewModel.Contains('RunLiveAsync') -or !$window.Contains('TimeSpan.FromSeconds(10)')) {throw 'Initial and periodic live resource refresh is missing.'}
 $treeSize=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\TreeSizeLauncher.cs'),[Text.Encoding]::UTF8)
-if($treeSize -match '(?i)\b(runas|Verb\s*=\s*"runas")\b' -or !$treeSize.Contains('RunAsInvoker')) {throw 'TreeSize must launch without requesting administrator approval.'}
-$installerDefinition=[IO.File]::ReadAllText((Join-Path $Root 'Installer.iss'),[Text.Encoding]::UTF8)
 $diskTools=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\FullDiagnosticsRunner.cs'),[Text.Encoding]::UTF8)
-if($installerDefinition -notmatch '(?m)^PrivilegesRequired=admin$' -or !$diskTools.Contains('RunAsInvoker')) {throw 'Setup must require admin rights, while interactive disk tools launch without UAC.'}
+$elevatedLauncher=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\ElevatedProcessLauncher.cs'),[Text.Encoding]::UTF8)
+if(!$treeSize.Contains('ElevatedProcessLauncher.CreateStartInfo') -or $treeSize -match 'RunAsInvoker' -or
+   !$diskTools.Contains('ElevatedProcessLauncher.CreateStartInfo') -or $diskTools -match 'RunAsInvoker' -or
+   !$elevatedLauncher.Contains('UseShellExecute = !elevated') -or !$elevatedLauncher.Contains('start.Verb = "runas"') -or
+   !$elevatedLauncher.Contains('IsInRole(WindowsBuiltInRole.Administrator)')) {
+    throw 'Interactive utilities must inherit an existing elevated token or request standard UAC elevation.'
+}
+$installerDefinition=[IO.File]::ReadAllText((Join-Path $Root 'Installer.iss'),[Text.Encoding]::UTF8)
+if($installerDefinition -notmatch '(?m)^PrivilegesRequired=admin$') {throw 'Setup must require administrator rights.'}
 $bootstrap=[IO.File]::ReadAllText((Join-Path $Root 'Install-ITSeti.ps1'),[Text.Encoding]::UTF8)
 if($bootstrap -match 'LoadUserProfile' -or !$bootstrap.Contains('NativeErrorCode') -or !$bootstrap.Contains("Get-Service -Name 'seclogon'") -or !$bootstrap.Contains('Start-AdministratorHelper -PowerShell $powershell') -or !$bootstrap.Contains('[Diagnostics.Process]::Start($start)') -or !$bootstrap.Contains('Start-Process -FilePath $setup -Verb RunAs')) {throw 'Credential bootstrap must launch as the selected administrator and fall back to the Windows UAC prompt.'}
 if($install -notmatch 'ITSeti-Maintenance-Quick' -or $install -notmatch 'CurrentVersion\\Run') {throw 'Quick-check startup is missing.'}

@@ -24,7 +24,7 @@ public sealed class GitHubReleaseClient
     private static HttpClient CreateClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ITSeti-Maintenance/0.9.5");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("ITSeti-Maintenance/0.9.6");
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         return client;
     }

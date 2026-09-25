@@ -37,24 +37,28 @@ public sealed record DiagnosticSnapshot(
     {
         get
         {
-            var details = DiagnosticRules.GetFindings(this).Take(3).ToList();
+            var findings = DiagnosticRules.GetFindings(this)
+                .Select(CondenseHistoryFact)
+                .Distinct(StringComparer.CurrentCultureIgnoreCase)
+                .ToArray();
+            var details = findings.Take(2).ToList();
             if (Full is { } full)
             {
                 details.AddRange(full.Events.Where(item => item.Level <= 2).OrderBy(item => item.Level)
-                    .Take(2).Select(item => $"{item.LevelLabel}: {item.Provider} #{item.Id}"));
-                details.AddRange(full.Processes.Take(2).Select(process =>
-                {
-                    var name = !string.IsNullOrWhiteSpace(process.Description)
-                        ? process.Description
-                        : Path.GetFileNameWithoutExtension(process.Name);
-                    return string.IsNullOrWhiteSpace(process.Publisher) ? $"Процесс: {name}" : $"Процесс: {name} · {process.Publisher}";
-                }));
+                    .Take(Math.Max(0, 3 - details.Count)).Select(item => $"Ошибка Windows: {item.Provider} #{item.Id}"));
             }
+            if (details.Count < 3) details.AddRange(findings.Skip(details.Count).Take(3 - details.Count));
 
             if (details.Count == 0) return ResultLabel;
             var result = string.Join(" · ", details.Distinct(StringComparer.CurrentCultureIgnoreCase));
-            return result.Length <= 360 ? result : result[..357] + "...";
+            return result.Length <= 260 ? result : result[..257] + "...";
         }
+    }
+
+    private static string CondenseHistoryFact(string finding)
+    {
+        var sentenceEnd = finding.IndexOf(". ", StringComparison.Ordinal);
+        return sentenceEnd < 0 ? finding : finding[..(sentenceEnd + 1)];
     }
 }
 

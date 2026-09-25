@@ -128,9 +128,9 @@ public partial class MainWindow : Window
         try { ClipboardHelper.Copy(value); }
         catch (Exception ex) { MessageBox.Show(this, $"Не удалось скопировать {label}: {ex.Message}", "Копирование", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
-    private void OpenLowSpaceScan_Click(object sender, RoutedEventArgs e)
+    private async void OpenLowSpaceScan_Click(object sender, RoutedEventArgs e)
     {
-        try { ViewModel.OpenLowSpaceScan(); }
+        try { await ViewModel.OpenLowSpaceScanAsync(); }
         catch (Exception ex) { MessageBox.Show(this, ex.Message, "Не удалось открыть анализ диска", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
     private void ShowAllIssues_Click(object sender, RoutedEventArgs e)
@@ -328,14 +328,15 @@ public partial class MainWindow : Window
     }
     private async void LaunchDiskInfo_Click(object sender, RoutedEventArgs e) => await LaunchDiskToolAsync(diskInfo: true);
     private async void LaunchDiskMark_Click(object sender, RoutedEventArgs e) => await LaunchDiskToolAsync(diskInfo: false);
-    private void LaunchTreeSize_Click(object sender, RoutedEventArgs e)
+    private async void LaunchTreeSize_Click(object sender, RoutedEventArgs e)
     {
         var volume = ViewModel.SelectedTreeSizeVolume;
         if (string.IsNullOrWhiteSpace(volume)) return;
         try
         {
-            TreeSizeLauncher.StartScan(volume);
-            ViewModel.SetSoftwareActionStatus($"TreeSize Free запущен для {volume} без запроса прав администратора.");
+            ViewModel.SetSoftwareActionStatus("Запуск TreeSize Free с правами администратора…");
+            await TreeSizeLauncher.StartScanAsync(volume);
+            ViewModel.SetSoftwareActionStatus($"TreeSize Free запущен от администратора для {volume}.");
         }
         catch (Exception ex)
         {

@@ -5,12 +5,13 @@ namespace ITSeti.Maintenance.Infrastructure;
 
 public static class TreeSizeLauncher
 {
-    public static void StartScan(string volume)
+    public static async Task StartScanAsync(string volume)
     {
         ValidateVolume(volume);
         var exe = ResolveExecutable();
         var info = CreateStartInfo(exe, volume);
-        using var process = Process.Start(info) ?? throw new InvalidOperationException("Не удалось открыть TreeSize Free.");
+        using var process = await Task.Run(() => Process.Start(info))
+            ?? throw new InvalidOperationException("Не удалось открыть TreeSize Free.");
     }
 
     private static void ValidateVolume(string volume)
@@ -32,15 +33,6 @@ public static class TreeSizeLauncher
         return exe;
     }
 
-    internal static ProcessStartInfo CreateStartInfo(string exe, string volume)
-    {
-        var info = new ProcessStartInfo(exe)
-        {
-            UseShellExecute = false,
-            WorkingDirectory = Path.GetDirectoryName(exe)!
-        };
-        info.Environment["__COMPAT_LAYER"] = "RunAsInvoker";
-        info.ArgumentList.Add(volume);
-        return info;
-    }
+    internal static ProcessStartInfo CreateStartInfo(string exe, string volume, bool? currentProcessElevated = null) =>
+        ElevatedProcessLauncher.CreateStartInfo(exe, Path.GetDirectoryName(exe)!, volume, currentProcessElevated);
 }
