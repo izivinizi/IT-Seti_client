@@ -37,7 +37,7 @@ public partial class MainWindow : Window
         historyDatabasePath = Path.GetFullPath(databasePath);
         this.engineerOnly = engineerOnly;
         AdminAccount.Text = Environment.MachineName + "\\" + Environment.UserName;
-        MaxHeight = Math.Max(MinHeight, SystemParameters.WorkArea.Height - 24);
+        if (!engineerOnly) ConfigureUserShellSize();
         ViewModel = new MainViewModel(new WindowsDiagnosticsRunner(), new SqliteHistoryStore(historyDatabasePath), fullRunner);
         ViewModel.SetWindowsDefenderAccess(EngineerWindowLauncher.IsAdministrator());
         DataContext = ViewModel;
@@ -213,9 +213,14 @@ public partial class MainWindow : Window
         var candidates = await Task.Run(WindowsAdminAccountDiscovery.FindCandidates);
         if (AdminUnlock.Visibility != Visibility.Visible) return;
 
-        var keepCurrent = !string.Equals(AdminAccount.Text, defaultAccount, StringComparison.OrdinalIgnoreCase);
+        var typedAccount = AdminAccount.Text;
+        var keepCurrent = !string.Equals(typedAccount, defaultAccount, StringComparison.OrdinalIgnoreCase);
         AdminAccount.ItemsSource = candidates;
-        if (keepCurrent) return;
+        if (keepCurrent)
+        {
+            AdminAccount.Text = typedAccount;
+            return;
+        }
 
         var currentAccount = candidates.FirstOrDefault(account => account.EndsWith("\\" + Environment.UserName, StringComparison.OrdinalIgnoreCase));
         var selected = currentAccount
@@ -251,9 +256,7 @@ public partial class MainWindow : Window
                     account, password, historyDatabasePath));
                 if (launch.Process is null)
                 {
-                    AdminError.Text = launch.ErrorCode == 1326
-                        ? "Windows не приняла учётную запись или пароль. Введите пароль Windows, не PIN-код."
-                        : $"Не удалось войти в Windows (код {launch.ErrorCode}). Проверьте имя учётной записи и пароль.";
+                    AdminError.Text = FormatCredentialError(launch.ErrorCode);
                     AdminError.Visibility = Visibility.Visible;
                     AdminPassword.Focus();
                     return;
@@ -262,9 +265,7 @@ public partial class MainWindow : Window
             }
             catch (Win32Exception ex)
             {
-                AdminError.Text = ex.NativeErrorCode == 1326
-                    ? "Windows не приняла учётную запись или пароль. Введите пароль Windows, не PIN-код."
-                    : $"Не удалось войти в Windows (код {ex.NativeErrorCode}). Проверьте имя учётной записи и пароль.";
+                AdminError.Text = FormatCredentialError(ex.NativeErrorCode);
                 AdminError.Visibility = Visibility.Visible;
                 AdminPassword.Focus();
             }
@@ -286,6 +287,14 @@ public partial class MainWindow : Window
         ShowEngineerShell();
     }
 
+    private static string FormatCredentialError(int errorCode) => errorCode switch
+    {
+        1326 => "Windows не приняла учётную запись или пароль. Введите пароль Windows, не PIN-код.",
+        267 => "Windows не смогла открыть каталог запуска для этой учётной записи. Запустите установленную версию приложения или укажите доступный ей путь.",
+        1385 => "Для этой учётной записи запрещён интерактивный вход в Windows. Используйте другую учётную запись администратора.",
+        _ => $"Не удалось открыть инженерское окно (код Windows {errorCode}). Проверьте формат имени: пользователь, ПК\\пользователь или ДОМЕН\\пользователь."
+    };
+
     private static bool MatchesPassword(SecureString password, string expected)
     {
         var buffer = Marshal.SecureStringToBSTR(password);
@@ -306,6 +315,22 @@ public partial class MainWindow : Window
         ViewModel.RefreshIdentity();
     }
 
+    private void ConfigureUserShellSize()
+    {
+        var area = SystemParameters.WorkArea;
+        var maxWidth = Math.Max(1, area.Width - 24);
+        var maxHeight = Math.Max(1, area.Height - 24);
+        SizeToContent = SizeToContent.Height;
+        ResizeMode = ResizeMode.CanMinimize;
+        MinWidth = Math.Min(820, maxWidth);
+        MaxWidth = maxWidth;
+        Width = Math.Min(940, maxWidth);
+        MinHeight = Math.Min(Math.Max(700, area.Height * 0.9), maxHeight);
+        MaxHeight = maxHeight;
+        Height = double.NaN;
+        Title = "ИТ-Сети | Помощь с компьютером";
+    }
+
     private void ConfigureEngineerShell()
     {
         AdminUnlock.Visibility = Visibility.Collapsed;
@@ -323,7 +348,7 @@ public partial class MainWindow : Window
         MaxWidth = maxWidth;
         MaxHeight = maxHeight;
         Width = Math.Min(1200, maxWidth);
-        Height = Math.Min(800, maxHeight);
+        Height = Math.Min(Math.Max(900, area.Height * 0.92), maxHeight);
         Left = area.Left + Math.Max(0, (area.Width - Width) / 2);
         Top = area.Top + Math.Max(0, (area.Height - Height) / 2);
         Title = "ИТ-Сети | Диагностика ПК";
@@ -611,14 +636,7 @@ public partial class MainWindow : Window
         }
         AdminShell.Visibility = Visibility.Collapsed;
         UserShell.Visibility = Visibility.Visible;
-        var area = SystemParameters.WorkArea;
-        MinWidth = Math.Min(820, area.Width - 24);
-        MinHeight = Math.Min(540, area.Height - 24);
-        Width = Math.Min(940, area.Width - 24);
-        Height = double.NaN;
-        MaxHeight = Math.Max(MinHeight, area.Height - 24);
-        SizeToContent = SizeToContent.Height;
-        Title = "ИТ-Сети | Помощь с компьютером";
+        ConfigureUserShellSize();
     }
     private void RefreshNetwork_Click(object sender, RoutedEventArgs e) => ViewModel.RefreshNetworkAdapters();
     private void RefreshDebug_Click(object sender, RoutedEventArgs e) => ViewModel.RefreshDebug();

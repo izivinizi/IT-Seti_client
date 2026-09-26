@@ -371,7 +371,7 @@
      <TextBlock Text="Режим инженера" FontSize="20" FontWeight="SemiBold" Foreground="#143C87"/>
      <TextBlock Text="Введите учётную запись Windows с правами администратора." Foreground="#354A5E" Margin="0,7,0,18" TextWrapping="Wrap"/>
      <TextBlock Text="Учётная запись Windows" Foreground="#354A5E" Margin="0,0,0,5"/>
-     <ComboBox x:Name="AdminAccount" IsEditable="True" StaysOpenOnEdit="True" IsTextSearchEnabled="False" Height="38" Padding="10,7" FontSize="15" ToolTip="Выберите найденную учётную запись или укажите ПК\пользователь, ДОМЕН\пользователь"/>
+     <ComboBox x:Name="AdminAccount" IsEditable="True" StaysOpenOnEdit="True" IsTextSearchEnabled="False" Height="38" Padding="10,7" FontSize="15" ToolTip="Выберите учётную запись или введите имя, ПК\пользователь, ДОМЕН\пользователь либо user@domain"/>
      <TextBlock Text="Пароль" Foreground="#354A5E" Margin="0,12,0,5"/>
      <PasswordBox x:Name="AdminPassword" Height="38" Padding="10,7" FontSize="16" KeyDown="AdminPassword_KeyDown"/>
      <TextBlock x:Name="AdminError" Foreground="#C64D4D" Margin="0,8,0,0" Visibility="Collapsed" TextWrapping="Wrap"/>

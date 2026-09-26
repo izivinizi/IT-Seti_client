@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -17,33 +18,48 @@ internal static class EngineerWindowLauncher
 
     public static CredentialLaunchResult TryStartWithWindowsCredentials(string account, SecureString password, string historyDatabase)
     {
-        var (userName, domain) = ParseAccount(account);
         var executable = Environment.ProcessPath
             ?? throw new InvalidOperationException("Не удалось определить путь к приложению.");
-        var start = new ProcessStartInfo(executable)
-        {
-            UseShellExecute = false,
-            UserName = userName,
-            Domain = domain,
-            Password = password,
-            LoadUserProfile = true,
-            WorkingDirectory = AppContext.BaseDirectory
-        };
-        start.ArgumentList.Add(BootstrapArgument);
-        start.ArgumentList.Add(DatabaseArgument);
-        start.ArgumentList.Add(Path.GetFullPath(historyDatabase));
-
+        var lastError = 1326;
         var passwordPointer = Marshal.SecureStringToGlobalAllocUnicode(password);
         try
         {
-            var authenticated = LogonUserW(userName, string.IsNullOrEmpty(domain) ? null : domain, passwordPointer,
-                LogonInteractive, LogonProviderDefault, out var token);
-            using (token)
+            foreach (var (userName, domain) in ParseAccountCandidates(account))
             {
-                if (!authenticated) return new(null, Marshal.GetLastWin32Error());
-                return new(Process.Start(start)
-                    ?? throw new InvalidOperationException("Windows не запустила инженерский процесс."), 0);
+                var authenticated = LogonUserW(userName, string.IsNullOrEmpty(domain) ? null : domain, passwordPointer,
+                    LogonInteractive, LogonProviderDefault, out var token);
+                using (token)
+                {
+                    if (!authenticated)
+                    {
+                        lastError = Marshal.GetLastWin32Error();
+                        continue;
+                    }
+
+                    var start = new ProcessStartInfo(executable)
+                    {
+                        UseShellExecute = false,
+                        UserName = userName,
+                        Domain = domain,
+                        Password = password,
+                        LoadUserProfile = true,
+                        WorkingDirectory = Environment.SystemDirectory
+                    };
+                    start.ArgumentList.Add(BootstrapArgument);
+                    start.ArgumentList.Add(DatabaseArgument);
+                    start.ArgumentList.Add(Path.GetFullPath(historyDatabase));
+                    try
+                    {
+                        return new(Process.Start(start)
+                            ?? throw new InvalidOperationException("Windows не запустила инженерский процесс."), 0);
+                    }
+                    catch (Win32Exception ex)
+                    {
+                        lastError = ex.NativeErrorCode;
+                    }
+                }
             }
+            return new(null, lastError);
         }
         finally { Marshal.ZeroFreeGlobalAllocUnicode(passwordPointer); }
     }
@@ -60,7 +76,7 @@ internal static class EngineerWindowLauncher
         var start = new ProcessStartInfo(executable)
         {
             UseShellExecute = true,
-            WorkingDirectory = AppContext.BaseDirectory
+            WorkingDirectory = Environment.SystemDirectory
         };
         if (!elevated) start.Verb = "runas";
         start.ArgumentList.Add(EngineerArgument);
@@ -85,7 +101,7 @@ internal static class EngineerWindowLauncher
         return null;
     }
 
-    private static (string UserName, string Domain) ParseAccount(string value)
+    internal static IReadOnlyList<(string UserName, string Domain)> ParseAccountCandidates(string value)
     {
         var account = value.Trim();
         if (account.Length == 0) throw new ArgumentException("Укажите учётную запись Windows.", nameof(value));
@@ -95,11 +111,22 @@ internal static class EngineerWindowLauncher
         {
             if (slash == 0 || slash == account.Length - 1)
                 throw new ArgumentException("Введите учётную запись в формате ПК\\пользователь или ДОМЕН\\пользователь.", nameof(value));
-            return (account[(slash + 1)..], account[..slash]);
+            var userName = account[(slash + 1)..].Trim();
+            var domain = account[..slash].Trim();
+            if (userName.Length == 0 || domain.Length == 0)
+                throw new ArgumentException("Введите учётную запись в формате ПК\\пользователь или ДОМЕН\\пользователь.", nameof(value));
+            if (domain == ".") domain = Environment.MachineName;
+            return [(userName, domain)];
         }
 
-        if (account.Contains('@')) return (account, string.Empty);
-        return (account, Environment.MachineName);
+        if (account.Contains('@')) return [(account, string.Empty)];
+
+        var candidates = new List<(string UserName, string Domain)> { (account, Environment.MachineName) };
+        var logonDomain = Environment.UserDomainName;
+        if (!string.IsNullOrWhiteSpace(logonDomain)
+            && !string.Equals(logonDomain, Environment.MachineName, StringComparison.OrdinalIgnoreCase))
+            candidates.Add((account, logonDomain));
+        return candidates;
     }
 
     private const int LogonInteractive = 2;

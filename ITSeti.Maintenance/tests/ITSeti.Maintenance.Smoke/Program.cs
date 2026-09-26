@@ -22,6 +22,7 @@ internal static class Program
             return CheckProgressRegression(args.Contains("--installed-user-check"));
         if (args.Contains("--update-client-contract")) return CheckUpdateClientContract().GetAwaiter().GetResult();
         if (args.Contains("--interactive-disk-tools")) return CheckInteractiveDiskTools();
+        AssertEngineerAccountParsing();
         var fullFixture = Environment.GetEnvironmentVariable("ITSETI_FULL_FIXTURE");
         AssertCleanupSummaryFormatting();
         var output = Path.GetFullPath(Path.Combine("artifacts", "smoke-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")));
@@ -90,6 +91,10 @@ internal static class Program
                     throw new Exception("Engineer sign-in dialog must stay closed on the user start screen");
                 if (window.ResizeMode != ResizeMode.CanMinimize || Find<ScrollViewer>(userShell) is null)
                     throw new Exception("User window must be minimizable and allow content scrolling");
+                var userWorkArea = SystemParameters.WorkArea;
+                var expectedUserHeight = Math.Min(Math.Max(700, userWorkArea.Height * 0.9), Math.Max(1, userWorkArea.Height - 24));
+                if (window.Height < expectedUserHeight - 1 || window.Height > window.MaxHeight + 1)
+                    throw new Exception("User window height must fill the preferred screen area without exceeding it");
                 Capture(window, Path.Combine(output, "user-initial.png"));
                 var support = new SupportDialog("0042", "123-456", "123456789") { Owner = window };
                 support.Show();
@@ -205,9 +210,16 @@ internal static class Program
                 await Task.Delay(150);
                 if (((Grid)window.FindName("AdminUnlock")!).Visibility != Visibility.Visible)
                     throw new Exception("Engineer sign-in dialog did not open");
-                Capture(window, Path.Combine(output, "engineer-login.png"));
-                if (string.IsNullOrWhiteSpace(((ComboBox)window.FindName("AdminAccount")!).Text))
+                var adminAccount = (ComboBox)window.FindName("AdminAccount")!;
+                if (string.IsNullOrWhiteSpace(adminAccount.Text))
                     throw new Exception("Windows account field is missing from the engineer sign-in dialog");
+                var discoveredAccount = adminAccount.Text;
+                adminAccount.Text = "CONTOSO\\manual-user";
+                await Task.Delay(200);
+                if (adminAccount.Text != "CONTOSO\\manual-user")
+                    throw new Exception("Account discovery overwrote the manually entered engineer account");
+                adminAccount.Text = discoveredAccount;
+                Capture(window, Path.Combine(output, "engineer-login.png"));
                 var unlockButton = (Button)window.FindName("UnlockButton")!;
                 var adminError = (TextBlock)window.FindName("AdminError")!;
                 password.Password = "wrong";
@@ -369,7 +381,10 @@ internal static class Program
                     Click((Button)window.FindName("ExitAdminButton")!);
                     window.UpdateLayout();
                     await Task.Delay(250);
-                    if (window.ResizeMode != ResizeMode.CanMinimize || window.Width != 890 || window.SizeToContent != SizeToContent.Height)
+                    var restoredWorkArea = SystemParameters.WorkArea;
+                    var expectedRestoredHeight = Math.Min(Math.Max(700, restoredWorkArea.Height * 0.9), Math.Max(1, restoredWorkArea.Height - 24));
+                    if (window.ResizeMode != ResizeMode.CanMinimize || window.Width != Math.Min(940, restoredWorkArea.Width - 24) || window.SizeToContent != SizeToContent.Height
+                        || window.Height < expectedRestoredHeight - 1 || window.Height > window.MaxHeight + 1)
                         throw new Exception("User window did not return to fixed content-sized mode");
                     Capture(window, Path.Combine(output, "user-full.png"));
                 }
@@ -409,7 +424,8 @@ internal static class Program
                 window.ViewModel.Selected = reviewSnapshot;
                 window.ViewModel.History.Insert(0, reviewSnapshot);
                 window.Width = 1160;
-                window.Height = 760;
+                var workArea = SystemParameters.WorkArea;
+                window.Height = Math.Min(Math.Max(900, workArea.Height * 0.92), workArea.Height - 24);
                 var reviewTabs = (TabControl)window.FindName("AdminTabs")!;
                 var reviewTabNames = new[] { "overview", "storage", "network", "processes", "events", "software", "history", "debug", "maintenance", "progress" };
                 for (var index = 0; index < reviewTabNames.Length; index++)
@@ -436,7 +452,9 @@ internal static class Program
                     || ((Grid)engineerWindow.FindName("UserShell")!).Visibility != Visibility.Collapsed
                     || ((Grid)engineerWindow.FindName("AdminShell")!).Visibility != Visibility.Visible
                     || ((Button)engineerWindow.FindName("ExitAdminButton")!).Content?.ToString() != "Закрыть окно"
-                    || (Find<TabControl>(engineerWindow)?.SelectedIndex ?? -1) < 0)
+                    || (Find<TabControl>(engineerWindow)?.SelectedIndex ?? -1) < 0
+                    || Math.Abs(engineerWindow.Height - Math.Min(Math.Max(900, SystemParameters.WorkArea.Height * 0.92), SystemParameters.WorkArea.Height - 24)) > 1
+                    || engineerWindow.Height > engineerWindow.MaxHeight)
                     throw new Exception("Elevated engineer window did not remain separate from the user window");
                 Capture(engineerWindow, Path.Combine(output, "engineer-window.png"));
                 engineerWindow.Close();
@@ -878,6 +896,26 @@ internal static class Program
             throw new Exception("Successful cleanup summary includes implementation details");
         if (Format("Пользователь: Завершена | Система: Файлы обновлений не очищены: доступа нет") != "Очистка профиля выполнена; системная очистка не выполнена")
             throw new Exception("Partial cleanup summary does not explain the missing system cleanup");
+    }
+
+    private static void AssertEngineerAccountParsing()
+    {
+        var local = EngineerWindowLauncher.ParseAccountCandidates(".\\  tech ");
+        if (local.Count != 1 || local[0].UserName != "tech"
+            || !string.Equals(local[0].Domain, Environment.MachineName, StringComparison.OrdinalIgnoreCase))
+            throw new Exception("Dot-prefixed local account was not normalized for manual engineer login");
+
+        var domain = EngineerWindowLauncher.ParseAccountCandidates("CONTOSO\\tech");
+        if (domain.Count != 1 || domain[0] != ("tech", "CONTOSO"))
+            throw new Exception("Manually entered domain account was parsed incorrectly");
+
+        var upn = EngineerWindowLauncher.ParseAccountCandidates("tech@example.test");
+        if (upn.Count != 1 || upn[0] != ("tech@example.test", string.Empty))
+            throw new Exception("UPN account was parsed incorrectly");
+
+        var shortName = EngineerWindowLauncher.ParseAccountCandidates("tech");
+        if (shortName.Count == 0 || shortName[0].Domain != Environment.MachineName || shortName.Any(item => item.UserName != "tech"))
+            throw new Exception("Short account name was not prepared for local/domain lookup");
     }
 
     private static int CountButtons(DependencyObject parent)

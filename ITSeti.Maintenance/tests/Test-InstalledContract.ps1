@@ -107,9 +107,10 @@ if(!$treeSize.Contains('ElevatedProcessLauncher.CreateStartInfo') -or $treeSize 
 $organizationRunner=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\OrganizationSetupRunner.cs'),[Text.Encoding]::UTF8)
 $organizationWorker=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledOrganizationSetup.ps1'),[Text.Encoding]::UTF8)
 $engineerLauncher=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\EngineerWindowLauncher.cs'),[Text.Encoding]::UTF8)
-if(!$engineerLauncher.Contains('WorkingDirectory = AppContext.BaseDirectory') -or
+if(!$engineerLauncher.Contains('WorkingDirectory = Environment.SystemDirectory') -or
    !$engineerLauncher.Contains('UserName = userName') -or !$engineerLauncher.Contains('Password = password') -or
-   !$engineerLauncher.Contains('LogonUserW') -or !$engineerLauncher.Contains('ZeroFreeGlobalAllocUnicode')) {
+   !$engineerLauncher.Contains('LogonUserW') -or !$engineerLauncher.Contains('ZeroFreeGlobalAllocUnicode') -or
+   !$engineerLauncher.Contains('ParseAccountCandidates') -or !$engineerLauncher.Contains('Environment.UserDomainName')) {
     throw 'Engineer login must validate credentials without leaking the password and use a valid app working directory.'
 }
 $defenderController=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\WindowsDefenderController.cs'),[Text.Encoding]::UTF8)
