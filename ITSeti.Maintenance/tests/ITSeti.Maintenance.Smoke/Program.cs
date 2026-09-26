@@ -95,13 +95,10 @@ internal static class Program
                 support.Show();
                 support.UpdateLayout();
                 await Task.Delay(150);
-                if (((TextBox)support.FindName("InventoryValue")!).Text != "0042"
-                    || ((TextBox)support.FindName("RmsValue")!).Text != "123-456"
-                    || ((TextBox)support.FindName("AnyDeskValue")!).Text != "123456789"
-                    || !((TextBox)support.FindName("AnyDeskValue")!).IsReadOnly
-                    || !((TextBox)support.FindName("InventoryValue")!).IsReadOnlyCaretVisible
-                    || !((TextBox)support.FindName("RmsValue")!).IsReadOnlyCaretVisible
-                    || !((TextBox)support.FindName("AnyDeskValue")!).IsReadOnlyCaretVisible
+                if (((TextBox)support.FindName("IdentityValue")!).Text != $"Инв. номер: 0042{Environment.NewLine}RMS: 123-456{Environment.NewLine}AnyDesk: 123456789"
+                    || !((TextBox)support.FindName("IdentityValue")!).IsReadOnly
+                    || !((TextBox)support.FindName("IdentityValue")!).IsReadOnlyCaretVisible
+                    || !((TextBox)support.FindName("IdentityValue")!).AcceptsReturn
                     || !((Button)support.FindName("CopyAllButton")!).IsEnabled
                     || CountButtons((DependencyObject)support.FindName("IdentityPanel")!) != 1)
                     throw new Exception("Support dialog is missing selectable PC identifiers or quick-copy action");
@@ -318,9 +315,15 @@ internal static class Program
                 foreach (var name in new[] { "InstallSetupButton", "LaunchDiskInfoButton", "LaunchDiskMarkButton", "LaunchTreeSizeButton" })
                     if (window.FindName(name) is not Button { IsEnabled: true }) throw new Exception($"ПО action is unavailable: {name}");
                 AssertDiskToolResolution(output);
+                typeof(MainViewModel).GetField("identity", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .SetValue(window.ViewModel, new MachineIdentity("0042", "123-456-789-012", "123456789", []));
+                typeof(MainViewModel).GetMethod("Notify", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .Invoke(window.ViewModel, null);
+                window.ViewModel.AdminInventoryInput = "0042";
+                ((TextBlock)window.FindName("AdminComputerNameLabel")!).Text = "DEMO-PC";
                 window.UpdateLayout();
                 await Task.Delay(250);
-                Capture(window, Path.Combine(output, "overview.png"));
+                Capture(window, Path.Combine(output, "admin-overview.png"));
                 var setupTabs = Find<TabControl>(window) ?? throw new Exception("Tabs missing");
                 setupTabs.SelectedIndex = 5;
                 window.UpdateLayout();

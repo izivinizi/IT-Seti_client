@@ -94,7 +94,7 @@
      <StackPanel DockPanel.Dock="Top">
       <Image Source="Assets/logo.png" Width="142" Height="68" Stretch="Uniform" HorizontalAlignment="Left"/>
       <TextBlock Text="РЕЖИМ ИНЖЕНЕРА" FontSize="14" Foreground="#354A5E" Margin="0,12,0,18"/>
-      <TextBlock Text="{Binding ComputerName}" FontWeight="SemiBold" Foreground="#143C87" TextWrapping="Wrap" Margin="0,0,0,16"/>
+      <TextBlock x:Name="AdminComputerNameLabel" Text="{Binding ComputerName}" FontWeight="SemiBold" Foreground="#143C87" TextWrapping="Wrap" Margin="0,0,0,16"/>
       <Border BorderBrush="#E1EAF0" BorderThickness="0,0,0,1" Margin="0,0,0,14"/>
      </StackPanel>
      <Button x:Name="ExitAdminButton" DockPanel.Dock="Bottom" Click="ExitAdmin_Click" Content="К пользователю" Padding="10,10" Cursor="Hand" Margin="0,12,0,0"/>

@@ -16,16 +16,7 @@
   <Border x:Name="IdentityPanel" Grid.Row="2" Background="#F3F6F8" BorderBrush="#DDE6EB" BorderThickness="1" CornerRadius="4" Padding="16" Margin="0,0,0,14">
    <StackPanel>
     <TextBlock Text="При подаче заявки укажите данные компьютера." FontWeight="SemiBold" Foreground="#143C87" TextWrapping="Wrap" Margin="0,0,0,8"/>
-    <Grid Margin="0,2,0,12">
-     <Grid.ColumnDefinitions><ColumnDefinition Width="105"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-     <TextBlock Text="Инв. номер" VerticalAlignment="Center" Margin="0,0,10,0"/>
-     <TextBox x:Name="InventoryValue" Grid.Column="1" IsReadOnly="True" IsReadOnlyCaretVisible="True" BorderBrush="#DDE6EB" Background="White" Padding="8,6"/>
-     <TextBlock Grid.Row="1" Text="RMS" VerticalAlignment="Center" Margin="0,7,10,0"/>
-     <TextBox x:Name="RmsValue" Grid.Row="1" Grid.Column="1" IsReadOnly="True" IsReadOnlyCaretVisible="True" BorderBrush="#DDE6EB" Background="White" Padding="8,6" Margin="0,7,0,0"/>
-     <TextBlock Grid.Row="2" Text="AnyDesk" VerticalAlignment="Center" Margin="0,7,10,0"/>
-     <TextBox x:Name="AnyDeskValue" Grid.Row="2" Grid.Column="1" IsReadOnly="True" IsReadOnlyCaretVisible="True" BorderBrush="#DDE6EB" Background="White" Padding="8,6" Margin="0,7,0,0"/>
-    </Grid>
+    <TextBox x:Name="IdentityValue" Margin="0,2,0,12" IsReadOnly="True" IsReadOnlyCaretVisible="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Disabled" MinHeight="82" BorderBrush="#DDE6EB" Background="White" Padding="8,7" FontSize="14" Foreground="#203A50" ToolTip="Можно выделить мышью весь блок, включая подписи"/>
     <Button x:Name="CopyAllButton" Style="{StaticResource PrimaryActionButton}" Click="CopyAll_Click" HorizontalAlignment="Stretch" Height="44" AutomationProperties.Name="Скопировать данные компьютера">
      <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
       <TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="16" Foreground="White" Margin="0,0,9,0" VerticalAlignment="Center"/>

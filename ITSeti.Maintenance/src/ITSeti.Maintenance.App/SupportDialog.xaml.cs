@@ -11,9 +11,7 @@ public partial class SupportDialog : Window
     public SupportDialog(string? inventoryNumber, string? rmsId, string? anyDeskId)
     {
         InitializeComponent();
-        InventoryValue.Text = inventoryNumber ?? "не указан";
-        RmsValue.Text = rmsId ?? "не найден";
-        AnyDeskValue.Text = anyDeskId ?? "не найден";
+        IdentityValue.Text = $"Инв. номер: {inventoryNumber ?? "не указан"}{Environment.NewLine}RMS: {rmsId ?? "не найден"}{Environment.NewLine}AnyDesk: {anyDeskId ?? "не найден"}";
     }
 
     private void OpenLink(object sender, RequestNavigateEventArgs e)
@@ -31,8 +29,7 @@ public partial class SupportDialog : Window
 
     private void CopyAll_Click(object sender, RoutedEventArgs e)
     {
-        var text = $"Инв. номер: {InventoryValue.Text}{Environment.NewLine}RMS: {RmsValue.Text}{Environment.NewLine}AnyDesk: {AnyDeskValue.Text}";
-        CopyValue(text, "Данные компьютера");
+        CopyValue(IdentityValue.Text, "Данные компьютера");
     }
 
     private void CopyValue(string value, string label)
