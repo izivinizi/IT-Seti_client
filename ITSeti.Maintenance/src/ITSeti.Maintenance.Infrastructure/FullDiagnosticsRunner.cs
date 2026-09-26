@@ -200,8 +200,11 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         if (existing is not null)
             return snapshot;
 
-        var reading = await CpuTemperatureReader.ReadAsync();
-        return WithCpuTemperature(snapshot, reading.TemperatureC, reading.Status);
+        var reading = await CpuTemperatureCache.RequestFreshAsync(TimeSpan.FromSeconds(5));
+        if (reading is null && !IsInstalled)
+            reading = await CpuTemperatureReader.ReadAsync();
+        return WithCpuTemperature(snapshot, reading?.TemperatureC,
+            reading?.Status ?? snapshot.CpuTemperatureStatus ?? "Системный опрос датчика не вернул свежие данные");
     }
 
     private static DiagnosticSnapshot WithCpuTemperature(DiagnosticSnapshot snapshot, double? temperature, string status) => snapshot with

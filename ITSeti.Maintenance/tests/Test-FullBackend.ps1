@@ -4,10 +4,21 @@ $bundle=Join-Path $Root "src\ITSeti.Maintenance.App\bin\$Configuration\net9.0-wi
 $run=Join-Path $Root ('artifacts\backend-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $run -Force | Out-Null
 Get-ChildItem -LiteralPath $bundle -File | Copy-Item -Destination $run
-& ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $run 'FullCheckWorker.ps1'),[Text.Encoding]::UTF8))) -RunRoot $run -ToolsRoot '' -SkipDiskTests -HeadlessDiskSpd:$WithResourceSampling -SkipResourceSampling:(!$WithResourceSampling) -LimitedMode:$LimitedMode
+$temperatureFile=Join-Path $run 'temperature-fixture.json'
+$temperatureFixture=[pscustomobject]@{TemperatureC=63.5;Status='synthetic integration fixture';CapturedAtUtc=[DateTimeOffset]::UtcNow.ToString('O')}
+[IO.File]::WriteAllText($temperatureFile,($temperatureFixture | ConvertTo-Json -Compress),[Text.Encoding]::UTF8)
+$previousTemperatureFile=$env:ITSETI_CPU_TEMPERATURE_FILE
+$env:ITSETI_CPU_TEMPERATURE_FILE=$temperatureFile
+try {
+    & ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $run 'FullCheckWorker.ps1'),[Text.Encoding]::UTF8))) -RunRoot $run -ToolsRoot '' -SkipDiskTests -HeadlessDiskSpd:$WithResourceSampling -SkipResourceSampling:(!$WithResourceSampling) -LimitedMode:$LimitedMode
+} finally {
+    if($null -eq $previousTemperatureFile){Remove-Item Env:ITSETI_CPU_TEMPERATURE_FILE -ErrorAction SilentlyContinue}
+    else{$env:ITSETI_CPU_TEMPERATURE_FILE=$previousTemperatureFile}
+}
 if(!(Test-Path -LiteralPath (Join-Path $run 'result.json'))){throw ([IO.File]::ReadAllText((Join-Path $run 'error.txt')))}
 $data=Get-Content -LiteralPath (Join-Path $run 'result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 if($data.Full.Benchmark.State -ne 'Skipped' -or !$data.Full.CpuName -or !$data.Full.GpuName -or !@($data.Disks).Count -or !$data.LastBootAt){throw 'Incomplete full diagnostic payload'}
+if($data.CpuTemperatureC -ne 63.5 -or $data.Full.CpuTemperatureC -ne 63.5){throw 'Temperature cache fixture was lost before the full diagnostic report.'}
 if(!$data.Full.Processes -and !$data.Full.ProcessUnavailable){throw 'No process coverage'}
 if(!$data.Full.Events -and !$data.Full.EventUnavailable){throw 'No event coverage'}
 if(@($data.Full.TopMemoryProcesses).Count -lt 1 -or !$data.Full.TopMemoryProcesses[0].DisplayName){throw 'No friendly top-memory application names'}

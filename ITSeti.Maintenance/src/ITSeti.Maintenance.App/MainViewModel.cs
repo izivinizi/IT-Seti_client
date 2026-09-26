@@ -112,21 +112,22 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         set { eventFilterLevel = value; FilteredEvents.Refresh(); SelectedEvent = FilteredEvents.Cast<EventDetails>().FirstOrDefault(); Notify(); }
     }
     public ObservableCollection<OrganizationComponent> SetupComponents { get; } = [];
+    public IReadOnlyList<SystemToolShortcut> SystemTools { get; } = SystemToolsLauncher.GetShortcuts();
     private string? setupSource;
-    private bool setupAcceptanceMode;
+    private bool setupInstallRunning;
     private string softwareActionStatus = "";
     private readonly GitHubReleaseClient applicationReleaseClient = new();
     private ApplicationRelease? availableApplicationRelease;
     private bool applicationUpdateCheckRunning;
     private bool applicationUpdateRunning;
-    private string applicationUpdateStatus = "Проверка обновлений ещё не выполнялась";
-    public bool SetupAcceptanceMode => setupAcceptanceMode;
+    private string applicationUpdateStatus = ApplicationUpdateRunner.ReadLastStatus() ?? "Проверка обновлений ещё не выполнялась";
     public bool HasSetupSource => setupSource is not null;
+    public bool CanInstallSetup => !busy && !setupInstallRunning && HasSetupSource;
     public bool CanLaunchDiskTools => fullRunner is FullDiagnosticsRunner;
     public string SoftwareActionStatus => softwareActionStatus;
     public string SetupSource => setupSource ?? "Комплект ITSETI-Setup не найден";
     public string? SetupSourcePath => setupSource;
-    public void SetSetupStatus(string message) { status = message; Notify(); }
+    public void SetSetupStatus(string message) { softwareActionStatus = message; Notify(); }
     public void SetSoftwareActionStatus(string message) { softwareActionStatus = message; Notify(); }
     public string SetupSummary => $"Требуют внимания: {SetupComponents.Count(c => c.NeedsAttention)} из {SetupComponents.Count}";
     public string SetupWarning
@@ -134,7 +135,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         get
         {
             if (SetupComponents.Count == 0) return "ПО: проверка не выполнялась";
-            var missing = SetupComponents.Where(c => c.NeedsAttention && c.Name != "Локальная учётка и права").ToArray();
+            var missing = SetupComponents.Where(c => c.NeedsAttention).ToArray();
             return missing.Length > 0 ? "ПО: проверьте " + string.Join(", ", missing.Select(c => c.Name)) + "."
                 : "ПО: основные компоненты обнаружены.";
         }
@@ -147,6 +148,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private bool busy;
     private int liveRefreshRunning;
     private DateTimeOffset nextTemperatureProbeUtc;
+    private string? temperatureProbeError;
     private bool cleanupRunning;
     private bool repairRunning;
     private bool windowsUpdateActionRunning;
@@ -395,7 +397,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     {
         setupSource = source ?? OrganizationSoftwareAudit.FindSource();
         SetupComponents.Clear();
-        foreach (var component in OrganizationSoftwareAudit.Inspect(setupSource, setupAcceptanceMode)) SetupComponents.Add(component);
+        foreach (var component in OrganizationSoftwareAudit.Inspect(setupSource)) SetupComponents.Add(component);
+        Notify();
         Notify();
     }
 
@@ -418,10 +421,18 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             ?? TreeSizeVolumes.FirstOrDefault();
     }
 
-    public void SetSetupMode(bool acceptance)
+    public bool BeginSetupInstall()
     {
-        setupAcceptanceMode = acceptance;
-        RefreshSetupAudit(setupSource);
+        if (!CanInstallSetup) return false;
+        setupInstallRunning = true;
+        Notify();
+        return true;
+    }
+
+    public void EndSetupInstall()
+    {
+        setupInstallRunning = false;
+        Notify();
     }
     public string ScheduleStatus => FullDiagnosticsRunner.IsInstalled ? "Быстрая проверка: раз в 14 дней · полная с восстановлением: раз в 60 дней" : "Не настроено";
     public string ApplicationUpdateStatus => applicationUpdateStatus;
@@ -1093,17 +1104,17 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             if (DateTimeOffset.UtcNow >= nextTemperatureProbeUtc)
             {
                 nextTemperatureProbeUtc = DateTimeOffset.UtcNow.AddSeconds(30);
-                await CpuTemperatureCache.RequestProbeAsync();
+                _ = RequestTemperatureProbeAsync();
             }
 
             var snapshot = runner is WindowsDiagnosticsRunner windowsRunner
                 ? await windowsRunner.RunLiveAsync()
                 : await runner.RunAsync();
-            var temperature = CpuTemperatureCache.ReadFresh();
+            var temperature = CpuTemperatureCache.ReadFresh(maxAge: TimeSpan.FromSeconds(45));
             live = snapshot with
             {
-                CpuTemperatureC = temperature?.TemperatureC ?? Selected?.CpuTemperatureC ?? Selected?.Full?.CpuTemperatureC,
-                CpuTemperatureStatus = temperature?.Status ?? Selected?.CpuTemperatureStatus ?? snapshot.CpuTemperatureStatus
+                CpuTemperatureC = temperature?.TemperatureC,
+                CpuTemperatureStatus = temperature?.Status ?? temperatureProbeError ?? snapshot.CpuTemperatureStatus
             };
             Notify();
         }
@@ -1116,6 +1127,13 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         {
             Interlocked.Exchange(ref liveRefreshRunning, 0);
         }
+    }
+
+    private async Task RequestTemperatureProbeAsync()
+    {
+        var started = await CpuTemperatureCache.RequestProbeAsync();
+        temperatureProbeError = started ? null : "Не удалось запустить системный опрос температуры";
+        if (!started) Notify();
     }
 
     public async Task RunQuickAsync()

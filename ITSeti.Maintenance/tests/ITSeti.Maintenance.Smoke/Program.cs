@@ -32,6 +32,46 @@ internal static class Program
         File.WriteAllText(temperatureCachePath, JsonSerializer.Serialize(new CpuTemperatureReading(62, "smoke", DateTimeOffset.UtcNow.AddMinutes(-3))));
         if (CpuTemperatureCache.ReadFresh(temperatureCachePath) is not null)
             throw new Exception("A stale CPU temperature cache entry was accepted");
+        File.WriteAllText(temperatureCachePath, JsonSerializer.Serialize(new CpuTemperatureReading(140, "smoke", DateTimeOffset.UtcNow)));
+        if (CpuTemperatureCache.ReadFresh(temperatureCachePath) is not null)
+            throw new Exception("An out-of-range CPU temperature cache entry was accepted");
+        var chosenTemperature = CpuTemperatureReader.SelectBestReading([
+            ("CPU Core #1 Distance to TjMax", 91.0),
+            ("Core #1", 66.0),
+            ("CPU Package", 68.0),
+            ("CPU (Tctl/Tdie)", 72.0)]);
+        if (chosenTemperature is not { Name: "CPU (Tctl/Tdie)", Value: 72.0 })
+            throw new Exception("CPU temperature selection picked a derived limit or a lower-priority sensor");
+        if (CpuTemperatureReader.SelectBestReading([("Core #1 Distance to TjMax", 54.0)]) is not null)
+            throw new Exception("Distance-to-limit sensor was reported as CPU temperature");
+        var cacheRacePath = Path.Combine(Path.GetTempPath(), "ITSeti-temperature-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(cacheRacePath, JsonSerializer.Serialize(new CpuTemperatureReading(62, "smoke", DateTimeOffset.UtcNow)));
+        var cacheWriter = Task.Run(() =>
+        {
+            var temporary = cacheRacePath + ".next";
+            for (var i = 0; i < 100; i++)
+            {
+                File.WriteAllText(temporary, JsonSerializer.Serialize(new CpuTemperatureReading(60 + i % 10, "smoke", DateTimeOffset.UtcNow)));
+                for (var attempt = 0; ; attempt++)
+                {
+                    try { File.Move(temporary, cacheRacePath, true); break; }
+                    catch (Exception ex) when (attempt < 5 && ex is IOException or UnauthorizedAccessException)
+                    { Thread.Sleep(20 * (attempt + 1)); }
+                }
+            }
+        });
+        var cacheReader = Task.Run(() =>
+        {
+            for (var i = 0; i < 500; i++)
+                if (CpuTemperatureCache.ReadFresh(cacheRacePath) is null)
+                    throw new Exception("Concurrent CPU temperature cache read failed during atomic replacement");
+        });
+        try { Task.WhenAll(cacheWriter, cacheReader).GetAwaiter().GetResult(); }
+        finally
+        {
+            File.Delete(cacheRacePath);
+            File.Delete(cacheRacePath + ".next");
+        }
         var database = Path.Combine(output, "history.db");
         var app = new ITSeti.Maintenance.App.App();
         app.InitializeComponent();
@@ -45,8 +85,11 @@ internal static class Program
                 var adminShell = (UIElement)window.FindName("AdminShell")!;
                 if (userShell.Visibility != Visibility.Visible || adminShell.Visibility != Visibility.Collapsed)
                     throw new Exception("User mode is not the first screen");
+                if (((Grid)window.FindName("AdminUnlock")!).Visibility != Visibility.Collapsed)
+                    throw new Exception("Engineer sign-in dialog must stay closed on the user start screen");
                 if (window.ResizeMode != ResizeMode.CanMinimize || Find<ScrollViewer>(userShell) is null)
                     throw new Exception("User window must be minimizable and allow content scrolling");
+                Capture(window, Path.Combine(output, "user-initial.png"));
                 var support = new SupportDialog { Owner = window };
                 support.Show();
                 support.UpdateLayout();
@@ -147,14 +190,30 @@ internal static class Program
                 window.ViewModel.Selected = first;
                 Click((Button)window.FindName("AdminModeButton")!);
                 var password = (PasswordBox)window.FindName("AdminPassword")!;
+                window.UpdateLayout();
+                await Task.Delay(150);
+                if (((Grid)window.FindName("AdminUnlock")!).Visibility != Visibility.Visible)
+                    throw new Exception("Engineer sign-in dialog did not open");
+                Capture(window, Path.Combine(output, "engineer-login.png"));
+                if (string.IsNullOrWhiteSpace(((ComboBox)window.FindName("AdminAccount")!).Text))
+                    throw new Exception("Windows account field is missing from the engineer sign-in dialog");
+                var unlockButton = (Button)window.FindName("UnlockButton")!;
+                var adminError = (TextBlock)window.FindName("AdminError")!;
                 password.Password = "wrong";
-                Click((Button)window.FindName("UnlockButton")!);
-                if (adminShell.Visibility != Visibility.Collapsed) throw new Exception("Wrong admin password accepted");
+                Click(unlockButton);
+                while (!unlockButton.IsEnabled) await Task.Delay(25);
+                if (adminError.Visibility != Visibility.Visible)
+                    throw new Exception("Invalid Windows credentials did not produce an error");
+                if (adminShell.Visibility != Visibility.Collapsed || !window.IsVisible)
+                    throw new Exception("Wrong admin password accepted or closed the user window");
                 password.Password = "it-seti";
-                Click((Button)window.FindName("UnlockButton")!);
+                Click(unlockButton);
+                while (!unlockButton.IsEnabled) await Task.Delay(25);
+                if (adminError.Visibility != Visibility.Visible)
+                    throw new Exception("Legacy misspelled password unexpectedly opened engineer mode");
                 if (adminShell.Visibility != Visibility.Collapsed) throw new Exception("Old admin password accepted");
                 password.Password = "itseti";
-                Click((Button)window.FindName("UnlockButton")!);
+                Click(unlockButton);
                 if (adminShell.Visibility != Visibility.Visible || userShell.Visibility != Visibility.Collapsed)
                     throw new Exception("Admin mode did not open");
                 if (window.ViewModel.UserCpuName == "Модель процессора не определена")
@@ -224,15 +283,16 @@ internal static class Program
                 window.ViewModel.EventFilterLevel = 1;
                 window.ViewModel.Selected = first;
                 if (window.ViewModel.SetupComponents.Count != 4) throw new Exception("Organization software audit missing components");
-                window.ViewModel.SetSetupMode(true);
-                if (window.ViewModel.SetupComponents.Count != 6) throw new Exception("Acceptance mode inventory missing");
+                if (window.ViewModel.SetupComponents.Select(component => component.InstallKey).Distinct().Count() != 4)
+                    throw new Exception("Per-component install actions are missing");
+                if (window.ViewModel.SystemTools.Count != 8 || window.ViewModel.SystemTools.All(tool => tool.Key != "security"))
+                    throw new Exception("System application shortcuts are incomplete");
                 var treeStart = TreeSizeLauncher.CreateStartInfo(@"C:\Tools\TreeSizeFree.exe", @"C:\");
                 if (treeStart.UseShellExecute || treeStart.Verb.Length > 0 || treeStart.ArgumentList.Single() != @"C:\")
                     throw new Exception("TreeSize must launch in the current user session without UAC");
                 var diskToolStart = ElevatedProcessLauncher.CreateStartInfo(@"C:\Tools\DiskInfo64.exe", @"C:\Tools");
                 if (diskToolStart.UseShellExecute || diskToolStart.Verb.Length > 0)
                     throw new Exception("Disk utilities must launch in the current user session without UAC");
-                window.ViewModel.SetSetupMode(false);
                 var detectedSetup = OrganizationSoftwareAudit.FindSource();
                 if (File.Exists(@"F:\Service\ITSETI-Setup\system\Install.ps1")
                     && !string.Equals(detectedSetup, @"F:\Service\ITSETI-Setup", StringComparison.OrdinalIgnoreCase))
@@ -246,13 +306,6 @@ internal static class Program
                 Capture(window, Path.Combine(output, "overview.png"));
                 var setupTabs = Find<TabControl>(window) ?? throw new Exception("Tabs missing");
                 setupTabs.SelectedIndex = 5;
-                ((ComboBox)window.FindName("SetupModeSelector")!).SelectedIndex = 1;
-                window.UpdateLayout();
-                await Task.Delay(250);
-                if (!window.ViewModel.SetupAcceptanceMode || ((TextBlock)window.FindName("AcceptanceWarning")!).Visibility != Visibility.Visible)
-                    throw new Exception("Acceptance rights warning is hidden");
-                Capture(window, Path.Combine(output, "organization-acceptance.png"));
-                ((ComboBox)window.FindName("SetupModeSelector")!).SelectedIndex = 0;
                 window.UpdateLayout();
                 await Task.Delay(250);
                 Capture(window, Path.Combine(output, "organization-software.png"));
@@ -300,8 +353,76 @@ internal static class Program
                         throw new Exception("User window did not return to fixed content-sized mode");
                     Capture(window, Path.Combine(output, "user-full.png"));
                 }
+                var returnedToUser = adminShell.Visibility != Visibility.Visible;
+                if (returnedToUser)
+                {
+                    Click((Button)window.FindName("AdminModeButton")!);
+                    ((PasswordBox)window.FindName("AdminPassword")!).Password = "itseti";
+                    Click((Button)window.FindName("UnlockButton")!);
+                }
+                var reviewDirectory = Path.Combine(output, "review-run");
+                Directory.CreateDirectory(reviewDirectory);
+                File.WriteAllText(Path.Combine(reviewDirectory, "stage.txt"), "Проверка завершена");
+                File.WriteAllText(Path.Combine(reviewDirectory, "disk-worker.log"), "DiskSpd read pass 2/2: 812 MB/s");
+                var reviewSnapshot = first with
+                {
+                    Id = Guid.NewGuid(),
+                    StartedAt = DateTimeOffset.Now,
+                    CpuPercent = 24,
+                    CpuTemperatureC = 67,
+                    CpuTemperatureStatus = "LibreHardwareMonitor / PawnIO · CPU Package · 3/3 замера",
+                    Full = new FullDiagnosticDetails(
+                        "AMD Ryzen 7 5700X 8-Core Processor", "NVIDIA GeForce RTX", true,
+                        [new PhysicalDiskDetails("Samsung SSD 980 PRO", "SSD", "Healthy")],
+                        [new SmartDiskDetails("Samsung SSD 980 PRO", "Good", "C:", "SSD", "PCIe 4.0 x4 | PCIe 4.0 x4", 12400)],
+                        [new ProcessDetails("example.exe", "Пример приложения", "Microsoft Corporation", "Подписан", @"C:\Program Files\Example\example.exe")],
+                        [new EventDetails("System", "Disk", 7, 1, DateTimeOffset.Now.ToString("g"), "Критическая ошибка тестового события"),
+                         new EventDetails("Application", "Example", 1001, 2, DateTimeOffset.Now.ToString("g"), "Ошибка тестового приложения")],
+                        0, 0, false,
+                        new DiskBenchmark("C:", "SSD", 812, 690, 2, "Completed", "", "DiskSpd", true),
+                        reviewDirectory,
+                        [new MemoryProcessDetails("Google Chrome", "chrome", 1_200_000_000, "Google LLC")],
+                        new ResourceSampleSummary(30, 0, 0, 0, 0, 24, 48, 0, 0.3, 0.2, 100, 90, ""),
+                        "DDR4", 67)
+                };
+                var previousSelection = window.ViewModel.Selected;
+                window.ViewModel.Selected = reviewSnapshot;
+                window.ViewModel.History.Insert(0, reviewSnapshot);
+                window.Width = 1160;
+                window.Height = 760;
+                var reviewTabs = (TabControl)window.FindName("AdminTabs")!;
+                var reviewTabNames = new[] { "overview", "storage", "network", "processes", "events", "software", "history", "debug", "maintenance", "progress" };
+                for (var index = 0; index < reviewTabNames.Length; index++)
+                {
+                    reviewTabs.SelectedIndex = index;
+                    window.UpdateLayout();
+                    await Task.Delay(100);
+                    Capture(window, Path.Combine(output, "tab-" + reviewTabNames[index] + ".png"));
+                }
+                window.ViewModel.History.Remove(reviewSnapshot);
+                window.ViewModel.Selected = previousSelection;
+                if (returnedToUser) Click((Button)window.FindName("ExitAdminButton")!);
+                var engineerWindow = new MainWindow(database, engineerOnly: true);
+                var engineerLoaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                engineerWindow.Loaded += (_, _) => engineerLoaded.TrySetResult();
+                engineerWindow.Show();
+                await engineerLoaded.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                var engineerReadyDeadline = DateTime.UtcNow.AddSeconds(10);
+                while (((Grid)engineerWindow.FindName("AdminShell")!).Visibility != Visibility.Visible
+                    && DateTime.UtcNow < engineerReadyDeadline) await Task.Delay(50);
+                engineerWindow.UpdateLayout();
+                await Task.Delay(200);
+                if (!window.IsVisible
+                    || ((Grid)engineerWindow.FindName("UserShell")!).Visibility != Visibility.Collapsed
+                    || ((Grid)engineerWindow.FindName("AdminShell")!).Visibility != Visibility.Visible
+                    || ((Button)engineerWindow.FindName("ExitAdminButton")!).Content?.ToString() != "Закрыть окно"
+                    || (Find<TabControl>(engineerWindow)?.SelectedIndex ?? -1) < 0)
+                    throw new Exception("Elevated engineer window did not remain separate from the user window");
+                Capture(engineerWindow, Path.Combine(output, "engineer-window.png"));
+                engineerWindow.Close();
+                if (!window.IsVisible) throw new Exception("Closing engineer window closed the user window");
                 await AssertCleanupContract(output);
-                Console.WriteLine("PASS: real CPU/RAM/disks, SQLite roundtrip, history selection, desktop/compact rendering.");
+                Console.WriteLine("PASS: real CPU/RAM/disks, SQLite roundtrip, history selection, desktop/compact rendering, all ten admin tabs captured.");
                 Console.WriteLine(output);
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); code = 1; }
@@ -432,10 +553,9 @@ internal static class Program
         File.Copy(dotnet, Path.Combine(packages, names[0]), true);
         var problems = await OrganizationSetupRunner.CheckAsync(root);
         if (!problems.Any(problem => problem.Contains("изменён после ревизии", StringComparison.OrdinalIgnoreCase))
-            || problems.Any(problem => problem.StartsWith(names[0] + ": подпись", StringComparison.OrdinalIgnoreCase))
-            || names.Skip(1).Any(name => !problems.Any(problem => problem.StartsWith(name + ": подпись", StringComparison.OrdinalIgnoreCase)))
+            || names.Any(name => !problems.Any(problem => problem.StartsWith(name + ": SHA-256", StringComparison.OrdinalIgnoreCase)))
             || problems.Any(problem => problem.Contains("проверка Windows недоступна", StringComparison.OrdinalIgnoreCase)))
-            throw new Exception("Package preflight did not report the modified script and all invalid signatures: " + string.Join(" | ", problems));
+            throw new Exception("Package preflight did not report the modified script and every unpinned package: " + string.Join(" | ", problems));
     }
 
     private static void AssertRules()

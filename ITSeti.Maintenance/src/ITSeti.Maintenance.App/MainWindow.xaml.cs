@@ -2,6 +2,8 @@ using System.IO;
 using System.ComponentModel;
 using System.Windows;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Security;
 using System.Windows.Input;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -16,18 +18,25 @@ public partial class MainWindow : Window
     public MainViewModel ViewModel { get; }
     private readonly FullDiagnosticsRunner fullRunner = new();
     private readonly TaskCompletionSource initializationCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly string historyDatabasePath;
+    private readonly bool engineerOnly;
     private bool closeAfterMaintenance;
     private bool exitForUpdate;
     private DispatcherOperation? progressScroll;
     private bool closed;
     private readonly DispatcherTimer liveMetricsTimer = new() { Interval = TimeSpan.FromSeconds(10) };
-    public MainWindow() : this(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ITSeti", "Maintenance", "history.db")) { }
+    public MainWindow() : this(DefaultHistoryDatabasePath(), false) { }
 
-    public MainWindow(string databasePath)
+    public MainWindow(string databasePath) : this(databasePath, false) { }
+
+    public MainWindow(string databasePath, bool engineerOnly)
     {
         InitializeComponent();
+        historyDatabasePath = Path.GetFullPath(databasePath);
+        this.engineerOnly = engineerOnly;
+        AdminAccount.Text = Environment.MachineName + "\\Admin";
         MaxHeight = Math.Max(MinHeight, SystemParameters.WorkArea.Height - 24);
-        ViewModel = new MainViewModel(new WindowsDiagnosticsRunner(), new SqliteHistoryStore(databasePath), fullRunner);
+        ViewModel = new MainViewModel(new WindowsDiagnosticsRunner(), new SqliteHistoryStore(historyDatabasePath), fullRunner);
         DataContext = ViewModel;
         ViewModel.PropertyChanged += (_, _) =>
         {
@@ -43,6 +52,7 @@ public partial class MainWindow : Window
             await ViewModel.InitializeAsync();
             await ViewModel.RefreshLiveStatusAsync();
             liveMetricsTimer.Start();
+            if (this.engineerOnly) ShowEngineerShell();
             initializationCompleted.TrySetResult();
         };
         Closing += (_, e) =>
@@ -168,36 +178,111 @@ public partial class MainWindow : Window
     private void ShowAdminPrompt_Click(object sender, RoutedEventArgs e)
     {
         AdminPassword.Clear();
+        AdminAccount.Text = Environment.MachineName + "\\Admin";
         AdminError.Visibility = Visibility.Collapsed;
         AdminUnlock.Visibility = Visibility.Visible;
         AdminPassword.Focus();
+        _ = PopulateAdminAccountsAsync(AdminAccount.Text);
+    }
+
+    private async Task PopulateAdminAccountsAsync(string defaultAccount)
+    {
+        var candidates = await Task.Run(WindowsAdminAccountDiscovery.FindCandidates);
+        if (AdminUnlock.Visibility != Visibility.Visible) return;
+
+        var keepCurrent = !string.Equals(AdminAccount.Text, defaultAccount, StringComparison.OrdinalIgnoreCase);
+        AdminAccount.ItemsSource = candidates;
+        if (keepCurrent) return;
+
+        var selected = candidates.FirstOrDefault(account => account.EndsWith("\\Admin", StringComparison.OrdinalIgnoreCase))
+            ?? candidates.FirstOrDefault(account => account.EndsWith("\\it-seti", StringComparison.OrdinalIgnoreCase))
+            ?? candidates.FirstOrDefault(account => account.EndsWith("\\user", StringComparison.OrdinalIgnoreCase))
+            ?? (candidates.Count == 1 ? candidates[0] : defaultAccount);
+        AdminAccount.Text = selected;
     }
     private void CancelAdmin_Click(object sender, RoutedEventArgs e)
     {
         AdminPassword.Clear();
         AdminUnlock.Visibility = Visibility.Collapsed;
     }
-    private void AdminPassword_KeyDown(object sender, KeyEventArgs e)
+    private async void AdminPassword_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter) { UnlockAdmin(); e.Handled = true; }
+        if (e.Key == Key.Enter) { await UnlockAdminAsync(); e.Handled = true; }
         else if (e.Key == Key.Escape) { CancelAdmin_Click(sender, e); e.Handled = true; }
     }
-    private void UnlockAdmin_Click(object sender, RoutedEventArgs e) => UnlockAdmin();
-    private void UnlockAdmin()
+    private async void UnlockAdmin_Click(object sender, RoutedEventArgs e) => await UnlockAdminAsync();
+
+    private async Task UnlockAdminAsync()
     {
-        // This gates the detailed UI only; Windows privileges remain unchanged.
-        if (AdminPassword.Password != "itseti")
+        var password = AdminPassword.SecurePassword.Copy();
+        AdminPassword.Clear();
+        if (!MatchesPassword(password, "itseti"))
         {
-            AdminPassword.Clear();
-            AdminError.Text = "Неверный пароль";
-            AdminError.Visibility = Visibility.Visible;
-            AdminPassword.Focus();
+            var account = AdminAccount.Text;
+            UnlockButton.IsEnabled = false;
+            try
+            {
+                var launch = await Task.Run(() => EngineerWindowLauncher.TryStartWithWindowsCredentials(
+                    account, password, historyDatabasePath));
+                if (launch.Process is null)
+                {
+                    AdminError.Text = launch.ErrorCode == 1326
+                        ? "Windows не приняла учётную запись или пароль."
+                        : $"Не удалось войти в Windows (код {launch.ErrorCode}). Проверьте имя учётной записи и пароль.";
+                    AdminError.Visibility = Visibility.Visible;
+                    AdminPassword.Focus();
+                    return;
+                }
+                using var process = launch.Process;
+                AdminUnlock.Visibility = Visibility.Collapsed;
+            }
+            catch (Win32Exception ex)
+            {
+                AdminError.Text = ex.NativeErrorCode == 1326
+                    ? "Windows не приняла учётную запись или пароль."
+                    : $"Не удалось войти в Windows (код {ex.NativeErrorCode}). Проверьте имя учётной записи и пароль.";
+                AdminError.Visibility = Visibility.Visible;
+                AdminPassword.Focus();
+            }
+            catch (Exception ex)
+            {
+                AdminError.Text = "Не удалось открыть инженерское окно: " + ex.Message;
+                AdminError.Visibility = Visibility.Visible;
+                AdminPassword.Focus();
+            }
+            finally
+            {
+                password.Dispose();
+                UnlockButton.IsEnabled = true;
+            }
             return;
         }
-        AdminPassword.Clear();
+
+        password.Dispose();
+        ShowEngineerShell();
+    }
+
+    private static bool MatchesPassword(SecureString password, string expected)
+    {
+        var buffer = Marshal.SecureStringToBSTR(password);
+        try
+        {
+            if (Marshal.ReadInt32(buffer, -sizeof(int)) != expected.Length * sizeof(char)) return false;
+            for (var index = 0; index < expected.Length; index++)
+                if ((char)Marshal.ReadInt16(buffer, index * sizeof(char)) != expected[index]) return false;
+            return true;
+        }
+        finally { Marshal.ZeroFreeBSTR(buffer); }
+    }
+
+    private void ShowEngineerShell()
+    {
         AdminUnlock.Visibility = Visibility.Collapsed;
         UserShell.Visibility = Visibility.Collapsed;
         AdminShell.Visibility = Visibility.Visible;
+        AdminTabs.SelectedIndex = 0;
+        AdminNavigation.SelectedIndex = 0;
+        if (engineerOnly) ExitAdminButton.Content = "Закрыть окно";
         SizeToContent = SizeToContent.Manual;
         var area = SystemParameters.WorkArea;
         MinWidth = Math.Min(880, area.Width - 24);
@@ -210,11 +295,8 @@ public partial class MainWindow : Window
         ViewModel.RefreshIdentity();
     }
 
-    private void SetupMode_Changed(object sender, SelectionChangedEventArgs e)
-    {
-        if (ViewModel is null || SetupModeSelector.SelectedItem is not ComboBoxItem selected) return;
-        ViewModel.SetSetupMode((string)selected.Tag == "Accept");
-    }
+    private static string DefaultHistoryDatabasePath() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ITSeti", "Maintenance", "history.db");
 
     private void EventLevel_Changed(object sender, SelectionChangedEventArgs e)
     {
@@ -249,32 +331,33 @@ public partial class MainWindow : Window
     }
     private void RefreshRepairStatus_Click(object sender, RoutedEventArgs e) => ViewModel.RefreshRepairStatus();
 
-    private async void InstallSetup_Click(object sender, RoutedEventArgs e)
+    private async void InstallSetup_Click(object sender, RoutedEventArgs e) => await RunOrganizationInstallAsync(null);
+
+    private async void InstallComponent_Click(object sender, RoutedEventArgs e)
     {
-        if (ViewModel.SetupAcceptanceMode)
-        {
-            MessageBox.Show(this, "Приёмка с изменением прав локальных учётных записей не разрешена: сперва требуется испытание служебного входа на тестовом ПК.", "Приёмка недоступна", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
+        if (sender is Button { Tag: string component }) await RunOrganizationInstallAsync(component);
+    }
+
+    private async Task RunOrganizationInstallAsync(string? component)
+    {
+        if (!ViewModel.BeginSetupInstall()) return;
         var source = ViewModel.SetupSourcePath;
-        IReadOnlyList<string> problems;
-        try { problems = await OrganizationSetupRunner.CheckAsync(source); }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, ex.Message, "Не удалось проверить комплект", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        if (problems.Count > 0)
-        {
-            MessageBox.Show(this, string.Join(Environment.NewLine, problems), "Установка остановлена проверкой комплекта", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        if (MessageBox.Show(this, "Установить AnyDesk, RMS Host, OCS Inventory и панель ИТ-Сети на этом ПК?", "Установка ПО", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
         try
         {
-            ViewModel.SetSetupStatus("Установка ПО выполняется…");
+            var problems = await OrganizationSetupRunner.CheckAsync(source, component);
+            if (problems.Count > 0)
+            {
+                MessageBox.Show(this, string.Join(Environment.NewLine, problems), "Установка остановлена проверкой комплекта", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            var confirmation = component is null ? "Установить или обновить полный комплект ИТ-Сети?" : $"Установить компонент {component}?";
+            if (MessageBox.Show(this, confirmation, "Установка ПО", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+
+            ViewModel.SetSetupStatus(component is null ? "Установка комплекта выполняется…" : $"Установка {component} выполняется…");
             var progress = new Progress<string>(ViewModel.SetSetupStatus);
-            var exitCode = await OrganizationSetupRunner.RunBaseAsync(source!, progress);
+            var exitCode = component is null
+                ? await OrganizationSetupRunner.RunBaseAsync(source!, progress)
+                : await OrganizationSetupRunner.RunComponentAsync(source!, component, progress);
             ViewModel.RefreshSetupAudit(source);
             var message = exitCode == 0 ? "Установка завершена. Проверьте состояние компонентов." : $"Установщик вернул код {exitCode}. Проверьте C:\\ProgramData\\ITSETI\\install.log.";
             ViewModel.SetSetupStatus(message);
@@ -282,9 +365,10 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            ViewModel.SetSetupStatus("Установка не запущена: " + ex.Message);
+            ViewModel.SetSetupStatus("Установка не выполнена: " + ex.Message);
             MessageBox.Show(this, ex.Message, "Установка не выполнена", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+        finally { ViewModel.EndSetupInstall(); }
     }
 
     private void ChooseSetupSource_Click(object sender, RoutedEventArgs e)
@@ -316,6 +400,25 @@ public partial class MainWindow : Window
             MessageBox.Show(this, ex.Message, "TreeSize Free", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
+
+    private void OpenToolsFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var tools = Path.Combine(AppContext.BaseDirectory, "Tools");
+        if (!Directory.Exists(tools))
+        {
+            MessageBox.Show(this, "Папка с диагностическими утилитами не найдена.", "Утилиты", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        try { Process.Start(new ProcessStartInfo("explorer.exe", '"' + tools + '"') { UseShellExecute = true }); }
+        catch (Exception ex) { MessageBox.Show(this, ex.Message, "Не удалось открыть каталог утилит", MessageBoxButton.OK, MessageBoxImage.Warning); }
+    }
+
+    private void LaunchSystemTool_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string key }) return;
+        try { _ = SystemToolsLauncher.Launch(key); }
+        catch (Exception ex) { MessageBox.Show(this, ex.Message, "Системное приложение", MessageBoxButton.OK, MessageBoxImage.Warning); }
+    }
     private async Task LaunchDiskToolAsync(bool diskInfo)
     {
         try
@@ -334,6 +437,11 @@ public partial class MainWindow : Window
     }
     private void ExitAdmin_Click(object sender, RoutedEventArgs e)
     {
+        if (engineerOnly)
+        {
+            Close();
+            return;
+        }
         AdminShell.Visibility = Visibility.Collapsed;
         UserShell.Visibility = Visibility.Visible;
         var area = SystemParameters.WorkArea;

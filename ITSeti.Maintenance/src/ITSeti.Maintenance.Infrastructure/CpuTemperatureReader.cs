@@ -27,10 +27,8 @@ public static class CpuTemperatureReader
                 foreach (var hardware in computer.Hardware.Where(item => item.HardwareType == HardwareType.Cpu))
                     UpdateAndCollect(hardware, readings, zeroSensors);
 
-                var preferred = readings.Where(IsPackageOrCoreTemperature).ToArray();
-                var cpuReadings = preferred.Length > 0 ? preferred : readings.ToArray();
-                if (cpuReadings.Length > 0)
-                    samples.Add(cpuReadings.OrderByDescending(reading => reading.Value).First());
+                if (SelectBestReading(readings) is { } selected)
+                    samples.Add(selected);
 
                 if (sample + 1 < SampleCount) Thread.Sleep(150);
             }
@@ -70,13 +68,39 @@ public static class CpuTemperatureReader
         catch (IOException) { return null; }
     }
 
-    private static bool IsPackageOrCoreTemperature((string Name, double Value) reading) =>
-        reading.Name.Contains("package", StringComparison.OrdinalIgnoreCase)
-        || reading.Name.Contains("tctl", StringComparison.OrdinalIgnoreCase)
-        || reading.Name.Contains("tdie", StringComparison.OrdinalIgnoreCase)
-        || reading.Name.Contains("ccd", StringComparison.OrdinalIgnoreCase)
-        || reading.Name.Contains("core", StringComparison.OrdinalIgnoreCase)
-        || reading.Name.Contains("average", StringComparison.OrdinalIgnoreCase);
+    public static (string Name, double Value)? SelectBestReading(IEnumerable<(string Name, double Value)> readings)
+    {
+        var candidates = readings
+            .Where(reading => !string.IsNullOrWhiteSpace(reading.Name)
+                && double.IsFinite(reading.Value) && reading.Value is >= 5 and <= 120
+                && !IsDistanceToThermalLimit(reading.Name))
+            .ToArray();
+        if (candidates.Length == 0) return null;
+
+        return candidates
+            .OrderByDescending(reading => GetSensorPriority(reading.Name))
+            .ThenByDescending(reading => reading.Value)
+            .First();
+    }
+
+    private static bool IsDistanceToThermalLimit(string name) =>
+        name.Contains("distance", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("tjmax", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("thermal limit", StringComparison.OrdinalIgnoreCase);
+
+    private static int GetSensorPriority(string name)
+    {
+        if (name.Contains("tctl", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("tdie", StringComparison.OrdinalIgnoreCase)) return 5;
+        if (name.Contains("cpu package", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("package id", StringComparison.OrdinalIgnoreCase)) return 4;
+        if (name.Contains("core max", StringComparison.OrdinalIgnoreCase)) return 3;
+        if (name.Contains("ccd", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("core average", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("average", StringComparison.OrdinalIgnoreCase)) return 2;
+        if (name.Contains("core", StringComparison.OrdinalIgnoreCase)) return 1;
+        return 0;
+    }
 
     private static void UpdateAndCollect(IHardware hardware, ICollection<(string Name, double Value)> readings, ISet<string> zeroSensors)
     {

@@ -1,11 +1,21 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 
 namespace ITSeti.Maintenance.Infrastructure;
 
 public sealed class ApplicationUpdateRunner
 {
     private const string UpdateTask = "ITSeti-Maintenance-Update";
+    private static readonly string StatusPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "ITSeti", "Maintenance", "Updates", "last-result.txt");
+
+    public static string? ReadLastStatus()
+    {
+        try { return File.Exists(StatusPath) ? File.ReadAllText(StatusPath).Trim() : null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
 
     public async Task RequestUpdateAsync(CancellationToken cancellationToken = default)
     {

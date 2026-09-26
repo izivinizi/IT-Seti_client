@@ -9,7 +9,8 @@ try {
     $result=Join-Path $testRoot 'result.txt'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $rootPath 'Install-OrganizationSoftware.ps1') -InstallerDirectory $testRoot -ResultFile $result -PreflightOnly
     if($LASTEXITCODE -ne 2){throw 'Modified organization installer was not rejected.'}
-    if((Get-Content -LiteralPath $result -Raw) -notmatch 'changed since audit'){throw 'Rejection reason was not saved.'}
+    $rejection=Get-Content -LiteralPath $result -Raw
+    if($rejection -notmatch 'changed since audit'){throw "Rejection reason was not saved: $rejection"}
     $iss=[IO.File]::ReadAllText((Join-Path $rootPath 'Installer.iss'))
     if(([regex]::Matches($iss,'Name: "\{autodesktop\}')).Count -ne 1){throw 'Installer creates more than one desktop shortcut.'}
     if($iss -notmatch 'SoftwareCheck := TNewCheckBox.Create' -or

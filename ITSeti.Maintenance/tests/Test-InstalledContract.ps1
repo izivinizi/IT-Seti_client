@@ -66,10 +66,36 @@ if($install -notmatch 'ITSeti-Maintenance-OrganizationSetup' -or $install -notma
 if(!$install.Contains('install.log') -or !$install.Contains('install-status.txt') -or !$install.Contains('throw "Не удалось зарегистрировать обязательную задачу')) {throw 'A failed required SYSTEM task must abort installation with logged details.'}
 if(!$install.Contains("'ITSeti-Maintenance-Temperature'") -or !$install.Contains('cpu-temperature.json') -or !$install.Contains("-Execute (Join-Path `$install 'ITSeti.Maintenance.exe')")) {throw 'The SYSTEM CPU-temperature task is not installed.'}
 $tempSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\CpuTemperatureCache.cs'),[Text.Encoding]::UTF8)
-if(!$tempSource.Contains('DateTimeOffset.UtcNow - capturedAt') -or !$tempSource.Contains('ITSeti-Maintenance-Temperature') -or !$tempSource.Contains('"/Run"')) {throw 'Temperature cache expiry or on-demand SYSTEM probe is missing.'}
+if(!$tempSource.Contains('DateTimeOffset.UtcNow - capturedAt') -or !$tempSource.Contains('ITSeti-Maintenance-Temperature') -or !$tempSource.Contains('"/Run"') -or !$tempSource.Contains('RequestFreshAsync') -or !$tempSource.Contains('double.IsFinite')) {throw 'Temperature cache expiry, validation or on-demand SYSTEM probe is missing.'}
+$temperatureReader=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\CpuTemperatureReader.cs'),[Text.Encoding]::UTF8)
+if(!$temperatureReader.Contains('SelectBestReading') -or !$temperatureReader.Contains('IsDistanceToThermalLimit') -or !$temperatureReader.Contains('tctl')) {throw 'CPU temperature sensor ranking must prefer physical temperatures and exclude distance-to-limit sensors.'}
+$installedCheck=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCheck.ps1'),[Text.Encoding]::UTF8)
+if(!$installedCheck.Contains('ITSeti-Maintenance-Temperature') -or !$installedCheck.Contains('WaitForExit(5000)') -or !$installedCheck.Contains('Read-FreshTemperature') -or $installedCheck.Contains('--cpu-temperature-probe')) {throw 'Full checks must reuse the shared SYSTEM temperature probe instead of starting a second reader.'}
+$installedCheckTokens=$null;$installedCheckErrors=$null
+$installedCheckAst=[Management.Automation.Language.Parser]::ParseInput($installedCheck,[ref]$installedCheckTokens,[ref]$installedCheckErrors)
+if($installedCheckErrors){throw 'Installed check has PowerShell syntax errors.'}
+$utcDateFunction=@($installedCheckAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'ConvertTo-UtcDateTimeOffset'},$true))
+$temperatureCacheFunction=@($installedCheckAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Read-FreshTemperature'},$true))
+if($utcDateFunction.Count -ne 1 -or $temperatureCacheFunction.Count -ne 1){throw 'Shared CPU temperature cache helpers were not found.'}
+. ([scriptblock]::Create($utcDateFunction[0].Extent.Text))
+. ([scriptblock]::Create($temperatureCacheFunction[0].Extent.Text))
+$temperatureTestFile=Join-Path $env:TEMP ('ITSeti-temperature-cache-'+[guid]::NewGuid().ToString('N')+'.json')
+try {
+    $temperatureFixture=[pscustomobject]@{TemperatureC=64.5;Status='sensor test';CapturedAtUtc=[DateTimeOffset]::UtcNow.ToString('O')}
+    [IO.File]::WriteAllText($temperatureTestFile,($temperatureFixture | ConvertTo-Json -Compress),[Text.Encoding]::UTF8)
+    if((Read-FreshTemperature $temperatureTestFile 45).TemperatureC -ne 64.5){throw 'PowerShell could not read a fresh shared CPU temperature cache.'}
+    $temperatureFixture.CapturedAtUtc=[DateTimeOffset]::UtcNow.AddMinutes(-2).ToString('O')
+    [IO.File]::WriteAllText($temperatureTestFile,($temperatureFixture | ConvertTo-Json -Compress),[Text.Encoding]::UTF8)
+    if($null -ne (Read-FreshTemperature $temperatureTestFile 45)){throw 'PowerShell accepted a stale shared CPU temperature cache.'}
+} finally {Remove-Item -LiteralPath $temperatureTestFile -Force -ErrorAction SilentlyContinue}
+$summary=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Summary.ps1'),[Text.Encoding]::UTF8)
+if(!$summary.Contains("`$identity -match '(?i)(distance|tjmax|thermal limit)'")){throw 'PowerShell fallback can still misreport thermal-limit distance as CPU temperature.'}
 $viewModel=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainViewModel.cs'),[Text.Encoding]::UTF8)
 $window=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml.cs'),[Text.Encoding]::UTF8)
-if(!$viewModel.Contains('RefreshLiveStatusAsync') -or !$viewModel.Contains('RunLiveAsync') -or !$window.Contains('TimeSpan.FromSeconds(10)')) {throw 'Initial and periodic live resource refresh is missing.'}
+$liveRefreshStart=$viewModel.IndexOf('public async Task RefreshLiveStatusAsync',[StringComparison]::Ordinal)
+$liveRefreshEnd=$viewModel.IndexOf('private async Task RequestTemperatureProbeAsync',[StringComparison]::Ordinal)
+$liveRefresh=if($liveRefreshStart -ge 0 -and $liveRefreshEnd -gt $liveRefreshStart){$viewModel.Substring($liveRefreshStart,$liveRefreshEnd-$liveRefreshStart)}else{''}
+if(!$liveRefresh.Contains('RunLiveAsync') -or !$window.Contains('TimeSpan.FromSeconds(10)') -or !$liveRefresh.Contains('CpuTemperatureCache.ReadFresh(maxAge: TimeSpan.FromSeconds(45))') -or !$liveRefresh.Contains('CpuTemperatureC = temperature?.TemperatureC') -or $liveRefresh.Contains('Selected?.CpuTemperatureC')) {throw 'Live resource refresh must be periodic, fresh and must not reuse stale temperature values.'}
 $treeSize=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\TreeSizeLauncher.cs'),[Text.Encoding]::UTF8)
 $diskTools=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\FullDiagnosticsRunner.cs'),[Text.Encoding]::UTF8)
 $elevatedLauncher=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\ElevatedProcessLauncher.cs'),[Text.Encoding]::UTF8)
@@ -80,9 +106,25 @@ if(!$treeSize.Contains('ElevatedProcessLauncher.CreateStartInfo') -or $treeSize 
 }
 $organizationRunner=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\OrganizationSetupRunner.cs'),[Text.Encoding]::UTF8)
 $organizationWorker=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledOrganizationSetup.ps1'),[Text.Encoding]::UTF8)
+$engineerLauncher=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\EngineerWindowLauncher.cs'),[Text.Encoding]::UTF8)
+if(!$engineerLauncher.Contains('WorkingDirectory = AppContext.BaseDirectory') -or
+   !$engineerLauncher.Contains('UserName = userName') -or !$engineerLauncher.Contains('Password = password') -or
+   !$engineerLauncher.Contains('LogonUserW') -or !$engineerLauncher.Contains('ZeroFreeGlobalAllocUnicode')) {
+    throw 'Engineer login must validate credentials without leaking the password and use a valid app working directory.'
+}
 if($organizationRunner -match 'Verb\s*=\s*"runas"' -or !$organizationRunner.Contains('ITSeti-Maintenance-OrganizationSetup') -or
+   !$organizationRunner.Contains('RunComponentAsync') -or !$organizationRunner.Contains('PanelFileHashes') -or
+   !$organizationWorker.Contains('$stagedRoot=Join-Path $run') -or !$organizationWorker.Contains("'AnyDesk','RMS','OCS','Panel'") -or
    $organizationWorker -notmatch 'Install-OrganizationSoftware.ps1' -or $organizationWorker -notmatch 'installer-result.txt') {
     throw 'Organization software installation must use the verified SYSTEM task instead of an interactive elevation prompt.'
+}
+$organizationHelper=[IO.File]::ReadAllText((Join-Path $Root 'Install-OrganizationSoftware.ps1'),[Text.Encoding]::UTF8)
+$softwareView=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml'),[Text.Encoding]::UTF8)
+if(!$organizationHelper.Contains('ValidateSet(''AnyDesk'', ''RMS'', ''OCS'', ''Panel'')') -or
+   !$organizationHelper.Contains('Test-PinnedFile') -or !$organizationHelper.Contains('Panel file failed verification') -or
+   $softwareView.Contains('SetupModeSelector') -or $softwareView.Contains('AcceptanceWarning') -or
+   !$softwareView.Contains('InstallComponent_Click') -or !$softwareView.Contains('Установить всё')) {
+    throw 'Software screen must use component allowlisting and omit the acceptance mode.'
 }
 $updateRunner=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\ApplicationUpdateRunner.cs'),[Text.Encoding]::UTF8)
 if($updateRunner -match 'Verb\s*=\s*"runas"' -or !$updateRunner.Contains('ITSeti-Maintenance-Update') -or
@@ -105,10 +147,11 @@ if(!$install.Contains('ITSeti-Maintenance-DisableUpdates') -or !$install.Contain
 $updater=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Update-Application.ps1'
 $updaterTokens=$null;$updaterErrors=$null
 [void][Management.Automation.Language.Parser]::ParseFile($updater,[ref]$updaterTokens,[ref]$updaterErrors)
-if($updaterErrors){throw 'Application updater has PowerShell syntax errors.'}
+if(@($updaterErrors).Count -gt 0){throw ("Application updater has PowerShell syntax errors: " + (($updaterErrors | ForEach-Object Message) -join '; '))}
 $updaterSource=[IO.File]::ReadAllText($updater,[Text.Encoding]::UTF8)
 if(!$install.Contains('ITSeti-Maintenance-Update') -or !$install.Contains('Update-Application.ps1') -or
    !$updaterSource.Contains('S-1-5-18') -or !$updaterSource.Contains('Get-FileHash') -or
+   !$updaterSource.Contains('last-result.txt') -or !$updaterSource.Contains('Ошибка обновления:') -or
    !$updaterSource.Contains('ITSeti-Maintenance-Setup.exe') -or !$updaterSource.Contains('ITSeti.Maintenance.dll') -or
    !$updaterSource.Contains('Split-Path $PSScriptRoot -Parent') -or
    !$updaterSource.Contains('/releases/latest/download/release.json') -or

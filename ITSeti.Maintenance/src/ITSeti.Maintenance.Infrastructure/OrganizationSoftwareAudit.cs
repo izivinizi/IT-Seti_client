@@ -3,7 +3,11 @@ using Microsoft.Win32;
 
 namespace ITSeti.Maintenance.Infrastructure;
 
-public sealed record OrganizationComponent(string Name, string State, string Detail, string Package, bool NeedsAttention);
+public sealed record OrganizationComponent(string Name, string State, string Detail, string Package, bool NeedsAttention, string InstallKey)
+{
+    public bool CanInstall => !string.IsNullOrWhiteSpace(InstallKey) && Package == "Файл есть" && State != "Установлено";
+    public string InstallLabel => State == "Установлено" ? "Установлено" : "Установить";
+}
 
 public static class OrganizationSoftwareAudit
 {
@@ -29,7 +33,7 @@ public static class OrganizationSoftwareAudit
         return null;
     }
 
-    public static IReadOnlyList<OrganizationComponent> Inspect(string? source, bool acceptance)
+    public static IReadOnlyList<OrganizationComponent> Inspect(string? source)
     {
         var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
         var programFiles86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
@@ -41,22 +45,15 @@ public static class OrganizationSoftwareAudit
         var panel = Path.Combine(data, "ITSETI", "DesktopInfo.ini");
         var rows = new List<OrganizationComponent>
         {
-            Evaluate("AnyDesk", anyDesk, HasService("AnyDesk"), source, "AnyDesk-installer.exe"),
-            Evaluate("RMS Host", rms, HasService("RManService"), source, "Host-IT-SETI.RMS.7.7.3.0v3.msi", new Version(7, 7, 3, 0)),
-            Evaluate("OCS Inventory", File.Exists(ocs) ? ocs : null, HasService("OCS Inventory Service"), source, "OCS-Agent-Installerv4.exe"),
-            Evaluate("Панель ИТ-Сети", File.Exists(desktop) ? desktop : null, File.Exists(panel), source, "DesktopInfo3230.exe", new Version(3, 23, 0))
+            Evaluate("AnyDesk", "AnyDesk", anyDesk, HasService("AnyDesk"), source, "AnyDesk-installer.exe"),
+            Evaluate("RMS Host", "RMS", rms, HasService("RManService"), source, "Host-IT-SETI.RMS.7.7.3.0v3.msi", new Version(7, 7, 3, 0)),
+            Evaluate("OCS Inventory", "OCS", File.Exists(ocs) ? ocs : null, HasService("OCS Inventory Service"), source, "OCS-Agent-Installerv4.exe"),
+            Evaluate("Панель ИТ-Сети", "Panel", File.Exists(desktop) ? desktop : null, File.Exists(panel), source, "DesktopInfo3230.exe", new Version(3, 23, 0))
         };
-        if (acceptance)
-        {
-            rows.Add(new("Карточка ПК", "При приёмке", "Отчёт в папке reports после подтверждённой приёмки.",
-                PackageState(source, "..", "PcReport.ps1"), false));
-            rows.Add(new("Локальная учётка и права", "Требует подтверждения", "Приёмка может лишить владельца прав администратора.",
-                "Автоматическое изменение прав отключено", true));
-        }
         return rows;
     }
 
-    private static OrganizationComponent Evaluate(string name, string? exe, bool serviceOrPanel, string? source,
+    private static OrganizationComponent Evaluate(string name, string installKey, string? exe, bool serviceOrPanel, string? source,
         string package, Version? required = null)
     {
         var file = exe is not null && File.Exists(exe);
@@ -69,7 +66,7 @@ public static class OrganizationSoftwareAudit
             ? $"Найдены файлы и {(name == "Панель ИТ-Сети" ? "панель" : "служба")}." : file
             ? "Файлы есть, но служба или панель не найдена." : serviceOrPanel
             ? "Служба или панель есть, но файл программы не найден." : "Программа не обнаружена по штатному пути.";
-        return new(name, state, detail, PackageState(source, "packages", package), state != "Установлено");
+        return new(name, state, detail, PackageState(source, "packages", package), state != "Установлено", installKey);
     }
 
     private static string PackageState(string? source, string folder, string file)

@@ -352,6 +352,7 @@ function Get-CpuTemperatureC {
             foreach($sensor in @(Get-WmiObject -Namespace $namespace -Class Sensor -ErrorAction Stop)) {
                 if([string]$sensor.SensorType -ne 'Temperature'){continue}
                 $identity=([string]$sensor.Identifier+' '+[string]$sensor.Parent+' '+[string]$sensor.Name)
+                if($identity -match '(?i)(distance|tjmax|thermal limit)'){continue}
                 if($identity -notmatch '(?i)(/(intelcpu|amdcpu)/\d+/|CPU\s*(Package|Core)|Tctl|Tdie|Package\s*id)'){continue}
                 $value=0.0
             if([double]::TryParse([string]$sensor.Value,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$value) -and $value -gt 0 -and $value -le 120){$values+= $value}
