@@ -99,7 +99,11 @@ internal static class Program
                     || ((TextBox)support.FindName("RmsValue")!).Text != "123-456"
                     || ((TextBox)support.FindName("AnyDeskValue")!).Text != "123456789"
                     || !((TextBox)support.FindName("AnyDeskValue")!).IsReadOnly
-                    || !((Button)support.FindName("CopyAllButton")!).IsEnabled)
+                    || !((TextBox)support.FindName("InventoryValue")!).IsReadOnlyCaretVisible
+                    || !((TextBox)support.FindName("RmsValue")!).IsReadOnlyCaretVisible
+                    || !((TextBox)support.FindName("AnyDeskValue")!).IsReadOnlyCaretVisible
+                    || !((Button)support.FindName("CopyAllButton")!).IsEnabled
+                    || CountButtons((DependencyObject)support.FindName("IdentityPanel")!) != 1)
                     throw new Exception("Support dialog is missing selectable PC identifiers or quick-copy action");
                 Capture(support, Path.Combine(output, "support.png"));
                 support.Close();
@@ -228,6 +232,9 @@ internal static class Program
                     throw new Exception("Admin mode did not open");
                 if (window.ViewModel.UserCpuName == "Модель процессора не определена")
                     throw new Exception("Processor model is missing below the usage graph");
+                if (window.FindName("AdminRmsValue") is not TextBox { IsReadOnly: true, IsReadOnlyCaretVisible: true }
+                    || window.FindName("AdminAnyDeskValue") is not TextBox { IsReadOnly: true, IsReadOnlyCaretVisible: true })
+                    throw new Exception("Engineer overview is missing mouse-selectable RMS and AnyDesk IDs");
                 window.ViewModel.CheckProgressEntries.Add(new("12:00:01", "Проверка", "Оборудование и нагрузка проверены"));
                 window.ViewModel.CheckProgressEntries.Add(new("12:00:02", "Диски", "CrystalDiskInfo: SMART data received"));
                 window.ViewModel.CheckProgressEntries.Add(new("12:00:03", "Диски", "DiskSpd: read, pass 1/2 - 420 MB/s"));
@@ -583,6 +590,22 @@ internal static class Program
             .Any(i => i.Severity == "Critical" && i.Title.Contains("требует проверки")))
             throw new Exception("Windows disk health missing from full user result");
         if (DiagnosticRules.GetFindings(snapshot).Count != 1) throw new Exception("SSD read threshold failed");
+        var kernelPowerNoise = new[]
+        {
+            new EventDetails("System", "Microsoft-Windows-Kernel-Power", 41, 1, "now", "BugcheckCode: 0", 101),
+            new EventDetails("System", "Microsoft-Windows-Kernel-Power", 41, 1, "now", "BugcheckCode: 0", 102)
+        };
+        if (DiagnosticRules.GetActionableEvents(kernelPowerNoise).Count != 0
+            || DiagnosticRules.GetFindings(snapshot with { Full = full with { Events = kernelPowerNoise.ToList() } })
+                .Any(finding => finding.Contains("Критических событий", StringComparison.Ordinal)))
+            throw new Exception("One or two Kernel-Power 41 events with BugcheckCode 0 must not count as errors");
+        var frequentKernelPower = kernelPowerNoise.Append(kernelPowerNoise[0] with { RecordId = 103 }).ToArray();
+        if (DiagnosticRules.GetActionableEvents(frequentKernelPower).Count != 3
+            || !DiagnosticRules.GetFindings(snapshot with { Full = full with { Events = frequentKernelPower.ToList() } })
+                .Any(finding => finding.Contains("Критических событий в доступной выборке: 3", StringComparison.Ordinal)))
+            throw new Exception("Three Kernel-Power 41 events with BugcheckCode 0 must be reported");
+        if (DiagnosticRules.GetActionableEvents([kernelPowerNoise[0] with { Message = "BugcheckCode: 1" }]).Count != 1)
+            throw new Exception("A nonzero Kernel-Power bugcheck must remain actionable");
         var process = new ProcessDetails("AmneziaVPN.exe", "AmneziaVPN Service", "Amnezia", "Valid", @"C:\Apps\AmneziaVPN.exe");
         var withLogAndProcess = snapshot with { Full = full with
         {
@@ -852,6 +875,14 @@ internal static class Program
             throw new Exception("Successful cleanup summary includes implementation details");
         if (Format("Пользователь: Завершена | Система: Файлы обновлений не очищены: доступа нет") != "Очистка профиля выполнена; системная очистка не выполнена")
             throw new Exception("Partial cleanup summary does not explain the missing system cleanup");
+    }
+
+    private static int CountButtons(DependencyObject parent)
+    {
+        var count = parent is Button ? 1 : 0;
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+            count += CountButtons(VisualTreeHelper.GetChild(parent, i));
+        return count;
     }
 
     private static T? Find<T>(DependencyObject parent) where T : DependencyObject

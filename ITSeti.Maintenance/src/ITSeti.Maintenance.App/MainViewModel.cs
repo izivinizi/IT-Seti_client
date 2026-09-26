@@ -174,6 +174,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public string? InventoryNumber => identity.InventoryNumber;
     public string? RmsId => identity.RmsId;
     public string? AnyDeskId => identity.AnyDeskId;
+    public string AdminRmsLabel => identity.RmsId ?? "Не найден";
+    public string AdminAnyDeskLabel => identity.AnyDeskId ?? "Не найден";
     public bool HasInventoryNumber => identity.InventoryNumber is not null;
     public bool HasRmsId => identity.RmsId is not null;
     public bool HasAnyDeskId => identity.AnyDeskId is not null;
@@ -706,7 +708,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                         ? $"Системный диск: чтение {read:N0} МБ/с" : issue.Title).ToList();
             if (Selected.Full is { } full)
             {
-                issues.AddRange(full.Events.Where(e => e.Level == 1).Select(e => $"Критическое событие Windows: {e.Provider}, код {e.Id}.").Distinct().Take(3));
+                issues.AddRange(DiagnosticRules.GetActionableEvents(full.Events).Where(e => e.Level == 1)
+                    .Select(e => $"Критическое событие Windows: {e.Provider}, код {e.Id}.").Distinct().Take(3));
                 if (full.Benchmark.State is "Failed" or "Skipped") issues.Add("Скорость диска: нет результата");
                 if (full.SmartDisks.Count == 0) issues.Add("SMART: нет данных");
             }
@@ -893,7 +896,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         ? $"Вне списка: {f.Processes.Count} · Недоступно: {f.ProcessUnavailable}. Не является списком вредоносных программ."
         : "Запущенные программы в быстрой проверке не проверялись.";
     public string EventStatus => Selected?.Full is { } f
-        ? $"За 7 дней: критических {f.Events.Count(e => e.Level == 1)}, ошибок {f.Events.Count(e => e.Level == 2)}, предупреждений {f.Events.Count(e => e.Level == 3)}"
+        ? $"За 7 дней: критических {DiagnosticRules.GetActionableEvents(f.Events).Count(e => e.Level == 1)}, ошибок {f.Events.Count(e => e.Level == 2)}, предупреждений {f.Events.Count(e => e.Level == 3)}"
         : "События Windows в быстрой проверке не проверялись.";
     public string BenchmarkTitle => Selected?.Full?.Benchmark is { } b ? $"{b.Engine}: {b.Drive} · {b.MediaType} · SEQ, {b.Passes} прохода, 1 GiB" : "Тест скорости не выполнялся";
     public string BenchmarkRead => Selected?.Full?.Benchmark.ReadLabel ?? "—";
@@ -928,8 +931,10 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                     var match = old.SmartDisks.Where(d => d.Model == disk.Model).ToList();
                     if (match.Count == 1 && match[0].Status != disk.Status) lines.Add($"SMART {disk.Model}: {match[0].Status} → {disk.Status}");
                 }
-                var oldKeys = old.Events.Where(item => item.Level <= 2).Select(EventIdentity).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                var newErrors = current.Events.Where(item => item.Level <= 2 && !oldKeys.Contains(EventIdentity(item)))
+                var oldKeys = DiagnosticRules.GetActionableEvents(old.Events).Where(item => item.Level <= 2)
+                    .Select(EventIdentity).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var newErrors = DiagnosticRules.GetActionableEvents(current.Events)
+                    .Where(item => item.Level <= 2 && !oldKeys.Contains(EventIdentity(item)))
                     .GroupBy(item => (item.Provider, item.Id, item.Level)).Select(group => group.First()).ToArray();
                 lines.Add(newErrors.Length == 0
                     ? "Новые ошибки Windows: нет"

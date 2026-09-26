@@ -247,8 +247,10 @@ function Get-SummaryLines {
     if($s.PublisherSkipped -or $s.PublisherMetadataSkipped){'Исключено по издателю: {0}; по полю файла без подписи: {1} (не проверка подлинности).' -f $s.PublisherSkipped,$s.PublisherMetadataSkipped}
     if(@($s.Processes).Count){Get-ProcessTableLines $s.Processes}
     '04 | ВАЖНЫЕ СОБЫТИЯ'
-    'Журналы за {0} дн.: критических {1}, ошибок {2}, предупреждений {3}{4}' -f $Days,@($s.Events | Where-Object {$_.Level -eq 1}).Count,@($s.Events | Where-Object {$_.Level -eq 2}).Count,@($s.Events | Where-Object {$_.Level -eq 3}).Count,$(if($s.EventLimited -or $s.EventUnavailable){' (неполные данные)'})
-    $groups=$s.Events | Group-Object ProviderName,Id,Level | Sort-Object @{e={($_.Group | Measure-Object Level -Minimum).Minimum};Ascending=$true},@{e='Count';Descending=$true}
+    $zeroBugcheckCount=@($s.Events | Where-Object {$_.Id -eq 41 -and $_.ProviderName -match 'Kernel-Power' -and $_.Message -match '\bBugcheckCode\s*[:=]\s*0(?:\D|$)'}).Count
+    $actionableEvents=@($s.Events | Where-Object {!($zeroBugcheckCount -gt 0 -and $zeroBugcheckCount -lt 3 -and $_.Id -eq 41 -and $_.ProviderName -match 'Kernel-Power' -and $_.Message -match '\bBugcheckCode\s*[:=]\s*0(?:\D|$)')})
+    'Журналы за {0} дн.: критических {1}, ошибок {2}, предупреждений {3}{4}' -f $Days,@($actionableEvents | Where-Object {$_.Level -eq 1}).Count,@($s.Events | Where-Object {$_.Level -eq 2}).Count,@($s.Events | Where-Object {$_.Level -eq 3}).Count,$(if($s.EventLimited -or $s.EventUnavailable){' (неполные данные)'})
+    $groups=$actionableEvents | Group-Object ProviderName,Id,Level | Sort-Object @{e={($_.Group | Measure-Object Level -Minimum).Minimum};Ascending=$true},@{e='Count';Descending=$true}
     foreach($g in ($groups | Select-Object -First 3)) {
         $e=$g.Group[0]
         '  {0}, ID {1}: {2} раз' -f $e.ProviderName,$e.Id,$g.Count

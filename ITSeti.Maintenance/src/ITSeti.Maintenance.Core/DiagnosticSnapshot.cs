@@ -44,7 +44,7 @@ public sealed record DiagnosticSnapshot(
             var details = findings.Take(2).ToList();
             if (Full is { } full)
             {
-                details.AddRange(full.Events.Where(item => item.Level <= 2).OrderBy(item => item.Level)
+                details.AddRange(DiagnosticRules.GetActionableEvents(full.Events).Where(item => item.Level <= 2).OrderBy(item => item.Level)
                     .Take(Math.Max(0, 3 - details.Count)).Select(item => $"Ошибка Windows: {item.Provider} #{item.Id}"));
             }
             if (details.Count < 3) details.AddRange(findings.Skip(details.Count).Take(3 - details.Count));

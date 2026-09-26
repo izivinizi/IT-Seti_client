@@ -15,12 +15,12 @@ $result=Join-Path $run 'result.txt'
 $temporary=Join-Path $run 'result.pending'
 try {
     $payload=[IO.File]::ReadAllText($request.FullName,[Text.Encoding]::UTF8) | ConvertFrom-Json
-    $sourceValue=[string]$payload.Source
-    $source=if($sourceValue){[IO.Path]::GetFullPath($sourceValue)}else{$null}
     $component=[string]$payload.Component
     $operation=if($payload.Operation){[string]$payload.Operation}else{'Install'}
     if($component -and $component -notin @('AnyDesk','RMS','OCS','Panel')){throw 'Unsupported organization software component.'}
     if($operation -notin @('Install','Uninstall')){throw 'Unsupported organization setup operation.'}
+    $sourceValue=if($operation -eq 'Install'){[string]$payload.Source}else{''}
+    $source=if($sourceValue){[IO.Path]::GetFullPath($sourceValue)}else{$null}
     if($operation -eq 'Uninstall'){
         if(!$component){throw 'Choose one installed component to uninstall.'}
         $uninstallKey=if($component -eq 'Panel'){'DesktopInfo'}else{$component}

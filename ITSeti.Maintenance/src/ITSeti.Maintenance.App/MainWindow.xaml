@@ -139,6 +139,12 @@
         <StackPanel><TextBlock Text="Инвентарный номер" FontWeight="SemiBold"/><TextBlock Text="{Binding ScheduleStatus}" Style="{StaticResource SecondaryText}" Margin="0,4,12,0"/></StackPanel>
         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top"><TextBox x:Name="InventoryInput" Text="{Binding AdminInventoryInput, UpdateSourceTrigger=PropertyChanged}" MaxLength="4" Width="82" Height="36" Padding="9,6" ToolTip="Четыре цифры инвентарного номера"/><Button Click="SaveInventory_Click" Width="36" Height="36" Margin="7,0,0,0" Cursor="Hand" ToolTip="Сохранить инвентарный номер"><TextBlock Text="&#xE74E;" FontFamily="Segoe MDL2 Assets"/></Button></StackPanel>
        </Grid>
+       <Border BorderBrush="#DDE6EB" BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,18" Background="#F7FAFD">
+        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+         <StackPanel><TextBlock Text="RMS" FontSize="14" Foreground="#354A5E"/><TextBox x:Name="AdminRmsValue" Text="{Binding AdminRmsLabel, Mode=OneWay}" IsReadOnly="True" IsReadOnlyCaretVisible="True" IsTabStop="False" BorderThickness="0" Background="Transparent" Padding="0" Foreground="#203A50" FontWeight="SemiBold" ToolTip="Выделите мышью, чтобы скопировать номер RMS" Margin="0,3,14,0"/></StackPanel>
+         <StackPanel Grid.Column="1"><TextBlock Text="AnyDesk" FontSize="14" Foreground="#354A5E"/><TextBox x:Name="AdminAnyDeskValue" Text="{Binding AdminAnyDeskLabel, Mode=OneWay}" IsReadOnly="True" IsReadOnlyCaretVisible="True" IsTabStop="False" BorderThickness="0" Background="Transparent" Padding="0" Foreground="#203A50" FontWeight="SemiBold" ToolTip="Выделите мышью, чтобы скопировать номер AnyDesk" Margin="0,3,0,0"/></StackPanel>
+        </Grid>
+       </Border>
         <TextBlock Text="Системный диск" Style="{StaticResource SectionHeading}" Margin="0,0,0,6"/>
          <TextBlock Text="{Binding SystemDiskSummary}" Foreground="{Binding DiskStatusBrush}" TextWrapping="Wrap" Margin="0,0,0,8"/>
        <Border BorderBrush="#DDE6EB" BorderThickness="0,1,0,0" Margin="0,20,0,0" Padding="0,16,0,0">

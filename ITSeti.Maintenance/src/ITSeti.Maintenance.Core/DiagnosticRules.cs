@@ -4,6 +4,19 @@ namespace ITSeti.Maintenance.Core;
 
 public static class DiagnosticRules
 {
+    public static IReadOnlyList<EventDetails> GetActionableEvents(IEnumerable<EventDetails> events)
+    {
+        var captured = events.ToArray();
+        var powerLossEvents = captured.Count(IsKernelPower41WithZeroBugcheckCode);
+        return powerLossEvents is > 0 and < 3
+            ? captured.Where(item => !IsKernelPower41WithZeroBugcheckCode(item)).ToArray()
+            : captured;
+    }
+
+    private static bool IsKernelPower41WithZeroBugcheckCode(EventDetails item) =>
+        item.Id == 41 && item.Provider.Contains("Kernel-Power", StringComparison.OrdinalIgnoreCase)
+        && Regex.IsMatch(item.Message, @"\bBugcheckCode\s*[:=]\s*0(?:\D|$)", RegexOptions.IgnoreCase);
+
     public static IReadOnlyList<UserIssue> GetUserIssues(DiagnosticSnapshot snapshot)
     {
         var issues = new List<UserIssue>();
@@ -101,7 +114,7 @@ public static class DiagnosticRules
         foreach (var disk in (full?.PhysicalDisks ?? snapshot.QuickDisks ?? []).Where(d => HasBadWindowsHealth(d.Health)))
             findings.Add($"Windows: тревожное состояние {disk.Model}: {disk.Health}");
         if (full is null) return findings;
-        var critical = full.Events.Count(e => e.Level == 1);
+        var critical = GetActionableEvents(full.Events).Count(e => e.Level == 1);
         if (critical > 0) findings.Add($"Критических событий в доступной выборке: {critical}");
         foreach (var disk in full.SmartDisks)
         {

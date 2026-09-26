@@ -29,10 +29,6 @@ public partial class SupportDialog : Window
         catch (Exception ex) { CopyStatus.Text = $"Не удалось скопировать: {ex.Message}"; }
     }
 
-    private void CopyInventory_Click(object sender, RoutedEventArgs e) => CopyValue(InventoryValue.Text, "Инвентарный номер");
-    private void CopyRms_Click(object sender, RoutedEventArgs e) => CopyValue(RmsValue.Text, "Номер RMS");
-    private void CopyAnyDesk_Click(object sender, RoutedEventArgs e) => CopyValue(AnyDeskValue.Text, "Номер AnyDesk");
-
     private void CopyAll_Click(object sender, RoutedEventArgs e)
     {
         var text = $"Инв. номер: {InventoryValue.Text}{Environment.NewLine}RMS: {RmsValue.Text}{Environment.NewLine}AnyDesk: {AnyDeskValue.Text}";

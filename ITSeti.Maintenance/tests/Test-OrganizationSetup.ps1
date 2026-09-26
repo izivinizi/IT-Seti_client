@@ -22,6 +22,13 @@ try {
     if($install -notmatch 'if\(\$PreinstalledApp\)\{' -or $install -notmatch 'Remove-Item -LiteralPath \$path'){
         throw 'Legacy shortcuts are not removed during EXE installation.'
     }
+    $worker=[IO.File]::ReadAllText((Join-Path $rootPath 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledOrganizationSetup.ps1'))
+    $operationIndex=$worker.IndexOf('$operation=if($payload.Operation)',[StringComparison]::Ordinal)
+    $sourceIndex=$worker.IndexOf('$source=if($sourceValue){[IO.Path]::GetFullPath($sourceValue)}',[StringComparison]::Ordinal)
+    if($operationIndex -lt 0 -or $sourceIndex -le $operationIndex -or
+       $worker -notmatch '\$sourceValue=if\(\$operation -eq ''Install''\)'){
+        throw 'Uninstall requests must bypass source-path normalization.'
+    }
     'PASS: unsafe package refused; optional installer task and single desktop shortcut present.'
     $global:LASTEXITCODE=0
 } finally {
