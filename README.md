@@ -6,7 +6,7 @@
 
 ![Главное окно пользователя](ITSeti.Maintenance/docs/images/user-home.png)
 
-**Текущая версия: 0.10.1** · [Скачать установщик](https://github.com/izivinizi/IT-Seti_client/releases/latest/download/ITSeti-Maintenance-Setup.exe) · [Все релизы](https://github.com/izivinizi/IT-Seti_client/releases)
+**Текущая версия: 1.0.1** · [Скачать установщик](https://github.com/izivinizi/IT-Seti_client/releases/latest/download/ITSeti-Maintenance-Setup.exe) · [Все релизы](https://github.com/izivinizi/IT-Seti_client/releases)
 
 ## Возможности
 
