@@ -122,7 +122,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private bool applicationUpdateRunning;
     private string applicationUpdateStatus = ApplicationUpdateRunner.ReadLastStatus() ?? "Проверка обновлений ещё не выполнялась";
     public bool HasSetupSource => setupSource is not null;
-    public bool CanInstallSetup => !busy && !setupInstallRunning && HasSetupSource;
+    public bool CanInstallSetup => !setupInstallRunning && HasSetupSource;
+    public bool CanManageSetup => !setupInstallRunning;
     public bool CanLaunchDiskTools => fullRunner is FullDiagnosticsRunner;
     public string SoftwareActionStatus => softwareActionStatus;
     public string SetupSource => setupSource ?? "Комплект ITSETI-Setup не найден";
@@ -152,6 +153,11 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private bool cleanupRunning;
     private bool repairRunning;
     private bool windowsUpdateActionRunning;
+    private bool windowsDefenderActionRunning;
+    private bool windowsDefenderStatusRunning;
+    private bool canManageWindowsDefender;
+    private WindowsDefenderState? windowsDefenderState;
+    private string windowsDefenderStatus = "Состояние защиты не проверено";
     private string? cleanupResult;
     private string? repairResult;
     private string windowsUpdateStatus = "Проверка обновлений не запускалась";
@@ -159,15 +165,18 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private string status = "Загрузка истории…";
     private string? userStatusOverride;
     private readonly MachineIdentityStore identityStore = new();
-    private MachineIdentity identity = new(null, null, []);
+    private MachineIdentity identity = new(null, null, null, []);
     private string adminInventoryInput = "";
     public string AdminInventoryInput { get => adminInventoryInput; set { adminInventoryInput = value; Notify(); } }
     public string UserInventoryLabel => identity.InventoryNumber is { } number ? $"Инв. № {number}" : "Инв. № не указан";
     public string UserRmsLabel => identity.RmsId is { } id ? $"RMS: {id}" : "RMS: не найден";
+    public string UserAnyDeskLabel => identity.AnyDeskId is { } id ? $"AnyDesk: {id}" : "AnyDesk: не найден";
     public string? InventoryNumber => identity.InventoryNumber;
     public string? RmsId => identity.RmsId;
+    public string? AnyDeskId => identity.AnyDeskId;
     public bool HasInventoryNumber => identity.InventoryNumber is not null;
     public bool HasRmsId => identity.RmsId is not null;
+    public bool HasAnyDeskId => identity.AnyDeskId is not null;
     public string UserIpLabel => identity.IpAddresses.Count > 0
         ? "IP: " + string.Join(", ", identity.IpAddresses.Take(3)) + (identity.IpAddresses.Count > 3 ? $" (+{identity.IpAddresses.Count - 3})" : "")
         : "IP: нет подключения";
@@ -423,7 +432,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
 
     public bool BeginSetupInstall()
     {
-        if (!CanInstallSetup) return false;
+        if (!CanManageSetup) return false;
         setupInstallRunning = true;
         Notify();
         return true;
@@ -448,6 +457,16 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public bool CanChangeWindowsUpdatePolicy => !busy && !windowsUpdateActionRunning;
     public string WindowsUpdateStatus => windowsUpdateStatus;
     public string WindowsUpdatePolicyStatus => windowsUpdatePolicyStatus;
+    public bool CanToggleWindowsDefender => canManageWindowsDefender && !busy && !windowsDefenderActionRunning && !windowsDefenderStatusRunning
+        && windowsDefenderState is { Available: true, RealTimeProtectionEnabled: not null };
+    public string WindowsDefenderButtonLabel => windowsDefenderState?.RealTimeProtectionEnabled switch
+    {
+        true => "Отключить Защитник",
+        false => "Включить Защитник",
+        _ => "Защитник недоступен"
+    };
+    public string WindowsDefenderStatus => windowsDefenderStatus;
+    public bool? WindowsDefenderEnabled => windowsDefenderState?.RealTimeProtectionEnabled;
     public bool IsBusy => busy;
     public bool IsBackgroundMaintenanceRunning => cleanupRunning || repairRunning;
     public string CleanupStatusDetails => cleanupResult ?? UserCleanupRunner.LatestSummary;
@@ -739,6 +758,56 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     }
     public void RefreshRepairStatus() => Notify();
     public void RefreshMaintenanceStatus() => Notify();
+
+    public void SetWindowsDefenderAccess(bool isAdministrator)
+    {
+        canManageWindowsDefender = isAdministrator;
+        if (!isAdministrator) windowsDefenderStatus = "Для изменения нужен отдельный инженерский режим с правами администратора.";
+        Notify();
+    }
+
+    public async Task RefreshWindowsDefenderStatusAsync()
+    {
+        if (!canManageWindowsDefender || windowsDefenderStatusRunning || windowsDefenderActionRunning) return;
+        windowsDefenderStatusRunning = true;
+        windowsDefenderStatus = "Проверяем состояние Microsoft Defender…";
+        Notify();
+        try
+        {
+            windowsDefenderState = await new WindowsDefenderController().ReadStatusAsync();
+            windowsDefenderStatus = windowsDefenderState.Message;
+        }
+        catch (Exception ex)
+        {
+            windowsDefenderState = null;
+            windowsDefenderStatus = "Не удалось прочитать состояние защиты: " + ex.Message;
+        }
+        finally { windowsDefenderStatusRunning = false; Notify(); }
+    }
+
+    public async Task ToggleWindowsDefenderAsync()
+    {
+        if (!CanToggleWindowsDefender || windowsDefenderState?.RealTimeProtectionEnabled is not { } current) return;
+        windowsDefenderActionRunning = true;
+        windowsDefenderStatus = current ? "Отключаем защиту в реальном времени…" : "Включаем защиту в реальном времени…";
+        Notify();
+        try
+        {
+            windowsDefenderState = await new WindowsDefenderController().SetRealTimeProtectionAsync(!current);
+            windowsDefenderStatus = windowsDefenderState.Message;
+        }
+        catch (Exception ex)
+        {
+            windowsDefenderStatus = "Windows не изменила защиту: " + ex.Message;
+            try
+            {
+                windowsDefenderState = await new WindowsDefenderController().ReadStatusAsync();
+                if (windowsDefenderState.Available) windowsDefenderStatus += " Текущее состояние: " + windowsDefenderState.Message;
+            }
+            catch { }
+        }
+        finally { windowsDefenderActionRunning = false; Notify(); }
+    }
 
     public async Task CheckWindowsUpdatesAsync()
     {

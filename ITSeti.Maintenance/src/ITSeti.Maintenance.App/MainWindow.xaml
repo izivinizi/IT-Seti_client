@@ -24,11 +24,13 @@
     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="158"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
      <Image Source="Assets/logo.png" Width="142" Height="76" Stretch="Uniform" HorizontalAlignment="Left"/>
      <StackPanel Grid.Column="1" Margin="10,0,22,0" VerticalAlignment="Center">
-      <StackPanel Orientation="Horizontal"><TextBlock Text="{Binding ComputerName}" FontSize="16" FontWeight="SemiBold" Foreground="#143C87" VerticalAlignment="Center"/><TextBlock Text="{Binding UserInventoryLabel}" Foreground="#354A5E" FontSize="14" Margin="16,0,0,0" VerticalAlignment="Center"/><Button Click="CopyInventory_Click" Visibility="{Binding HasInventoryNumber, Converter={StaticResource BoolVisibility}}" ToolTip="Скопировать инвентарный номер" AutomationProperties.Name="Скопировать инвентарный номер" Width="24" Height="24" Padding="0" Margin="4,0,0,0" BorderThickness="0" Background="Transparent" Cursor="Hand"><TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="14"/></Button></StackPanel>
-      <Grid Margin="0,3,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-       <TextBlock Text="{Binding UserRmsLabel}" Foreground="#354A5E" FontSize="14" TextTrimming="CharacterEllipsis" MaxWidth="220" VerticalAlignment="Center"/>
+      <StackPanel Orientation="Horizontal"><TextBlock x:Name="ComputerNameLabel" Text="{Binding ComputerName}" FontSize="16" FontWeight="SemiBold" Foreground="#143C87" VerticalAlignment="Center"/><TextBlock x:Name="InventoryLabel" Text="{Binding UserInventoryLabel}" Foreground="#354A5E" FontSize="14" Margin="16,0,0,0" VerticalAlignment="Center"/><Button Click="CopyInventory_Click" Visibility="{Binding HasInventoryNumber, Converter={StaticResource BoolVisibility}}" ToolTip="Скопировать инвентарный номер" AutomationProperties.Name="Скопировать инвентарный номер" Width="24" Height="24" Padding="0" Margin="4,0,0,0" BorderThickness="0" Background="Transparent" Cursor="Hand"><TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="14"/></Button></StackPanel>
+      <Grid Margin="0,3,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+       <TextBlock x:Name="RmsLabel" Text="{Binding UserRmsLabel}" Foreground="#354A5E" FontSize="14" TextTrimming="CharacterEllipsis" MaxWidth="220" VerticalAlignment="Center"/>
        <Button Grid.Column="1" Click="CopyRms_Click" Visibility="{Binding HasRmsId, Converter={StaticResource BoolVisibility}}" ToolTip="Скопировать номер RMS" AutomationProperties.Name="Скопировать номер RMS" Width="24" Height="24" Padding="0" Margin="4,0,0,0" BorderThickness="0" Background="Transparent" Cursor="Hand"><TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="14"/></Button>
-       <TextBlock Grid.Column="2" Text="{Binding UserIpLabel}" ToolTip="{Binding UserIpTooltip}" Foreground="#354A5E" FontSize="14" Margin="14,0,0,0" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+       <TextBlock x:Name="AnyDeskLabel" Grid.Column="2" Text="{Binding UserAnyDeskLabel}" Foreground="#354A5E" FontSize="14" TextTrimming="CharacterEllipsis" MaxWidth="180" Margin="12,0,0,0" VerticalAlignment="Center"/>
+       <Button Grid.Column="3" Click="CopyAnyDesk_Click" Visibility="{Binding HasAnyDeskId, Converter={StaticResource BoolVisibility}}" ToolTip="Скопировать номер AnyDesk" AutomationProperties.Name="Скопировать номер AnyDesk" Width="24" Height="24" Padding="0" Margin="4,0,0,0" BorderThickness="0" Background="Transparent" Cursor="Hand"><TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="14"/></Button>
+       <TextBlock x:Name="IpLabel" Grid.Column="4" Text="{Binding UserIpLabel}" ToolTip="{Binding UserIpTooltip}" Foreground="#354A5E" FontSize="14" Margin="14,0,0,0" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
       </Grid>
       <TextBlock Text="{Binding UserUptimeLabel}" Foreground="#354A5E" FontSize="14" Margin="0,5,0,0"/>
      </StackPanel>
@@ -222,7 +224,7 @@
        <Grid Margin="0,0,0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="1.2*"/><ColumnDefinition Width="1.1*"/><ColumnDefinition Width="3*"/><ColumnDefinition Width="1.1*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <TextBlock Text="Компонент" FontWeight="SemiBold" Foreground="#2D4354" Padding="5,7"/><TextBlock Grid.Column="1" Text="На ПК" FontWeight="SemiBold" Foreground="#2D4354" Padding="5,7"/><TextBlock Grid.Column="2" Text="Проверка" FontWeight="SemiBold" Foreground="#2D4354" Padding="5,7"/><TextBlock Grid.Column="3" Text="Комплект" FontWeight="SemiBold" Foreground="#2D4354" Padding="5,7"/><TextBlock Grid.Column="4" Text="Действие" FontWeight="SemiBold" Foreground="#2D4354" Padding="5,7"/>
        </Grid>
-       <ItemsControl ItemsSource="{Binding SetupComponents}" IsEnabled="{Binding CanInstallSetup}"><ItemsControl.ItemTemplate><DataTemplate>
+       <ItemsControl ItemsSource="{Binding SetupComponents}" IsEnabled="{Binding CanManageSetup}"><ItemsControl.ItemTemplate><DataTemplate>
         <Border BorderBrush="#E6EDF2" BorderThickness="0,1,0,0" Padding="0,2"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="1.2*"/><ColumnDefinition Width="1.1*"/><ColumnDefinition Width="3*"/><ColumnDefinition Width="1.1*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
          <TextBlock Text="{Binding Name}" TextWrapping="Wrap" Padding="5,8"/><TextBlock Grid.Column="1" Text="{Binding State}" TextWrapping="Wrap" Padding="5,8"/><TextBlock Grid.Column="2" Text="{Binding Detail}" TextWrapping="Wrap" Padding="5,8"/><TextBlock Grid.Column="3" Text="{Binding Package}" TextWrapping="Wrap" Padding="5,8"/><Button Grid.Column="4" Content="{Binding InstallLabel}" Tag="{Binding InstallKey}" IsEnabled="{Binding CanInstall}" Click="InstallComponent_Click" Padding="8,5" Margin="4,3" VerticalAlignment="Center"/>
         </Grid></Border>
@@ -230,7 +232,7 @@
        <StackPanel Margin="0,14,0,0">
        <TextBlock Text="ПО ИТ-Сети" Style="{StaticResource SectionHeading}" Margin="0,0,0,8"/>
        <WrapPanel>
-         <Button x:Name="InstallSetupButton" Click="InstallSetup_Click" IsEnabled="{Binding CanInstallSetup}" Padding="12,8" Margin="0,0,8,8" Background="#326EFF" Foreground="White" BorderThickness="0" Cursor="Hand" Content="Установить всё" ToolTip="Установить проверенный комплект через системную задачу"/>
+         <Button x:Name="InstallSetupButton" Click="InstallSetup_Click" IsEnabled="{Binding CanInstallSetup}" Padding="12,8" Margin="0,0,8,8" Background="#326EFF" Foreground="White" BorderThickness="0" Cursor="Hand" Content="Установить всё" ToolTip="Выбрать сценарий установки"/>
         <Button Click="RefreshSetupAudit_Click" Padding="10,8" Margin="0,0,8,8" ToolTip="Обновить состояние ПО" Cursor="Hand"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets"/></Button>
        </WrapPanel>
        <TextBlock Text="Дисковые утилиты" Style="{StaticResource SectionHeading}" Margin="0,8,0,8"/>
@@ -240,6 +242,7 @@
         <ComboBox x:Name="TreeSizeVolumeSelector" ItemsSource="{Binding TreeSizeVolumes}" SelectedItem="{Binding SelectedTreeSizeVolume, UpdateSourceTrigger=PropertyChanged}" Width="100" Height="36" Margin="0,0,8,8" VerticalContentAlignment="Center" ToolTip="Локальный диск для анализа"/>
         <Button x:Name="LaunchTreeSizeButton" Click="LaunchTreeSize_Click" IsEnabled="{Binding CanLaunchTreeSize}" Padding="12,8" Margin="0,0,8,8" Cursor="Hand" Content="Запустить TreeSize" ToolTip="Запустить анализ выбранного диска"/>
         <Button Click="OpenToolsFolder_Click" Padding="12,8" Margin="0,0,8,8" Cursor="Hand" Content="Каталог утилит" ToolTip="Открыть папку с включёнными в приложение диагностическими утилитами"/>
+        <Button Click="OpenToolsArchive_Click" Padding="12,8" Margin="0,0,8,8" Cursor="Hand" Content="Открыть Tools.rar" ToolTip="Открыть вложенный архив утилит"/>
        </WrapPanel>
        <TextBlock Text="{Binding SoftwareActionStatus}" Foreground="#354A5E" TextWrapping="Wrap" Margin="0,3,0,0"/>
        <TextBlock Text="Обновление приложения" Style="{StaticResource SectionHeading}" Margin="0,8,0,8"/>
@@ -318,11 +321,15 @@
         <Button Click="CheckWindowsUpdates_Click" IsEnabled="{Binding CanCheckWindowsUpdates}" Content="Проверить обновления" Padding="14,9" Margin="0,0,8,8"/>
         <Button Click="DisableWindowsUpdates_Click" IsEnabled="{Binding CanChangeWindowsUpdatePolicy}" Content="Отключить автообновления" Padding="14,9" Margin="0,0,8,8"/>
         <Button Click="RestoreWindowsUpdates_Click" IsEnabled="{Binding CanChangeWindowsUpdatePolicy}" Content="Вернуть прежнюю настройку" Padding="14,9" Margin="0,0,8,8"/>
+        <Button Click="ToggleWindowsDefender_Click" IsEnabled="{Binding CanToggleWindowsDefender}" Content="{Binding WindowsDefenderButtonLabel}" Padding="14,9" Margin="0,0,8,8"/>
        </WrapPanel>
        <TextBlock Text="Результат проверки" FontWeight="SemiBold" Margin="0,8,0,4"/>
        <TextBlock Text="{Binding WindowsUpdateStatus}" TextWrapping="Wrap" Foreground="#2D4354"/>
        <TextBlock Text="Состояние автообновлений" FontWeight="SemiBold" Margin="0,10,0,4"/>
        <TextBlock Text="{Binding WindowsUpdatePolicyStatus}" TextWrapping="Wrap" Foreground="#2D4354"/>
+       <TextBlock Text="Состояние Microsoft Defender" FontWeight="SemiBold" Margin="0,10,0,4"/>
+       <TextBlock Text="{Binding WindowsDefenderStatus}" TextWrapping="Wrap" Foreground="#2D4354"/>
+       <TextBlock Text="Переключается только защита в реальном времени. Системные политики и Tamper Protection не обходятся." Style="{StaticResource SecondaryText}" Margin="0,3,0,0" TextWrapping="Wrap"/>
        <Border BorderBrush="#DDE6EB" BorderThickness="0,1,0,0" Margin="0,24,0,20"/>
        <TextBlock Text="Восстановление Windows" Style="{StaticResource SectionHeading}"/>
        <TextBlock Text="DISM и SFC запускаются только отдельно. Работают в фоне; автоматической перезагрузки нет." Foreground="#354A5E" Margin="0,8,0,12" TextWrapping="Wrap"/>
@@ -356,7 +363,7 @@
    <Border Width="420" MaxWidth="420" Padding="28" Background="White" CornerRadius="8" HorizontalAlignment="Center" VerticalAlignment="Center">
     <StackPanel>
      <TextBlock Text="Режим инженера" FontSize="20" FontWeight="SemiBold" Foreground="#143C87"/>
-     <TextBlock Text="Пароль Windows откроет отдельное инженерское окно с повышенными правами. Пароль itseti оставит текущий режим." Foreground="#354A5E" Margin="0,7,0,18" TextWrapping="Wrap"/>
+     <TextBlock Text="Введите учётную запись Windows с правами администратора." Foreground="#354A5E" Margin="0,7,0,18" TextWrapping="Wrap"/>
      <TextBlock Text="Учётная запись Windows" Foreground="#354A5E" Margin="0,0,0,5"/>
      <ComboBox x:Name="AdminAccount" IsEditable="True" StaysOpenOnEdit="True" IsTextSearchEnabled="False" Height="38" Padding="10,7" FontSize="15" ToolTip="Выберите найденную учётную запись или укажите ПК\пользователь, ДОМЕН\пользователь"/>
      <TextBlock Text="Пароль" Foreground="#354A5E" Margin="0,12,0,5"/>

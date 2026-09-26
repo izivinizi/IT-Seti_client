@@ -4,6 +4,7 @@ using System.Windows;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security;
+using System.Threading;
 using System.Windows.Input;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -22,6 +23,7 @@ public partial class MainWindow : Window
     private readonly bool engineerOnly;
     private bool closeAfterMaintenance;
     private bool exitForUpdate;
+    private bool handingOffToEngineer;
     private DispatcherOperation? progressScroll;
     private bool closed;
     private readonly DispatcherTimer liveMetricsTimer = new() { Interval = TimeSpan.FromSeconds(10) };
@@ -34,10 +36,12 @@ public partial class MainWindow : Window
         InitializeComponent();
         historyDatabasePath = Path.GetFullPath(databasePath);
         this.engineerOnly = engineerOnly;
-        AdminAccount.Text = Environment.MachineName + "\\Admin";
+        AdminAccount.Text = Environment.MachineName + "\\" + Environment.UserName;
         MaxHeight = Math.Max(MinHeight, SystemParameters.WorkArea.Height - 24);
         ViewModel = new MainViewModel(new WindowsDiagnosticsRunner(), new SqliteHistoryStore(historyDatabasePath), fullRunner);
+        ViewModel.SetWindowsDefenderAccess(EngineerWindowLauncher.IsAdministrator());
         DataContext = ViewModel;
+        if (engineerOnly) ConfigureEngineerShell();
         ViewModel.PropertyChanged += (_, _) =>
         {
             if (closeAfterMaintenance && !ViewModel.IsBackgroundMaintenanceRunning)
@@ -52,11 +56,17 @@ public partial class MainWindow : Window
             await ViewModel.InitializeAsync();
             await ViewModel.RefreshLiveStatusAsync();
             liveMetricsTimer.Start();
-            if (this.engineerOnly) ShowEngineerShell();
+            if (this.engineerOnly)
+            {
+                ViewModel.RefreshSetupAudit();
+                ViewModel.RefreshIdentity();
+            }
+            _ = ViewModel.RefreshWindowsDefenderStatusAsync();
             initializationCompleted.TrySetResult();
         };
         Closing += (_, e) =>
         {
+            if (handingOffToEngineer) return;
             if (ViewModel.IsBusy)
             {
                 e.Cancel = true;
@@ -106,8 +116,20 @@ public partial class MainWindow : Window
         if (MessageBox.Show(this, "Запустить DISM и SFC? Проверка может занять длительное время и не перезагрузит компьютер автоматически.", "Восстановление Windows", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
             await ViewModel.RunRepairAsync();
     }
-    private void RefreshMaintenance_Click(object sender, RoutedEventArgs e) => ViewModel.RefreshMaintenanceStatus();
+    private async void RefreshMaintenance_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.RefreshMaintenanceStatus();
+        await ViewModel.RefreshWindowsDefenderStatusAsync();
+    }
     private async void CheckWindowsUpdates_Click(object sender, RoutedEventArgs e) => await ViewModel.CheckWindowsUpdatesAsync();
+    private async void ToggleWindowsDefender_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.WindowsDefenderEnabled == true &&
+            MessageBox.Show(this,
+                "Отключить защиту Microsoft Defender в реальном времени? Это снизит защиту компьютера. Политики организации и Tamper Protection приложение не обходит.",
+                "Отключение защиты", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        await ViewModel.ToggleWindowsDefenderAsync();
+    }
     private async void DisableWindowsUpdates_Click(object sender, RoutedEventArgs e)
     {
         if (MessageBox.Show(this, "Отключить автоматическую установку обновлений Windows? Проверять и устанавливать их нужно будет вручную.", "Отключение автообновлений", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes)
@@ -129,9 +151,10 @@ public partial class MainWindow : Window
         try { Process.Start(new ProcessStartInfo("notepad.exe") { UseShellExecute = false, ArgumentList = { path } }); }
         catch (Exception ex) { MessageBox.Show(this, ex.Message, "Не удалось открыть журнал", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
-    private void ShowSupport_Click(object sender, RoutedEventArgs e) => new SupportDialog { Owner = this }.ShowDialog();
+    private void ShowSupport_Click(object sender, RoutedEventArgs e) => new SupportDialog(ViewModel.InventoryNumber, ViewModel.RmsId, ViewModel.AnyDeskId) { Owner = this }.ShowDialog();
     private void CopyInventory_Click(object sender, RoutedEventArgs e) => CopyIdentity(ViewModel.InventoryNumber, "инвентарный номер");
     private void CopyRms_Click(object sender, RoutedEventArgs e) => CopyIdentity(ViewModel.RmsId, "номер RMS");
+    private void CopyAnyDesk_Click(object sender, RoutedEventArgs e) => CopyIdentity(ViewModel.AnyDeskId, "номер AnyDesk");
     private void CopyIdentity(string? value, string label)
     {
         if (string.IsNullOrWhiteSpace(value)) return;
@@ -178,7 +201,7 @@ public partial class MainWindow : Window
     private void ShowAdminPrompt_Click(object sender, RoutedEventArgs e)
     {
         AdminPassword.Clear();
-        AdminAccount.Text = Environment.MachineName + "\\Admin";
+        AdminAccount.Text = Environment.MachineName + "\\" + Environment.UserName;
         AdminError.Visibility = Visibility.Collapsed;
         AdminUnlock.Visibility = Visibility.Visible;
         AdminPassword.Focus();
@@ -194,7 +217,9 @@ public partial class MainWindow : Window
         AdminAccount.ItemsSource = candidates;
         if (keepCurrent) return;
 
-        var selected = candidates.FirstOrDefault(account => account.EndsWith("\\Admin", StringComparison.OrdinalIgnoreCase))
+        var currentAccount = candidates.FirstOrDefault(account => account.EndsWith("\\" + Environment.UserName, StringComparison.OrdinalIgnoreCase));
+        var selected = currentAccount
+            ?? candidates.FirstOrDefault(account => account.EndsWith("\\Admin", StringComparison.OrdinalIgnoreCase))
             ?? candidates.FirstOrDefault(account => account.EndsWith("\\it-seti", StringComparison.OrdinalIgnoreCase))
             ?? candidates.FirstOrDefault(account => account.EndsWith("\\user", StringComparison.OrdinalIgnoreCase))
             ?? (candidates.Count == 1 ? candidates[0] : defaultAccount);
@@ -227,19 +252,18 @@ public partial class MainWindow : Window
                 if (launch.Process is null)
                 {
                     AdminError.Text = launch.ErrorCode == 1326
-                        ? "Windows не приняла учётную запись или пароль."
+                        ? "Windows не приняла учётную запись или пароль. Введите пароль Windows, не PIN-код."
                         : $"Не удалось войти в Windows (код {launch.ErrorCode}). Проверьте имя учётной записи и пароль.";
                     AdminError.Visibility = Visibility.Visible;
                     AdminPassword.Focus();
                     return;
                 }
-                using var process = launch.Process;
-                AdminUnlock.Visibility = Visibility.Collapsed;
+                HandoffToEngineer(launch.Process);
             }
             catch (Win32Exception ex)
             {
                 AdminError.Text = ex.NativeErrorCode == 1326
-                    ? "Windows не приняла учётную запись или пароль."
+                    ? "Windows не приняла учётную запись или пароль. Введите пароль Windows, не PIN-код."
                     : $"Не удалось войти в Windows (код {ex.NativeErrorCode}). Проверьте имя учётной записи и пароль.";
                 AdminError.Visibility = Visibility.Visible;
                 AdminPassword.Focus();
@@ -277,6 +301,13 @@ public partial class MainWindow : Window
 
     private void ShowEngineerShell()
     {
+        ConfigureEngineerShell();
+        ViewModel.RefreshSetupAudit();
+        ViewModel.RefreshIdentity();
+    }
+
+    private void ConfigureEngineerShell()
+    {
         AdminUnlock.Visibility = Visibility.Collapsed;
         UserShell.Visibility = Visibility.Collapsed;
         AdminShell.Visibility = Visibility.Visible;
@@ -285,14 +316,54 @@ public partial class MainWindow : Window
         if (engineerOnly) ExitAdminButton.Content = "Закрыть окно";
         SizeToContent = SizeToContent.Manual;
         var area = SystemParameters.WorkArea;
-        MinWidth = Math.Min(880, area.Width - 24);
-        MinHeight = Math.Min(610, area.Height - 24);
-        MaxHeight = Math.Max(MinHeight, area.Height - 24);
-        Width = Math.Min(1200, area.Width - 24);
-        Height = Math.Min(800, area.Height - 24);
+        var maxWidth = Math.Max(1, area.Width - 24);
+        var maxHeight = Math.Max(1, area.Height - 24);
+        MinWidth = Math.Min(880, maxWidth);
+        MinHeight = Math.Min(610, maxHeight);
+        MaxWidth = maxWidth;
+        MaxHeight = maxHeight;
+        Width = Math.Min(1200, maxWidth);
+        Height = Math.Min(800, maxHeight);
+        Left = area.Left + Math.Max(0, (area.Width - Width) / 2);
+        Top = area.Top + Math.Max(0, (area.Height - Height) / 2);
         Title = "ИТ-Сети | Диагностика ПК";
-        ViewModel.RefreshSetupAudit();
-        ViewModel.RefreshIdentity();
+    }
+
+    private void HandoffToEngineer(Process process)
+    {
+        var handled = 0;
+        void OnExited()
+        {
+            if (Interlocked.Exchange(ref handled, 1) != 0) return;
+            var exitCode = -1;
+            try { exitCode = process.ExitCode; }
+            catch (InvalidOperationException) { }
+            Dispatcher.BeginInvoke(() =>
+            {
+                process.Dispose();
+                if (exitCode == 0)
+                {
+                    handingOffToEngineer = true;
+                    Close();
+                    return;
+                }
+
+                AdminError.Text = exitCode == 1223
+                    ? "Запуск инженерского окна отменён."
+                    : $"Инженерское окно не запустилось (код {exitCode}).";
+                AdminError.Visibility = Visibility.Visible;
+                AdminUnlock.Visibility = Visibility.Visible;
+                Show();
+                Activate();
+                AdminPassword.Focus();
+            });
+        }
+
+        process.Exited += (_, _) => OnExited();
+        process.EnableRaisingEvents = true;
+        AdminUnlock.Visibility = Visibility.Collapsed;
+        Hide();
+        if (process.HasExited) OnExited();
     }
 
     private static string DefaultHistoryDatabasePath() => Path.Combine(
@@ -331,11 +402,95 @@ public partial class MainWindow : Window
     }
     private void RefreshRepairStatus_Click(object sender, RoutedEventArgs e) => ViewModel.RefreshRepairStatus();
 
-    private async void InstallSetup_Click(object sender, RoutedEventArgs e) => await RunOrganizationInstallAsync(null);
+    private async void InstallSetup_Click(object sender, RoutedEventArgs e)
+    {
+        var mode = ChooseOrganizationInstallMode();
+        if (mode is null) return;
+        if (mode == true)
+        {
+            var missing = GetMissingNewPcPackages(ViewModel.SetupSourcePath);
+            var note = missing.Count > 0
+                ? "На подключённой флешке облегчённый комплект; отсутствуют файлы:\n" + string.Join("\n", missing)
+                : "В старом сценарии «Новый ПК» команда Office включает KMS-активацию. Этот сценарий нельзя запускать из приложения. Используйте комплект без обхода активации.";
+            MessageBox.Show(this, note, "Сценарий «Новый ПК» недоступен", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        await RunOrganizationInstallAsync(null);
+    }
+
+    private bool? ChooseOrganizationInstallMode()
+    {
+        bool? newPc = null;
+        var dialog = new Window
+        {
+            Owner = this,
+            Title = "Установка ПО",
+            Icon = Icon,
+            Width = 440,
+            SizeToContent = SizeToContent.Height,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = Brushes.White,
+            FontFamily = FontFamily
+        };
+        var panel = new StackPanel { Margin = new Thickness(24) };
+        panel.Children.Add(new TextBlock { Text = "Выберите сценарий", FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(Color.FromRgb(20, 60, 135)), Margin = new Thickness(0, 0, 0, 8) });
+        panel.Children.Add(new TextBlock { Text = "Новый ПК включает дополнительные программы. «Только ПО» устанавливает AnyDesk, RMS, OCS и панель ИТ-Сети.", TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(Color.FromRgb(53, 74, 94)), Margin = new Thickness(0, 0, 0, 16) });
+        var newPcButton = new Button { Content = "Новый ПК", Padding = new Thickness(14, 10, 14, 10), Margin = new Thickness(0, 0, 0, 8), HorizontalContentAlignment = HorizontalAlignment.Left };
+        newPcButton.Click += (_, _) => { newPc = true; dialog.DialogResult = true; };
+        var organizationButton = new Button { Content = "Только ПО ИТ-Сети", Padding = new Thickness(14, 10, 14, 10), Background = new SolidColorBrush(Color.FromRgb(50, 110, 255)), Foreground = Brushes.White, BorderThickness = new Thickness(0) };
+        organizationButton.Click += (_, _) => { newPc = false; dialog.DialogResult = true; };
+        panel.Children.Add(newPcButton);
+        panel.Children.Add(organizationButton);
+        dialog.Content = panel;
+        return dialog.ShowDialog() == true ? newPc : null;
+    }
+
+    private static IReadOnlyList<string> GetMissingNewPcPackages(string? source)
+    {
+        if (string.IsNullOrWhiteSpace(source)) return ["Комплект ITSETI-Setup не подключён."];
+        var apps = Path.Combine(source, "system", "packages", "apps");
+        var required = new[]
+        {
+            "7z2301-x64.exe",
+            "GoogleChromeStandaloneEnterprise64.msi",
+            "YandexBrowser.msi",
+            "naps2-8.2.1-win-x64.exe",
+            "Adobe.Acrobat.Pro.v2024x64.exe"
+        };
+        var missing = required.Where(file => !File.Exists(Path.Combine(apps, file))).ToList();
+        var officeBits = Environment.Is64BitOperatingSystem ? "x64" : "x86";
+        if (!Directory.Exists(apps) || !Directory.EnumerateFiles(apps, $"Microsoft.Office.*{officeBits}*.iso").Any())
+            missing.Add($"Microsoft Office ISO ({officeBits})");
+        return missing;
+    }
 
     private async void InstallComponent_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is Button { Tag: string component }) await RunOrganizationInstallAsync(component);
+        if (sender is not Button { Tag: string component, DataContext: OrganizationComponent row }) return;
+        if (row.State == "Установлено") await RunOrganizationUninstallAsync(component);
+        else await RunOrganizationInstallAsync(component);
+    }
+
+    private async Task RunOrganizationUninstallAsync(string component)
+    {
+        if (!ViewModel.BeginSetupInstall()) return;
+        var displayName = ViewModel.SetupComponents.FirstOrDefault(row => row.InstallKey == component)?.Name ?? component;
+        try
+        {
+            if (MessageBox.Show(this, $"Удалить {displayName}? Данные RMS и AnyDesk с идентификаторами сохранятся.", "Удаление ПО", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            ViewModel.SetSetupStatus($"Удаление {displayName} выполняется…");
+            await OrganizationSetupRunner.RunUninstallComponentAsync(component, new Progress<string>(ViewModel.SetSetupStatus));
+            ViewModel.RefreshSetupAudit();
+            ViewModel.SetSetupStatus($"{displayName}: удаление завершено.");
+            MessageBox.Show(this, $"{displayName}: удаление завершено.", "Удаление ПО", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            ViewModel.SetSetupStatus($"Удаление не выполнено: {ex.Message}");
+            MessageBox.Show(this, ex.Message, "Удаление не выполнено", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally { ViewModel.EndSetupInstall(); }
     }
 
     private async Task RunOrganizationInstallAsync(string? component)
@@ -411,6 +566,18 @@ public partial class MainWindow : Window
         }
         try { Process.Start(new ProcessStartInfo("explorer.exe", '"' + tools + '"') { UseShellExecute = true }); }
         catch (Exception ex) { MessageBox.Show(this, ex.Message, "Не удалось открыть каталог утилит", MessageBoxButton.OK, MessageBoxImage.Warning); }
+    }
+
+    private void OpenToolsArchive_Click(object sender, RoutedEventArgs e)
+    {
+        var archive = Path.Combine(AppContext.BaseDirectory, "Tools", "Tools.rar");
+        if (!File.Exists(archive))
+        {
+            MessageBox.Show(this, "Архив Tools.rar не найден в комплекте приложения.", "Утилиты", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        try { Process.Start(new ProcessStartInfo(archive) { UseShellExecute = true }); }
+        catch (Exception ex) { MessageBox.Show(this, "Не удалось открыть архив: " + ex.Message, "Архив утилит", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
 
     private void LaunchSystemTool_Click(object sender, RoutedEventArgs e)

@@ -5,8 +5,9 @@ namespace ITSeti.Maintenance.Infrastructure;
 
 public sealed record OrganizationComponent(string Name, string State, string Detail, string Package, bool NeedsAttention, string InstallKey)
 {
-    public bool CanInstall => !string.IsNullOrWhiteSpace(InstallKey) && Package == "Файл есть" && State != "Установлено";
-    public string InstallLabel => State == "Установлено" ? "Установлено" : "Установить";
+    public bool CanInstall => !string.IsNullOrWhiteSpace(InstallKey) &&
+        (State == "Установлено" || Package == "Файл есть");
+    public string InstallLabel => State == "Установлено" ? "Удалить" : "Установить";
 }
 
 public static class OrganizationSoftwareAudit

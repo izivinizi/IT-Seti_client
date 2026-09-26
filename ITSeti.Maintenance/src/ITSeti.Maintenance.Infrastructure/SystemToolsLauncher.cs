@@ -43,7 +43,7 @@ public static class SystemToolsLauncher
         "policy" => new(key, "Групповые политики", "\uE8D4", Path.Combine(System, "mmc.exe"), [Path.Combine(System, "gpedit.msc")]),
         "terminal" => Terminal(),
         "control" => new(key, "Панель управления", "\uE713", Path.Combine(System, "control.exe"), []),
-        "settings" => new(key, "Параметры Windows", "\uE713", Path.Combine(Windows, "ImmersiveControlPanel", "SystemSettings.exe"), []),
+        "settings" => new(key, "Параметры Windows", "\uE713", "ms-settings:", [], true),
         "adapters" => new(key, "Сетевые адаптеры", "\uE774", Path.Combine(System, "control.exe"), ["ncpa.cpl"]),
         "info" => new(key, "Сведения о системе", "\uE9D9", Path.Combine(System, "msinfo32.exe"), []),
         "security" => new(key, "Безопасность Windows", "\uE72E", "windowsdefender:", [], true),

@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Data;
 using System.Text.Json;
 using Microsoft.Win32;
 using ITSeti.Maintenance.App;
@@ -90,10 +91,16 @@ internal static class Program
                 if (window.ResizeMode != ResizeMode.CanMinimize || Find<ScrollViewer>(userShell) is null)
                     throw new Exception("User window must be minimizable and allow content scrolling");
                 Capture(window, Path.Combine(output, "user-initial.png"));
-                var support = new SupportDialog { Owner = window };
+                var support = new SupportDialog("0042", "123-456", "123456789") { Owner = window };
                 support.Show();
                 support.UpdateLayout();
                 await Task.Delay(150);
+                if (((TextBox)support.FindName("InventoryValue")!).Text != "0042"
+                    || ((TextBox)support.FindName("RmsValue")!).Text != "123-456"
+                    || ((TextBox)support.FindName("AnyDeskValue")!).Text != "123456789"
+                    || !((TextBox)support.FindName("AnyDeskValue")!).IsReadOnly
+                    || !((Button)support.FindName("CopyAllButton")!).IsEnabled)
+                    throw new Exception("Support dialog is missing selectable PC identifiers or quick-copy action");
                 Capture(support, Path.Combine(output, "support.png"));
                 support.Close();
                 while (!window.ViewModel.CanRun) await Task.Delay(50);
@@ -126,6 +133,9 @@ internal static class Program
                 if (MachineIdentityStore.ParseRmsInternetId("\uFEFF<?xml version=\"1.0\"?><rms><internet_id>123-456</internet_id></rms>") != "123-456"
                     || MachineIdentityStore.ParseRmsInternetId("broken xml") is not null)
                     throw new Exception("RMS Internet ID parsing failed with UTF-8 BOM");
+                if (MachineIdentityStore.ParseAnyDeskId("ad.anynet.id=123456789\r\nservice.conf=private") != "123456789"
+                    || MachineIdentityStore.ParseAnyDeskId("ad.anynet.id=not-a-number") is not null)
+                    throw new Exception("AnyDesk public ID parsing failed");
                 using (var rmsKey = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\TektonIT\RMS Host\Host\Parameters"))
                     if (rmsKey?.GetValue("InternetId") is byte[] && new MachineIdentityStore().Read().RmsId is null)
                         throw new Exception("Installed RMS Internet ID was not detected");
@@ -144,7 +154,7 @@ internal static class Program
                     throw new Exception("SQLite history roundtrip failed");
                 window.ViewModel.Selected = window.ViewModel.History[1];
                 if (window.ViewModel.Selected.Id != first.Id) throw new Exception("History selection failed");
-                Capture(window, Path.Combine(output, "user-home.png"));
+                CapturePublicUserHome(window, Path.Combine(output, "user-home.png"));
                 var normalExtent = Find<ScrollViewer>(userShell)!.ExtentHeight;
                 var stressed = first with
                 {
@@ -863,5 +873,23 @@ internal static class Program
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using var stream = File.Create(path);
         encoder.Save(stream);
+    }
+
+    private static void CapturePublicUserHome(MainWindow window, string path)
+    {
+        var replacements = new Dictionary<string, string>
+        {
+            ["ComputerNameLabel"] = "PC-TEST",
+            ["InventoryLabel"] = "Инв. № 0042",
+            ["RmsLabel"] = "RMS: 123-456",
+            ["AnyDeskLabel"] = "AnyDesk: 123456789",
+            ["IpLabel"] = "IP: 192.168.1.50"
+        };
+        var labels = replacements.Select(pair => ((TextBlock)window.FindName(pair.Key)!, pair.Value)).ToArray();
+        foreach (var (label, text) in labels) label.SetCurrentValue(TextBlock.TextProperty, text);
+        window.UpdateLayout();
+        Capture(window, path);
+        foreach (var (label, _) in labels)
+            BindingOperations.GetBindingExpression(label, TextBlock.TextProperty)?.UpdateTarget();
     }
 }

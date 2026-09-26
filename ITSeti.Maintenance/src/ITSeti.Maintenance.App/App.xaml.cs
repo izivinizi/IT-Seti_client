@@ -56,9 +56,7 @@ public partial class App : Application
             }
             catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
             {
-                MessageBox.Show("Повышение отменено. Инженерское окно не открыто.",
-                    "Режим инженера", MessageBoxButton.OK, MessageBoxImage.Information);
-                Shutdown();
+                Shutdown(1223);
             }
             catch (Exception ex)
             {

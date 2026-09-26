@@ -21,7 +21,8 @@
       -DryRun  только проверить, что было бы сделано, ничего не удаляя
     Лог: C:\ProgramData\ITSETI-uninstall.log
 #>
-param([switch]$DryRun, [switch]$All, [ValidateSet('DesktopInfo', 'OCS', 'RMS', 'AnyDesk')][string[]]$Only)
+param([switch]$DryRun, [switch]$All, [switch]$Silent, [string]$ResultFile,
+      [ValidateSet('DesktopInfo', 'OCS', 'RMS', 'AnyDesk')][string[]]$Only)
 
 $ErrorActionPreference = 'Continue'
 $DataDir = Join-Path $env:ProgramData 'ITSETI'
@@ -63,6 +64,13 @@ function Show-Box([string]$text, [string]$title, [string]$icon = 'Information') 
     $owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false }
     [System.Media.SystemSounds]::Asterisk.Play()
     [System.Windows.Forms.MessageBox]::Show($owner, $text, $title, 'OK', $icon) | Out-Null
+}
+function Save-ResultFile([string]$text) {
+    if ($ResultFile) {
+        $parent = Split-Path -Parent $ResultFile
+        if ($parent) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+        [IO.File]::WriteAllText($ResultFile, $text, [Text.UTF8Encoding]::new($false))
+    }
 }
 function Delete-Path([string]$path) {
     if (-not (Test-Path $path)) { return }
@@ -190,7 +198,9 @@ Log ('Найдено: ' + (($items | ForEach-Object { "$($_.Title) - $($_.State)
 
 if (-not ($items | Where-Object { $_.Found })) {
     Log 'Удалять нечего.'
-    Show-Box "Компьютер: $env:COMPUTERNAME`n`nНи один компонент ИТ сети не найден, удалять нечего." 'ИТ сети - удаление'
+    $message = "Компьютер: $env:COMPUTERNAME`n`nНи один компонент ИТ сети не найден, удалять нечего."
+    Save-ResultFile $message
+    if (-not $Silent) { Show-Box $message 'ИТ сети - удаление' }
     exit 0
 }
 if ($All -or $Only) {
@@ -211,8 +221,11 @@ if ($Selected -contains 'DesktopInfo') {
         Get-ChildItem 'C:\Users\*\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\ITSETI Desktop Info.lnk' -ErrorAction SilentlyContinue |
             ForEach-Object { Delete-Path $_.FullName }
         if ((Test-Path 'HKCU:\SOFTWARE\ITSETI') -and -not $DryRun) { [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree('SOFTWARE\ITSETI', $false) }
-        Delete-Path $DataDir
-        Log 'Панель: процесс, автозапуск, настройки и папка ProgramData\ITSETI убраны'
+        foreach ($name in @('DesktopInfo.ini', 'update-support-ids.ps1', 'start-panel.vbs')) {
+            Delete-Path (Join-Path $DataDir $name)
+        }
+        if ((Test-Path $DataDir) -and -not (Get-ChildItem -LiteralPath $DataDir -Force | Select-Object -First 1)) { Delete-Path $DataDir }
+        Log 'Панель: процесс, автозапуск и файлы панели убраны; данные обслуживания сохранены'
         # потом сама программа
         $diExe = Join-Path $DiDir 'DesktopInfo.exe'
         $unins = Join-Path $DiDir 'unins000.exe'
@@ -307,5 +320,6 @@ Log "ИТОГ:`n$text"
 Log '================ конец ================'
 $hasErr = ($Results -join ' ') -match 'ОШИБКА'
 $title = if ($hasErr) { 'ИТ сети - удаление завершено с ошибками' } else { 'ИТ сети - удаление завершено' }
-Show-Box $text $title $(if ($hasErr) { 'Warning' } else { 'Information' })
+Save-ResultFile $text
+if (-not $Silent) { Show-Box $text $title $(if ($hasErr) { 'Warning' } else { 'Information' }) }
 if ($hasErr) { exit 2 }

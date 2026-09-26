@@ -11,6 +11,7 @@
   <ItemGroup>
     <Content Include="Backend\FullCheckWorker.ps1;Backend\InstalledOrganizationSetup.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\Set-WindowsAutomaticUpdates.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Backend\WindowsDefender.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\Update-Application.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\HeadlessDiskWorker.ps1;Backend\InstalledCheck.ps1;Backend\InstalledRepair.ps1;Backend\InstalledCleanup.ps1;Backend\DirectRepair.ps1;Backend\AppCleanupWorker.ps1;Backend\ResourceSampler.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\Repair.ps1;Backend\RepairWorker.ps1;Backend\Cleanup.ps1;Backend\UserCleanup.ps1;Backend\UserCleanupWorker.ps1;Backend\Summary.ps1;Backend\DiskTools.ps1;Backend\DiskWorker.ps1;Backend\Runtime.ps1;Backend\EventWorker.ps1;Backend\NativeDiskMark.cs;Backend\allowed-processes.json;Backend\allowed-processes-win7.txt;Backend\allowed-publishers.txt;Backend\Inspect-AccountContext.ps1">

@@ -2,12 +2,13 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Microsoft.Win32;
 
 namespace ITSeti.Maintenance.Infrastructure;
 
-public sealed record MachineIdentity(string? InventoryNumber, string? RmsId, IReadOnlyList<string> IpAddresses);
+public sealed record MachineIdentity(string? InventoryNumber, string? RmsId, string? AnyDeskId, IReadOnlyList<string> IpAddresses);
 
 public sealed class MachineIdentityStore(string? inventoryPath = null)
 {
@@ -26,7 +27,7 @@ public sealed class MachineIdentityStore(string? inventoryPath = null)
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-        return new MachineIdentity(inventory, ReadRmsId(), ReadIpAddresses());
+        return new MachineIdentity(inventory, ReadRmsId(), ReadAnyDeskId(), ReadIpAddresses());
     }
 
     public void SaveInventoryNumber(string value)
@@ -76,6 +77,44 @@ public sealed class MachineIdentityStore(string? inventoryPath = null)
             return id is { Length: > 0 and <= 64 } && !id.Any(char.IsControl) ? id : null;
         }
         catch (System.Xml.XmlException) { return null; }
+    }
+
+    private static string? ReadAnyDeskId()
+    {
+        var roots = new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
+        }.Where(path => !string.IsNullOrWhiteSpace(path));
+
+        foreach (var root in roots)
+        {
+            string[] directories;
+            try { directories = Directory.EnumerateDirectories(root, "AnyDesk*").ToArray(); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+
+            foreach (var directory in directories)
+            {
+                try
+                {
+                    var id = ParseAnyDeskId(File.ReadAllText(Path.Combine(directory, "system.conf")));
+                    if (id is not null) return id;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
+        return null;
+    }
+
+    public static string? ParseAnyDeskId(string? configuration)
+    {
+        if (string.IsNullOrEmpty(configuration)) return null;
+        foreach (var line in configuration.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var match = Regex.Match(line, @"^\s*ad\.anynet\.id=(\d{6,20})\s*$", RegexOptions.IgnoreCase);
+            if (match.Success) return match.Groups[1].Value;
+        }
+        return null;
     }
 
     private static IReadOnlyList<string> ReadIpAddresses()

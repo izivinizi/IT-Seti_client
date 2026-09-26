@@ -6,7 +6,15 @@ namespace ITSeti.Maintenance.App;
 
 public partial class SupportDialog : Window
 {
-    public SupportDialog() => InitializeComponent();
+    public SupportDialog() : this(null, null, null) { }
+
+    public SupportDialog(string? inventoryNumber, string? rmsId, string? anyDeskId)
+    {
+        InitializeComponent();
+        InventoryValue.Text = inventoryNumber ?? "не указан";
+        RmsValue.Text = rmsId ?? "не найден";
+        AnyDeskValue.Text = anyDeskId ?? "не найден";
+    }
 
     private void OpenLink(object sender, RequestNavigateEventArgs e)
     {
@@ -18,6 +26,22 @@ public partial class SupportDialog : Window
     private void CopyEmail_Click(object sender, RoutedEventArgs e)
     {
         try { ClipboardHelper.Copy("support@it-seti.ru"); CopyStatus.Text = "Адрес скопирован"; }
+        catch (Exception ex) { CopyStatus.Text = $"Не удалось скопировать: {ex.Message}"; }
+    }
+
+    private void CopyInventory_Click(object sender, RoutedEventArgs e) => CopyValue(InventoryValue.Text, "Инвентарный номер");
+    private void CopyRms_Click(object sender, RoutedEventArgs e) => CopyValue(RmsValue.Text, "Номер RMS");
+    private void CopyAnyDesk_Click(object sender, RoutedEventArgs e) => CopyValue(AnyDeskValue.Text, "Номер AnyDesk");
+
+    private void CopyAll_Click(object sender, RoutedEventArgs e)
+    {
+        var text = $"Инв. номер: {InventoryValue.Text}{Environment.NewLine}RMS: {RmsValue.Text}{Environment.NewLine}AnyDesk: {AnyDeskValue.Text}";
+        CopyValue(text, "Данные компьютера");
+    }
+
+    private void CopyValue(string value, string label)
+    {
+        try { ClipboardHelper.Copy(value); CopyStatus.Text = $"{label}: скопировано"; }
         catch (Exception ex) { CopyStatus.Text = $"Не удалось скопировать: {ex.Message}"; }
     }
 

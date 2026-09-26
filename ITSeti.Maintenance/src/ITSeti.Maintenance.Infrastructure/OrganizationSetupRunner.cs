@@ -160,18 +160,26 @@ public static class OrganizationSetupRunner
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance");
 
     public static async Task<int> RunBaseAsync(string source, IProgress<string>? progress = null)
-        => await RunAsync(source, null, progress);
+        => await RunAsync(source, null, "Install", progress);
 
     public static async Task<int> RunComponentAsync(string source, string component, IProgress<string>? progress = null)
-        => await RunAsync(source, component, progress);
+        => await RunAsync(source, component, "Install", progress);
 
-    private static async Task<int> RunAsync(string source, string? component, IProgress<string>? progress)
+    public static async Task<int> RunUninstallComponentAsync(string component, IProgress<string>? progress = null)
+        => await RunAsync(null, component, "Uninstall", progress);
+
+    private static async Task<int> RunAsync(string? source, string? component, string operation, IProgress<string>? progress)
     {
         await RunLock.WaitAsync();
         try
         {
-        var problems = await CheckAsync(source, component);
-        if (problems.Count > 0) throw new InvalidOperationException(string.Join(Environment.NewLine, problems));
+        if (component is null && operation != "Install") throw new InvalidOperationException("Для действия требуется выбрать компонент.");
+        if (operation == "Install")
+        {
+            if (source is null) throw new InvalidOperationException("Не выбрана папка комплекта ITSETI-Setup.");
+            var problems = await CheckAsync(source, component);
+            if (problems.Count > 0) throw new InvalidOperationException(string.Join(Environment.NewLine, problems));
+        }
         var requestRoot = Path.Combine(MaintenanceRoot, "OrganizationSetupRequests");
         var resultRoot = Path.Combine(MaintenanceRoot, "OrganizationSetupRuns");
         if (!Directory.Exists(requestRoot) || !Directory.Exists(resultRoot))
@@ -180,7 +188,7 @@ public static class OrganizationSetupRunner
         var id = Guid.NewGuid().ToString("N");
         var request = Path.Combine(requestRoot, id + ".json");
         var result = Path.Combine(resultRoot, id, "result.txt");
-        await File.WriteAllTextAsync(request, JsonSerializer.Serialize(new { Source = Path.GetFullPath(source), Component = component }), new UTF8Encoding(false));
+        await File.WriteAllTextAsync(request, JsonSerializer.Serialize(new { Source = source is null ? null : Path.GetFullPath(source), Component = component, Operation = operation }), new UTF8Encoding(false));
         try
         {
             using var task = new Process

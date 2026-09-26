@@ -112,14 +112,52 @@ if(!$engineerLauncher.Contains('WorkingDirectory = AppContext.BaseDirectory') -o
    !$engineerLauncher.Contains('LogonUserW') -or !$engineerLauncher.Contains('ZeroFreeGlobalAllocUnicode')) {
     throw 'Engineer login must validate credentials without leaking the password and use a valid app working directory.'
 }
+$defenderController=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\WindowsDefenderController.cs'),[Text.Encoding]::UTF8)
+$defenderScriptPath=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\WindowsDefender.ps1'
+$defenderScript=[IO.File]::ReadAllText($defenderScriptPath,[Text.Encoding]::UTF8)
+$defenderTokens=$null;$defenderErrors=$null
+[void][Management.Automation.Language.Parser]::ParseFile($defenderScriptPath,[ref]$defenderTokens,[ref]$defenderErrors)
+$defenderXaml=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml'),[Text.Encoding]::UTF8)
+$defenderWindow=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml.cs'),[Text.Encoding]::UTF8)
+$packageBuilder=[IO.File]::ReadAllText((Join-Path $Root 'Build-InstallPackage.ps1'),[Text.Encoding]::UTF8)
+if($defenderErrors -or !$defenderScript.Contains("ValidateSet('Status', 'Enable', 'Disable')") -or
+   !$defenderScript.Contains('Set-MpPreference -DisableRealtimeMonitoring') -or
+   $defenderScript -match 'Set-ItemProperty|reg\.exe|Set-Service|TamperProtection\s*=|IsTamperProtected\s*=' -or
+   !$defenderController.Contains('IsAdministrator()') -or !$defenderController.Contains('WindowsBuiltInRole.Administrator') -or
+   !$defenderWindow.Contains('Это снизит защиту компьютера') -or !$defenderWindow.Contains('ToggleWindowsDefender_Click') -or
+   !$defenderXaml.Contains('WindowsDefenderButtonLabel') -or !$defenderXaml.Contains('Открыть Tools.rar') -or
+   !$packageBuilder.Contains("'Tools.rar'") -or !(Test-Path -LiteralPath (Join-Path $Root 'Tools\Tools.rar') -PathType Leaf)) {
+    throw 'Defender toggle must use the supported admin-only preference API, and Tools.rar must be included as an inert archive.'
+}
 if($organizationRunner -match 'Verb\s*=\s*"runas"' -or !$organizationRunner.Contains('ITSeti-Maintenance-OrganizationSetup') -or
-   !$organizationRunner.Contains('RunComponentAsync') -or !$organizationRunner.Contains('PanelFileHashes') -or
+   !$organizationRunner.Contains('RunComponentAsync') -or !$organizationRunner.Contains('RunUninstallComponentAsync') -or !$organizationRunner.Contains('PanelFileHashes') -or
    !$organizationWorker.Contains('$stagedRoot=Join-Path $run') -or !$organizationWorker.Contains("'AnyDesk','RMS','OCS','Panel'") -or
-   $organizationWorker -notmatch 'Install-OrganizationSoftware.ps1' -or $organizationWorker -notmatch 'installer-result.txt') {
+   $organizationWorker -notmatch 'Install-OrganizationSoftware.ps1' -or $organizationWorker -notmatch 'installer-result.txt' -or
+   $organizationWorker -notmatch "Operation -eq 'Uninstall'" -or !$organizationWorker.Contains('ReadAllText($resultFromHelper') -or
+   !$organizationWorker.Contains('$detail=''OK''') -or
+   !$organizationWorker.Contains('[IO.File]::ReadAllText($request.FullName,[Text.Encoding]::UTF8)')) {
     throw 'Organization software installation must use the verified SYSTEM task instead of an interactive elevation prompt.'
 }
 $organizationHelper=[IO.File]::ReadAllText((Join-Path $Root 'Install-OrganizationSoftware.ps1'),[Text.Encoding]::UTF8)
 $softwareView=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml'),[Text.Encoding]::UTF8)
+$softwareCode=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml.cs'),[Text.Encoding]::UTF8)
+$softwareAudit=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\OrganizationSoftwareAudit.cs'),[Text.Encoding]::UTF8)
+$systemTools=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\SystemToolsLauncher.cs'),[Text.Encoding]::UTF8)
+$setupUninstaller=[IO.File]::ReadAllText((Join-Path $Root 'OrganizationUninstall.ps1'),[Text.Encoding]::UTF8)
+$supportView=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\SupportDialog.xaml'),[Text.Encoding]::UTF8)
+$supportCode=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\SupportDialog.xaml.cs'),[Text.Encoding]::UTF8)
+if($softwareView.Contains('Пароль itseti') -or !$softwareCode.Contains('ConfigureEngineerShell();') -or
+   !$softwareCode.Contains('HandoffToEngineer(launch.Process)') -or !$softwareCode.Contains('ChooseOrganizationInstallMode') -or
+   !$softwareAudit.Contains('State == "Установлено" ? "Удалить" : "Установить"') -or
+   !$softwareCode.Contains('RunUninstallComponentAsync') -or !$systemTools.Contains('"ms-settings:"') -or
+   !$setupUninstaller.Contains('[switch]$Silent') -or $setupUninstaller -notmatch '(?i)данные обслуживания сохранены') {
+    throw 'Engineering startup, Windows Settings, setup choices, or component uninstall regression detected.'
+}
+if(!$softwareCode.Contains('CopyAnyDesk_Click') -or !$softwareView.Contains('UserAnyDeskLabel') -or
+   !$supportView.Contains('При подаче заявки укажите данные компьютера.') -or
+   !$supportCode.Contains('CopyAll_Click') -or !$softwareCode.Contains('GetMissingNewPcPackages')) {
+    throw 'Support identity display or setup mode selection is missing.'
+}
 if(!$organizationHelper.Contains('ValidateSet(''AnyDesk'', ''RMS'', ''OCS'', ''Panel'')') -or
    !$organizationHelper.Contains('Test-PinnedFile') -or !$organizationHelper.Contains('Panel file failed verification') -or
    $softwareView.Contains('SetupModeSelector') -or $softwareView.Contains('AcceptanceWarning') -or
