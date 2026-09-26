@@ -9,9 +9,11 @@ trap {
     [IO.File]::WriteAllText((Join-Path $run 'error.txt'), $_.Exception.ToString(), [Text.Encoding]::UTF8)
     exit 1
 }
-$pending=Join-Path $base 'latest.pending.txt'
+$latestName=if($Quick){'latest-quick.txt'}elseif($StartRepair){'latest-auto-full.txt'}else{'latest-full.txt'}
+$pending=Join-Path $base ($latestName+'.pending')
 [IO.File]::WriteAllText($pending,$run,[Text.Encoding]::UTF8)
-Move-Item -LiteralPath $pending -Destination (Join-Path $base 'latest.txt') -Force
+Move-Item -LiteralPath $pending -Destination (Join-Path $base $latestName) -Force
+[IO.File]::WriteAllText((Join-Path $base 'latest.txt'),$run,[Text.Encoding]::UTF8)
 function ConvertTo-UtcDateTimeOffset($Value) {
     if($Value -is [DateTimeOffset]){return $Value.ToUniversalTime()}
     if($Value -is [DateTime]){return [DateTimeOffset]$Value.ToUniversalTime()}

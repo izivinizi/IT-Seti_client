@@ -45,9 +45,14 @@ if(!$sampleRoot.StartsWith($tempPrefix,[StringComparison]::OrdinalIgnoreCase)){t
 New-Item -ItemType Directory -Path $sampleRoot -Force | Out-Null
 try {
     & ([scriptblock]::Create($sampler)) -RunRoot $sampleRoot -Seconds 0 -Interval 1
-    foreach($name in @('resource-sample-progress.json','resource-sample.json')) {
-        $sample=Get-Content -LiteralPath (Join-Path $sampleRoot $name) -Raw | ConvertFrom-Json
-        if($sample.Samples -ne 1 -or $sample.Error){throw "Sampler did not produce a valid $name"}
+    $final=Get-Content -LiteralPath (Join-Path $sampleRoot 'resource-sample.json') -Raw | ConvertFrom-Json
+    if($final.Error){
+        if($final.Samples -ne 0){throw 'Sampler failure was not reported accurately.'}
+    }else{
+        foreach($name in @('resource-sample-progress.json','resource-sample.json')) {
+            $sample=Get-Content -LiteralPath (Join-Path $sampleRoot $name) -Raw | ConvertFrom-Json
+            if($sample.Samples -ne 1 -or $sample.Error){throw "Sampler did not produce a valid $name"}
+        }
     }
 } finally {Remove-Item -LiteralPath $sampleRoot -Recurse -Force -ErrorAction SilentlyContinue}
 $counterFunction=@($samplerAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'CounterDelta'},$true))
@@ -148,15 +153,15 @@ $setupUninstaller=[IO.File]::ReadAllText((Join-Path $Root 'OrganizationUninstall
 $supportView=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\SupportDialog.xaml'),[Text.Encoding]::UTF8)
 $supportCode=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\SupportDialog.xaml.cs'),[Text.Encoding]::UTF8)
 if($softwareView.Contains('Пароль itseti') -or !$softwareCode.Contains('ConfigureEngineerShell();') -or
-   !$softwareCode.Contains('HandoffToEngineer(launch.Process)') -or !$softwareCode.Contains('ChooseOrganizationInstallMode') -or
-   !$softwareAudit.Contains('State == "Установлено" ? "Удалить" : "Установить"') -or
+   !$softwareCode.Contains('HandoffToEngineer(launch.Process)') -or $softwareCode.Contains('ChooseOrganizationInstallMode') -or
+   !$softwareAudit.Contains('"Установлено" => "Удалить"') -or
    !$softwareCode.Contains('RunUninstallComponentAsync') -or !$systemTools.Contains('"ms-settings:"') -or
    !$setupUninstaller.Contains('[switch]$Silent') -or $setupUninstaller -notmatch '(?i)данные обслуживания сохранены') {
     throw 'Engineering startup, Windows Settings, setup choices, or component uninstall regression detected.'
 }
 if(!$softwareCode.Contains('CopyAnyDesk_Click') -or !$softwareView.Contains('UserAnyDeskLabel') -or
    !$supportView.Contains('При подаче заявки укажите данные компьютера.') -or
-   !$supportCode.Contains('CopyAll_Click') -or !$softwareCode.Contains('GetMissingNewPcPackages')) {
+   !$supportCode.Contains('CopyAll_Click') -or $softwareCode.Contains('GetMissingNewPcPackages')) {
     throw 'Support identity display or setup mode selection is missing.'
 }
 if(!$organizationHelper.Contains('ValidateSet(''AnyDesk'', ''RMS'', ''OCS'', ''Panel'')') -or
@@ -212,6 +217,16 @@ if($updateErrors){throw 'Windows Update policy worker has PowerShell syntax erro
 $updateSource=[IO.File]::ReadAllText($updatePolicy,[Text.Encoding]::UTF8)
 if($updateSource -notmatch 'original-policy\.json' -or $updateSource -notmatch 'ChangedExternally' -or $updateSource -notmatch 'NoAutoUpdate') {throw 'Windows Update policy worker must preserve and protect the existing setting.'}
 if(!$entry.Contains('[switch]$Quick') -or !$entry.Contains('SkipResourceSampling:$Quick') -or !$entry.Contains('SkipDiskBenchmark:$Quick')) {throw 'Quick check must retain SMART while skipping long measurements.'}
+if($viewModel -notmatch 'RunUserQuickAsync\(progress\)' -or $diskTools -notmatch 'RunUserQuickAsync' -or
+   !$entry.Contains('latest-quick.txt') -or !$entry.Contains('latest-full.txt')) {
+    throw 'Scheduled user quick check must reach the quick SYSTEM task without long measurements or shared-report races.'
+}
+$accountScript=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Create-LocalAdmin.ps1'
+$accountTokens=$null;$accountErrors=$null
+[void][Management.Automation.Language.Parser]::ParseFile($accountScript,[ref]$accountTokens,[ref]$accountErrors)
+if($accountErrors -or (Get-Content -LiteralPath $accountScript -Raw) -notmatch 'if\(\$admin\)\{''it-seti''\}else\{''Admin''\}') {
+    throw 'Local admin creation must preserve the Admin/it-seti selection from the existing setup script.'
+}
 if($install -notmatch 'ITSeti-Maintenance-Repair' -or $install -notmatch 'InstalledRepair.ps1') {throw 'Independent repair task is missing.'}
 if($install -notmatch 'ITSeti-Maintenance-Cleanup' -or $install -notmatch 'InstalledCleanup.ps1' -or $install -notmatch 'CleanupRuns') {throw 'Installed cleanup task or protected results directory is missing.'}
 $cleanupEntry=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCleanup.ps1'

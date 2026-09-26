@@ -5,9 +5,10 @@ namespace ITSeti.Maintenance.Infrastructure;
 
 public sealed record OrganizationComponent(string Name, string State, string Detail, string Package, bool NeedsAttention, string InstallKey)
 {
+    public string ActionStatus { get; init; } = "";
     public bool CanInstall => !string.IsNullOrWhiteSpace(InstallKey) &&
         (State == "Установлено" || Package == "Файл есть");
-    public string InstallLabel => State == "Установлено" ? "Удалить" : "Установить";
+    public string InstallLabel => State switch { "Установлено" => "Удалить", "Требует обновления" => "Обновить", _ => "Установить" };
 }
 
 public static class OrganizationSoftwareAudit
@@ -44,14 +45,31 @@ public static class OrganizationSoftwareAudit
         var ocs = Path.Combine(programFiles, "OCS Inventory Agent", "OcsService.exe");
         var desktop = Path.Combine(programFiles, "Desktop Info", "DesktopInfo.exe");
         var panel = Path.Combine(data, "ITSETI", "DesktopInfo.ini");
+        var winRar = Existing(programFiles, programFiles86, "WinRAR", "WinRAR.exe");
+        var yandex = Existing(programFiles, programFiles86, @"Yandex\YandexBrowser\Application", "browser.exe");
         var rows = new List<OrganizationComponent>
         {
             Evaluate("AnyDesk", "AnyDesk", anyDesk, HasService("AnyDesk"), source, "AnyDesk-installer.exe"),
             Evaluate("RMS Host", "RMS", rms, HasService("RManService"), source, "Host-IT-SETI.RMS.7.7.3.0v3.msi", new Version(7, 7, 3, 0)),
             Evaluate("OCS Inventory", "OCS", File.Exists(ocs) ? ocs : null, HasService("OCS Inventory Service"), source, "OCS-Agent-Installerv4.exe"),
-            Evaluate("Панель ИТ-Сети", "Panel", File.Exists(desktop) ? desktop : null, File.Exists(panel), source, "DesktopInfo3230.exe", new Version(3, 23, 0))
+            Evaluate("Панель ИТ-Сети", "Panel", File.Exists(desktop) ? desktop : null, File.Exists(panel), source, "DesktopInfo3230.exe", new Version(3, 23, 0)),
+            EvaluateStandalone("WinRAR", "WinRAR", winRar, "winrar-x64-723ru.exe", new Version(7, 23, 0)),
+            EvaluateStandalone("Яндекс Браузер", "Yandex", yandex, "Yandex.exe", new Version(26, 8, 4, 893))
         };
         return rows;
+    }
+
+    private static OrganizationComponent EvaluateStandalone(string name, string key, string? executable, string package, Version required)
+    {
+        var installed = executable is not null && File.Exists(executable);
+        var bundled = File.Exists(Path.Combine(AppContext.BaseDirectory, "Tools", "Software", package));
+        var versionText = installed ? FileVersionInfo.GetVersionInfo(executable!).FileVersion?.Split(' ').FirstOrDefault() : null;
+        var versionKnown = Version.TryParse(versionText, out var version);
+        var needsUpdate = installed && (!versionKnown || version! < required);
+        var state = !installed ? "Не найдено" : needsUpdate ? "Требует обновления" : "Установлено";
+        var detail = !installed ? "Программа не обнаружена." : needsUpdate
+            ? $"Версия {versionText ?? "не определена"}; в комплекте {required}." : $"Версия {version}.";
+        return new(name, state, detail, bundled ? "Файл есть" : "Нет в комплекте", state != "Установлено", key);
     }
 
     private static OrganizationComponent Evaluate(string name, string installKey, string? exe, bool serviceOrPanel, string? source,

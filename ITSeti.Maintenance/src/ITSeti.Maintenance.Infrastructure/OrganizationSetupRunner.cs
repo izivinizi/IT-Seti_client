@@ -19,6 +19,11 @@ public static class OrganizationSetupRunner
         ["OCS"] = new("OCS-Agent-Installerv4.exe", "EA1239BD75C43A85F89BD5813B64D9D0789F8E598EA24F29B2B28CE1F012ED3D"),
         ["Panel"] = new("DesktopInfo3230.exe", "BE653BF81088855640BD7F2D42D682BCB2731C71F390A83928D68AB6E707021C")
     };
+    private static readonly IReadOnlyDictionary<string, Package> BundledPackages = new Dictionary<string, Package>(StringComparer.Ordinal)
+    {
+        ["WinRAR"] = new("winrar-x64-723ru.exe", "831EE7523E1D9D542DDA1531E88D9F229312F2392CD7A99F9B9C885AB70604F2"),
+        ["Yandex"] = new("Yandex.exe", "E761361E28510C954A7F60A49E625EE1ECCC318CA1D0F05D7255A05E3E7DF4AF")
+    };
     private static readonly IReadOnlyDictionary<string, string> PanelFileHashes = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["DesktopInfo.ini"] = "C5BEEA181AB32B4677C7478D6B2B0026969881DE11E7167077085D5A07A85D23",
@@ -30,6 +35,17 @@ public static class OrganizationSetupRunner
     public static async Task<IReadOnlyList<string>> CheckAsync(string? source, string? component = null)
     {
         var problems = new List<string>();
+        if (component is not null && BundledPackages.TryGetValue(component, out var bundled))
+        {
+            var bundledPath = Path.Combine(AppContext.BaseDirectory, "Tools", "Software", bundled.FileName);
+            if (!File.Exists(bundledPath)) return [$"В комплекте приложения нет {bundled.FileName}."];
+            using var bundledStream = File.OpenRead(bundledPath);
+            var bundledHash = Convert.ToHexString(await SHA256.HashDataAsync(bundledStream));
+            if (!bundledHash.Equals(bundled.Sha256, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(await Task.Run(() => VerifyAuthenticode(bundledPath)), "Valid", StringComparison.Ordinal))
+                problems.Add($"{bundled.FileName}: неверный хеш или подпись установщика.");
+            return problems;
+        }
         if (string.IsNullOrWhiteSpace(source)) return ["Комплект ITSETI-Setup не найден."];
         if (component is not null && !Packages.ContainsKey(component)) return ["Неизвестный компонент установки."];
         var script = Path.Combine(source, "system", "Install.ps1");
@@ -165,6 +181,12 @@ public static class OrganizationSetupRunner
     public static async Task<int> RunComponentAsync(string source, string component, IProgress<string>? progress = null)
         => await RunAsync(source, component, "Install", progress);
 
+    public static async Task<int> RunBundledComponentAsync(string component, IProgress<string>? progress = null)
+    {
+        if (!BundledPackages.ContainsKey(component)) throw new ArgumentException("Неизвестный компонент приложения.", nameof(component));
+        return await RunAsync(null, component, "Install", progress);
+    }
+
     public static async Task<int> RunUninstallComponentAsync(string component, IProgress<string>? progress = null)
         => await RunAsync(null, component, "Uninstall", progress);
 
@@ -176,7 +198,8 @@ public static class OrganizationSetupRunner
         if (component is null && operation != "Install") throw new InvalidOperationException("Для действия требуется выбрать компонент.");
         if (operation == "Install")
         {
-            if (source is null) throw new InvalidOperationException("Не выбрана папка комплекта ITSETI-Setup.");
+            if (source is null && (component is null || !BundledPackages.ContainsKey(component)))
+                throw new InvalidOperationException("Не выбрана папка комплекта ITSETI-Setup.");
             var problems = await CheckAsync(source, component);
             if (problems.Count > 0) throw new InvalidOperationException(string.Join(Environment.NewLine, problems));
         }

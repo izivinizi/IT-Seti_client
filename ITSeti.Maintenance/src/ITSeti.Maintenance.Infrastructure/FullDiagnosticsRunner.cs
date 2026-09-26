@@ -114,8 +114,9 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         return false;
     }
     public Task<DiagnosticSnapshot> RunAsync(IProgress<DiagnosticProgress> progress) => RunCoreAsync(progress, false);
-    public Task<DiagnosticSnapshot> RunUserAsync(IProgress<DiagnosticProgress> progress) => RunCoreAsync(progress, false);
+    public Task<DiagnosticSnapshot> RunUserAsync(IProgress<DiagnosticProgress> progress) => RunCoreAsync(progress, true);
     public Task<DiagnosticSnapshot> RunQuickAsync(IProgress<DiagnosticProgress> progress) => RunCoreAsync(progress, false, true);
+    public Task<DiagnosticSnapshot> RunUserQuickAsync(IProgress<DiagnosticProgress> progress) => RunCoreAsync(progress, true, true);
 
     private async Task<DiagnosticSnapshot> RunCoreAsync(IProgress<DiagnosticProgress> progress, bool userMode, bool quickMode = false)
     {
@@ -161,12 +162,18 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         var process = Process.Start(info) ?? throw new InvalidOperationException("Не удалось запустить проверку");
         using (process)
         {
+            var deadline = DateTime.UtcNow.AddMinutes(20);
             var lastStage = "";
             var partialTimestamp = DateTime.MinValue;
             var lastSampleCount = -1;
             var diskLineCount = 0;
             while (!process.HasExited)
             {
+                if (DateTime.UtcNow >= deadline)
+                {
+                    process.Kill(entireProcessTree: true);
+                    throw new TimeoutException($"Проверка не завершилась за 20 минут. Журнал: {root}");
+                }
                 var stage = "Полная проверка выполняется…";
                 try { stage = await File.ReadAllTextAsync(Path.Combine(root, "stage.txt")); } catch (IOException) { }
                 var progressSnapshot = await ReadProgressSnapshotAsync(root, partialTimestamp);
@@ -263,7 +270,7 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
 
     private static async Task<DiagnosticSnapshot> RunInstalledAsync(IProgress<DiagnosticProgress> progress, string taskName)
     {
-        var latest = Path.Combine(InstalledRoot, "latest.txt");
+        var latest = GetInstalledReportPointer(taskName);
         var previous = File.Exists(latest) ? (await File.ReadAllTextAsync(latest)).Trim() : "";
         using var launch = new Process { StartInfo = new ProcessStartInfo("schtasks.exe")
         {
@@ -333,6 +340,21 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
             await Task.Delay(600);
         }
         throw new TimeoutException($"Проверка не завершилась за 20 минут. Журнал: {root}");
+    }
+
+    private static string GetInstalledReportPointer(string taskName)
+    {
+        var installedScript = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            "ITSeti Maintenance", "Backend", "InstalledCheck.ps1");
+        if (!File.Exists(installedScript))
+            installedScript = Path.Combine(AppContext.BaseDirectory, "Backend", "InstalledCheck.ps1");
+        try
+        {
+            if (File.ReadAllText(installedScript).Contains("latest-full.txt", StringComparison.Ordinal))
+                return Path.Combine(InstalledRoot, taskName == InstalledQuickTask ? "latest-quick.txt" : "latest-full.txt");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return Path.Combine(InstalledRoot, "latest.txt");
     }
 
     public static async Task<IReadOnlyList<DiagnosticSnapshot>> ReadInstalledReportsAsync()

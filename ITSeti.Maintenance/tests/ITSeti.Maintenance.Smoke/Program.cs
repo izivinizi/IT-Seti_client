@@ -20,6 +20,8 @@ internal static class Program
     {
         if (args.Contains("--progress-regression") || args.Contains("--installed-user-check"))
             return CheckProgressRegression(args.Contains("--installed-user-check"));
+        if (args.Contains("--installed-quick-check")) return CheckInstalledQuick().GetAwaiter().GetResult();
+        if (args.Contains("--installed-full-check")) return CheckInstalledFull().GetAwaiter().GetResult();
         if (args.Contains("--update-client-contract")) return CheckUpdateClientContract().GetAwaiter().GetResult();
         if (args.Contains("--interactive-disk-tools")) return CheckInteractiveDiskTools();
         AssertEngineerAccountParsing();
@@ -308,8 +310,8 @@ internal static class Program
                 if (window.ViewModel.FilteredEvents.Cast<EventDetails>().Count() != 3) throw new Exception("All-event filter failed");
                 window.ViewModel.EventFilterLevel = 1;
                 window.ViewModel.Selected = first;
-                if (window.ViewModel.SetupComponents.Count != 4) throw new Exception("Organization software audit missing components");
-                if (window.ViewModel.SetupComponents.Select(component => component.InstallKey).Distinct().Count() != 4)
+                if (window.ViewModel.SetupComponents.Count != 6) throw new Exception("Organization software audit missing components");
+                if (window.ViewModel.SetupComponents.Select(component => component.InstallKey).Distinct().Count() != 6)
                     throw new Exception("Per-component install actions are missing");
                 if (window.ViewModel.SystemTools.Count != 8 || window.ViewModel.SystemTools.All(tool => tool.Key != "security"))
                     throw new Exception("System application shortcuts are incomplete");
@@ -324,7 +326,7 @@ internal static class Program
                     && !string.Equals(detectedSetup, @"F:\Service\ITSETI-Setup", StringComparison.OrdinalIgnoreCase))
                     throw new Exception("Moved ITSETI-Setup folder was not discovered under Service");
                 await AssertSetupSignatureCheck(output);
-                foreach (var name in new[] { "InstallSetupButton", "LaunchDiskInfoButton", "LaunchDiskMarkButton", "LaunchTreeSizeButton" })
+                foreach (var name in new[] { "InstallSetupButton", "CreateAdminAccountButton", "LaunchDiskInfoButton", "LaunchDiskMarkButton", "LaunchTreeSizeButton" })
                     if (window.FindName(name) is not Button { IsEnabled: true }) throw new Exception($"ПО action is unavailable: {name}");
                 AssertDiskToolResolution(output);
                 typeof(MainViewModel).GetField("identity", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
@@ -594,6 +596,12 @@ internal static class Program
             || names.Any(name => !problems.Any(problem => problem.StartsWith(name + ": SHA-256", StringComparison.OrdinalIgnoreCase)))
             || problems.Any(problem => problem.Contains("проверка Windows недоступна", StringComparison.OrdinalIgnoreCase)))
             throw new Exception("Package preflight did not report the modified script and every unpinned package: " + string.Join(" | ", problems));
+        foreach (var component in new[] { "WinRAR", "Yandex" })
+        {
+            var bundledProblems = await OrganizationSetupRunner.CheckAsync(null, component);
+            if (bundledProblems.Count != 0)
+                throw new Exception($"Bundled {component} failed preflight: {string.Join(" | ", bundledProblems)}");
+        }
     }
 
     private static void AssertRules()
@@ -602,6 +610,13 @@ internal static class Program
         var full = new FullDiagnosticDetails("CPU", "GPU", true, [], [], [], [], 0, 0, false, benchmark, "C:\\test");
         var snapshot = new DiagnosticSnapshot(Guid.NewGuid(), DateTimeOffset.Now, "Test", 12, 16_000_000_000, 8_000_000_000, [], [], full);
         if (!snapshot.ResultLabel.Contains("неполные данные")) throw new Exception("Missing data not marked in history");
+        var intentionalQuick = snapshot with { Full = full with
+        {
+            SmartDisks = [new SmartDiskDetails("Test", "Good", "C:", "SSD", "PCIe")],
+            Benchmark = new DiskBenchmark("C:", "SSD", null, null, 2, "Skipped", "Быстрая проверка: измерение скорости не запускалось.")
+        } };
+        if (intentionalQuick.KindLabel != "Быстрая" || intentionalQuick.ResultLabel.Contains("неполные данные"))
+            throw new Exception("Intentional quick-check skips must not be shown as missing measurements");
         var unhealthy = new PhysicalDiskDetails("Test disk", "SSD", "Warning");
         var quickHealth = snapshot with { Full = null, QuickDisks = [unhealthy] };
         if (!quickHealth.ResultLabel.Contains("Требует внимания")
@@ -882,6 +897,26 @@ internal static class Program
         };
         app.Run(window);
         return exitCode;
+    }
+
+    private static async Task<int> CheckInstalledQuick()
+    {
+        if (!FullDiagnosticsRunner.IsInstalled) throw new Exception("Installed backend is missing");
+        var snapshot = await new FullDiagnosticsRunner().RunQuickAsync(new Progress<DiagnosticProgress>());
+        if (snapshot.Full is not { SmartDisks.Count: > 0 } full)
+            throw new Exception("Installed quick check did not return SMART data");
+        Console.WriteLine($"PASS: installed quick check, SMART={full.SmartDisks.Count}, report={full.ReportDirectory}");
+        return 0;
+    }
+
+    private static async Task<int> CheckInstalledFull()
+    {
+        if (!FullDiagnosticsRunner.IsInstalled) throw new Exception("Installed backend is missing");
+        var snapshot = await new FullDiagnosticsRunner().RunAsync(new Progress<DiagnosticProgress>());
+        if (snapshot.Full is not { SmartDisks.Count: > 0 } full)
+            throw new Exception("Installed full check did not return SMART data");
+        Console.WriteLine($"PASS: installed full check, SMART={full.SmartDisks.Count}, benchmark={full.Benchmark.State}, report={full.ReportDirectory}");
+        return 0;
     }
 
     private static void Click(Button button) => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));

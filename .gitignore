@@ -31,6 +31,9 @@
 **/diskmark-inspection.json
 **/comparison.txt
 **/history.xml
+ITSeti.Maintenance/Tools/CrystalDiskInfo9_6_3_Portable/Smart/
+ITSeti.Maintenance/Tools/CrystalDiskInfo9_6_3_Portable/DiskInfo.ini
+ITSeti.Maintenance/Tools/CrystalDiskInfo9_6_3_Portable/DiskInfo.txt
 
 # IDE and local user state
 .vs/

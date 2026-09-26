@@ -396,9 +396,9 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             if (full is null) return Selected.QuickDisks is not { Count: > 0 }
                 ? "Не удалось проверить состояние дисков. Подробности доступны инженеру." : "";
             var lines = new List<string>();
-            if (full.Benchmark is { State: "Failed" or "Skipped" }) lines.Add("скорость диска");
+            if (full.Benchmark.State == "Failed" || full.Benchmark.State == "Skipped" && !Selected.IsQuickFull) lines.Add("скорость диска");
             if (full.SmartDisks.Count == 0) lines.Add("подробное состояние диска");
-            if (full.ResourceSampling is not { Samples: >= 6, Error: "" }) lines.Add("длительная нагрузка");
+            if (!Selected.IsQuickFull && full.ResourceSampling is not { Samples: >= 6, Error: "" }) lines.Add("длительная нагрузка");
             return lines.Count == 0 ? "" : "Не удалось проверить: " + string.Join(", ", lines) + ". Подробности доступны инженеру.";
         }
     }
@@ -407,10 +407,17 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public void RefreshSetupAudit(string? source = null)
     {
         setupSource = source ?? OrganizationSoftwareAudit.FindSource();
+        var statuses = SetupComponents.ToDictionary(component => component.InstallKey, component => component.ActionStatus);
         SetupComponents.Clear();
-        foreach (var component in OrganizationSoftwareAudit.Inspect(setupSource)) SetupComponents.Add(component);
+        foreach (var component in OrganizationSoftwareAudit.Inspect(setupSource))
+            SetupComponents.Add(component with { ActionStatus = statuses.GetValueOrDefault(component.InstallKey) ?? "" });
         Notify();
-        Notify();
+    }
+
+    public void SetSetupComponentStatus(string key, string message)
+    {
+        var index = SetupComponents.ToList().FindIndex(component => component.InstallKey == key);
+        if (index >= 0) SetupComponents[index] = SetupComponents[index] with { ActionStatus = message };
     }
 
     public void RefreshTreeSizeVolumes()
@@ -548,10 +555,15 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             if (Selected is null) return MetricNeutralBrush;
             var drive = (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").TrimEnd('\\');
             var disk = Selected.Disks.FirstOrDefault(item => string.Equals(item.Name.TrimEnd('\\'), drive, StringComparison.OrdinalIgnoreCase));
+            var speedIssue = Selected.Full?.Benchmark.State == "Completed"
+                ? DiagnosticRules.GetUserIssues(Selected).FirstOrDefault(issue => issue.Title == "Системный диск читает данные медленно")
+                : null;
             if (Selected.Full?.SmartDisks.Any(item => Regex.IsMatch(item.Status, "Caution|Bad|Тревог|Плох", RegexOptions.IgnoreCase)) == true ||
                 Selected.Full?.PhysicalDisks.Any(item => Regex.IsMatch(item.Health, "Warning|Unhealthy|Degraded|Pred Fail|Error|Тревог|Плох", RegexOptions.IgnoreCase)) == true ||
-                disk is { FreeBytes: < 5L * 1073741824 }) return MetricCriticalBrush;
-            if (disk is { FreeBytes: < 15L * 1073741824 }) return MetricWarningBrush;
+                disk is { FreeBytes: < 5L * 1073741824 } || speedIssue?.Severity == "Critical") return MetricCriticalBrush;
+            if (disk is { FreeBytes: < 15L * 1073741824 } ||
+                speedIssue?.Severity == "Warning")
+                return MetricWarningBrush;
             return MetricGoodBrush;
         }
     }
@@ -717,6 +729,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         }
     }
     public string HistoryCount => $"Сохранено проверок: {History.Count}";
+    public string SelectedHistorySummary => Selected?.HistoryDetailLabel ?? "Выберите проверку в списке.";
     public EventDetails? SelectedEvent
     {
         get => selectedEvent;
@@ -1056,8 +1069,9 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                 else RefreshDebug();
                 Notify();
             });
-            var snapshot = await Task.Run(() => userMode ? fullRunner.RunUserAsync(progress)
-                : quickMode ? fullRunner.RunQuickAsync(progress) : fullRunner.RunAsync(progress));
+            var snapshot = await Task.Run(() => quickMode
+                ? userMode ? fullRunner.RunUserQuickAsync(progress) : fullRunner.RunQuickAsync(progress)
+                : userMode ? fullRunner.RunUserAsync(progress) : fullRunner.RunAsync(progress));
             live = null;
             Selected = snapshot;
             await history.SaveAsync(snapshot);
@@ -1161,12 +1175,28 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             RefreshNetworkAdapters();
             RefreshIdentity();
             windowsUpdatePolicyStatus = new WindowsUpdatePolicyRunner().ReadStatus();
-            await history.SaveManyAsync(await FullDiagnosticsRunner.ReadInstalledReportsAsync());
             await ReloadAsync();
             status = History.Count > 0 ? "Последняя проверка загружена" : "Готово к первой проверке";
+            _ = ImportInstalledReportsAsync();
         }
         catch (Exception ex) { status = $"Не удалось прочитать историю: {ex.Message}"; }
         finally { busy = false; Notify(); }
+    }
+
+    private async Task ImportInstalledReportsAsync()
+    {
+        try
+        {
+            var reports = await FullDiagnosticsRunner.ReadInstalledReportsAsync();
+            if (reports.Count == 0) return;
+            await history.SaveManyAsync(reports);
+            if (!busy) await ReloadAsync();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or Microsoft.Data.Sqlite.SqliteException)
+        {
+            status = "История системных проверок недоступна: " + ex.Message;
+            Notify();
+        }
     }
 
     public async Task RefreshLiveStatusAsync()

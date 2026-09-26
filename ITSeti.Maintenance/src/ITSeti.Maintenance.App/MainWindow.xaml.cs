@@ -429,29 +429,17 @@ public partial class MainWindow : Window
 
     private async void InstallSetup_Click(object sender, RoutedEventArgs e)
     {
-        var mode = ChooseOrganizationInstallMode();
-        if (mode is null) return;
-        if (mode == true)
-        {
-            var missing = GetMissingNewPcPackages(ViewModel.SetupSourcePath);
-            var note = missing.Count > 0
-                ? "На подключённой флешке облегчённый комплект; отсутствуют файлы:\n" + string.Join("\n", missing)
-                : "В старом сценарии «Новый ПК» команда Office включает KMS-активацию. Этот сценарий нельзя запускать из приложения. Используйте комплект без обхода активации.";
-            MessageBox.Show(this, note, "Сценарий «Новый ПК» недоступен", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
         await RunOrganizationInstallAsync(null);
     }
 
-    private bool? ChooseOrganizationInstallMode()
+    private async void CreateAdminAccount_Click(object sender, RoutedEventArgs e)
     {
-        bool? newPc = null;
         var dialog = new Window
         {
             Owner = this,
-            Title = "Установка ПО",
+            Title = "Учётная запись администратора",
             Icon = Icon,
-            Width = 440,
+            Width = 455,
             SizeToContent = SizeToContent.Height,
             ResizeMode = ResizeMode.NoResize,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
@@ -459,35 +447,32 @@ public partial class MainWindow : Window
             FontFamily = FontFamily
         };
         var panel = new StackPanel { Margin = new Thickness(24) };
-        panel.Children.Add(new TextBlock { Text = "Выберите сценарий", FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(Color.FromRgb(20, 60, 135)), Margin = new Thickness(0, 0, 0, 8) });
-        panel.Children.Add(new TextBlock { Text = "Новый ПК включает дополнительные программы. «Только ПО» устанавливает AnyDesk, RMS, OCS и панель ИТ-Сети.", TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(Color.FromRgb(53, 74, 94)), Margin = new Thickness(0, 0, 0, 16) });
-        var newPcButton = new Button { Content = "Новый ПК", Padding = new Thickness(14, 10, 14, 10), Margin = new Thickness(0, 0, 0, 8), HorizontalContentAlignment = HorizontalAlignment.Left };
-        newPcButton.Click += (_, _) => { newPc = true; dialog.DialogResult = true; };
-        var organizationButton = new Button { Content = "Только ПО ИТ-Сети", Padding = new Thickness(14, 10, 14, 10), Background = new SolidColorBrush(Color.FromRgb(50, 110, 255)), Foreground = Brushes.White, BorderThickness = new Thickness(0) };
-        organizationButton.Click += (_, _) => { newPc = false; dialog.DialogResult = true; };
-        panel.Children.Add(newPcButton);
-        panel.Children.Add(organizationButton);
+        panel.Children.Add(new TextBlock { Text = "Создать локальную учётную запись", FontSize = 18, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(Color.FromRgb(20, 60, 135)), Margin = new Thickness(0, 0, 0, 8) });
+        panel.Children.Add(new TextBlock { Text = "Используется Admin; если она уже есть — it-seti. Существующую учётную запись включим и проверим права, но её пароль не изменим.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 14) });
+        panel.Children.Add(new TextBlock { Text = "Пароль новой учётной записи", Margin = new Thickness(0, 0, 0, 5) });
+        var input = new TextBox { Height = 36, Padding = new Thickness(8, 5, 8, 5), FontSize = 16 };
+        panel.Children.Add(input);
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 18, 0, 0) };
+        var cancel = new Button { Content = "Отмена", Padding = new Thickness(14, 8, 14, 8), Margin = new Thickness(0, 0, 8, 0) };
+        cancel.Click += (_, _) => dialog.DialogResult = false;
+        var create = new Button { Content = "Создать", Padding = new Thickness(14, 8, 14, 8), Background = new SolidColorBrush(Color.FromRgb(50, 110, 255)), Foreground = Brushes.White, BorderThickness = new Thickness(0) };
+        create.Click += (_, _) => { if (!string.IsNullOrWhiteSpace(input.Text)) dialog.DialogResult = true; };
+        buttons.Children.Add(cancel);
+        buttons.Children.Add(create);
+        panel.Children.Add(buttons);
         dialog.Content = panel;
-        return dialog.ShowDialog() == true ? newPc : null;
-    }
-
-    private static IReadOnlyList<string> GetMissingNewPcPackages(string? source)
-    {
-        if (string.IsNullOrWhiteSpace(source)) return ["Комплект ITSETI-Setup не подключён."];
-        var apps = Path.Combine(source, "system", "packages", "apps");
-        var required = new[]
+        if (dialog.ShowDialog() != true) return;
+        var password = input.Text;
+        input.Clear();
+        try
         {
-            "7z2301-x64.exe",
-            "GoogleChromeStandaloneEnterprise64.msi",
-            "YandexBrowser.msi",
-            "naps2-8.2.1-win-x64.exe",
-            "Adobe.Acrobat.Pro.v2024x64.exe"
-        };
-        var missing = required.Where(file => !File.Exists(Path.Combine(apps, file))).ToList();
-        var officeBits = Environment.Is64BitOperatingSystem ? "x64" : "x86";
-        if (!Directory.Exists(apps) || !Directory.EnumerateFiles(apps, $"Microsoft.Office.*{officeBits}*.iso").Any())
-            missing.Add($"Microsoft Office ISO ({officeBits})");
-        return missing;
+            var result = await LocalAdminAccountRunner.CreateAsync(password);
+            MessageBox.Show(this, result, "Учётная запись создана", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Учётная запись не создана", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private async void InstallComponent_Click(object sender, RoutedEventArgs e)
@@ -505,14 +490,17 @@ public partial class MainWindow : Window
         {
             if (MessageBox.Show(this, $"Удалить {displayName}? Данные RMS и AnyDesk с идентификаторами сохранятся.", "Удаление ПО", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             ViewModel.SetSetupStatus($"Удаление {displayName} выполняется…");
+            ViewModel.SetSetupComponentStatus(component, "Удаление…");
             await OrganizationSetupRunner.RunUninstallComponentAsync(component, new Progress<string>(ViewModel.SetSetupStatus));
             ViewModel.RefreshSetupAudit();
+            ViewModel.SetSetupComponentStatus(component, "Удалено");
             ViewModel.SetSetupStatus($"{displayName}: удаление завершено.");
             MessageBox.Show(this, $"{displayName}: удаление завершено.", "Удаление ПО", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
             ViewModel.SetSetupStatus($"Удаление не выполнено: {ex.Message}");
+            ViewModel.SetSetupComponentStatus(component, "Ошибка: " + ex.Message);
             MessageBox.Show(this, ex.Message, "Удаление не выполнено", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         finally { ViewModel.EndSetupInstall(); }
@@ -524,21 +512,48 @@ public partial class MainWindow : Window
         var source = ViewModel.SetupSourcePath;
         try
         {
-            var problems = await OrganizationSetupRunner.CheckAsync(source, component);
+            var problems = (await OrganizationSetupRunner.CheckAsync(source, component)).ToList();
+            if (component is null)
+            {
+                foreach (var bundled in new[] { "WinRAR", "Yandex" })
+                    problems.AddRange(await OrganizationSetupRunner.CheckAsync(null, bundled));
+            }
             if (problems.Count > 0)
             {
                 MessageBox.Show(this, string.Join(Environment.NewLine, problems), "Установка остановлена проверкой комплекта", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            var confirmation = component is null ? "Установить или обновить полный комплект ИТ-Сети?" : $"Установить компонент {component}?";
+            var confirmation = component is null ? "Установить AnyDesk, RMS, OCS, панель ИТ-Сети, WinRAR и Яндекс Браузер?" : $"Установить компонент {component}?";
             if (MessageBox.Show(this, confirmation, "Установка ПО", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
 
             ViewModel.SetSetupStatus(component is null ? "Установка комплекта выполняется…" : $"Установка {component} выполняется…");
-            var progress = new Progress<string>(ViewModel.SetSetupStatus);
-            var exitCode = component is null
-                ? await OrganizationSetupRunner.RunBaseAsync(source!, progress)
+            var progress = new Progress<string>(message =>
+            {
+                ViewModel.SetSetupStatus(message);
+                if (component is not null) ViewModel.SetSetupComponentStatus(component, message);
+            });
+            if (component is not null) ViewModel.SetSetupComponentStatus(component, "Установка…");
+            var exitCode = component is null ? await OrganizationSetupRunner.RunBaseAsync(source!, progress)
+                : component is "WinRAR" or "Yandex" ? await OrganizationSetupRunner.RunBundledComponentAsync(component, progress)
                 : await OrganizationSetupRunner.RunComponentAsync(source!, component, progress);
             ViewModel.RefreshSetupAudit(source);
+            if (component is not null) ViewModel.SetSetupComponentStatus(component, "Установлено");
+            if (component is null)
+            {
+                foreach (var key in new[] { "AnyDesk", "RMS", "OCS", "Panel" }) ViewModel.SetSetupComponentStatus(key, "Установлено");
+                foreach (var key in new[] { "WinRAR", "Yandex" })
+                {
+                    if (ViewModel.SetupComponents.FirstOrDefault(row => row.InstallKey == key)?.State == "Установлено")
+                    {
+                        ViewModel.SetSetupComponentStatus(key, "Уже установлено");
+                        continue;
+                    }
+                    ViewModel.SetSetupComponentStatus(key, "Установка…");
+                    await OrganizationSetupRunner.RunBundledComponentAsync(key, new Progress<string>(message => ViewModel.SetSetupComponentStatus(key, message)));
+                    ViewModel.RefreshSetupAudit(source);
+                    ViewModel.SetSetupComponentStatus(key, "Установлено");
+                }
+            }
             var message = exitCode == 0 ? "Установка завершена. Проверьте состояние компонентов." : $"Установщик вернул код {exitCode}. Проверьте C:\\ProgramData\\ITSETI\\install.log.";
             ViewModel.SetSetupStatus(message);
             MessageBox.Show(this, message, "Установка ПО", MessageBoxButton.OK, exitCode == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
@@ -546,6 +561,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             ViewModel.SetSetupStatus("Установка не выполнена: " + ex.Message);
+            if (component is not null) ViewModel.SetSetupComponentStatus(component, "Ошибка: " + ex.Message);
             MessageBox.Show(this, ex.Message, "Установка не выполнена", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         finally { ViewModel.EndSetupInstall(); }

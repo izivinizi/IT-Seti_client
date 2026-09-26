@@ -1,11 +1,19 @@
-param([string]$ToolsRoot=(Join-Path $PSScriptRoot 'Tools'),[string]$OutputRoot=(Join-Path $PSScriptRoot 'dist\ITSeti-Maintenance'),[switch]$SkipReleaseManifest)
+﻿param([string]$ToolsRoot=(Join-Path $PSScriptRoot 'Tools'),[string]$OutputRoot=(Join-Path $PSScriptRoot 'dist\ITSeti-Maintenance'),[switch]$SkipReleaseManifest)
 $ErrorActionPreference='Stop'
 & (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'tests\Test-PowerShellCompatibility.ps1') -Root $PSScriptRoot
 if($LASTEXITCODE -ne 0){throw 'Windows PowerShell compatibility check failed.'}
 $required=@('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe','PawnIO\PawnIO_setup.exe')
 foreach($relative in $required){if(!(Test-Path -LiteralPath (Join-Path $ToolsRoot $relative) -PathType Leaf)){throw "Missing: $relative"}}
 if(!(Test-Path -LiteralPath (Join-Path $ToolsRoot 'Tools.rar') -PathType Leaf)){throw 'Missing: Tools.rar'}
-dotnet publish (Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj') -c Release -r win-x64 --self-contained true -o (Join-Path $OutputRoot 'App')
+$appProject=Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj'
+dotnet restore $appProject -r win-x64 -p:NuGetAudit=false
+if($LASTEXITCODE -ne 0){
+    $cache=Join-Path $env:USERPROFILE '.nuget\packages'
+    Write-Warning 'NuGet недоступен; повторяем восстановление из локального кеша.'
+    dotnet restore $appProject -r win-x64 --source $cache -p:NuGetAudit=false
+    if($LASTEXITCODE -ne 0){throw 'dotnet restore failed; verify the NuGet connection or local package cache.'}
+}
+dotnet publish $appProject -c Release -r win-x64 --self-contained true --no-restore -o (Join-Path $OutputRoot 'App')
 if($LASTEXITCODE -ne 0){throw 'dotnet publish failed.'}
 $accessControlPackage=Join-Path $env:USERPROFILE '.nuget\packages\system.threading.accesscontrol\10.0.3\runtimes\win\lib\net9.0\System.Threading.AccessControl.dll'
 $publishedAccessControl=Join-Path (Join-Path $OutputRoot 'App') 'System.Threading.AccessControl.dll'
@@ -16,12 +24,18 @@ Copy-Item -LiteralPath $accessControlPackage -Destination $publishedAccessContro
 if([Reflection.AssemblyName]::GetAssemblyName($publishedAccessControl).Version -ne $dependencyVersion){throw 'Published temperature dependency does not match LibreHardwareMonitor.'}
 $destination=Join-Path $OutputRoot 'Tools'
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
-foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO')) {
+foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO','Software')) {
     $source=Join-Path $ToolsRoot $folder
     if(Test-Path -LiteralPath $source -PathType Container){
         $target=Join-Path $destination $folder
+        $outputFull=[IO.Path]::GetFullPath($OutputRoot).TrimEnd('\')+'\'
+        $targetFull=[IO.Path]::GetFullPath($target)
+        if(!$targetFull.StartsWith($outputFull,[StringComparison]::OrdinalIgnoreCase)){throw "Unsafe package target: $targetFull"}
+        if(Test-Path -LiteralPath $target){Remove-Item -LiteralPath $target -Recurse -Force}
         New-Item -ItemType Directory -Path $target -Force | Out-Null
-        Get-ChildItem -LiteralPath $source -Force | Copy-Item -Destination $target -Recurse -Force
+        Get-ChildItem -LiteralPath $source -Force |
+            Where-Object { $folder -ne 'CrystalDiskInfo9_6_3_Portable' -or $_.Name -notin @('Smart','DiskInfo.ini','DiskInfo.txt') } |
+            Copy-Item -Destination $target -Recurse -Force
     }
 }
 Copy-Item -LiteralPath (Join-Path $ToolsRoot 'Tools.rar') -Destination (Join-Path $destination 'Tools.rar') -Force

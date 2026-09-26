@@ -38,7 +38,7 @@ New-Item -ItemType Directory -Path $install,$data,(Join-Path $data 'Runs'),(Join
 New-Item -ItemType Directory -Path (Join-Path $install 'Backend') -Force | Out-Null
 if(!$PreinstalledApp){Get-ChildItem -LiteralPath $sourceApp -Force | Copy-Item -Destination $install -Recurse -Force}
 if(!$PreinstalledApp){
-    foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO')){
+    foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO','Software')){
         $source=Join-Path $sourceTools $folder
         if(Test-Path -LiteralPath $source -PathType Container){
             $target=Join-Path (Join-Path $install 'Tools') $folder

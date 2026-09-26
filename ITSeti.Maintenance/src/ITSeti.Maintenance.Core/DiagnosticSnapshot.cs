@@ -22,12 +22,14 @@ public sealed record DiagnosticSnapshot(
     public string DateLabel => StartedAt.LocalDateTime.ToString("dd.MM.yyyy HH:mm:ss");
     public string CpuLabel => CpuPercent < 0 ? "Нет данных" : $"{CpuPercent:N0}%";
     public string MemoryLabel => TotalMemoryBytes == 0 ? "Нет данных" : $"{MemoryUsedPercent:N0}%";
-    public string KindLabel => Full is null ? "Быстрая" : "Полная";
+    public bool IsQuickFull => Full?.Benchmark is { State: "Skipped", Error: var reason } &&
+        reason.Contains("Быстрая проверка", StringComparison.OrdinalIgnoreCase);
+    public string KindLabel => Full is null || IsQuickFull ? "Быстрая" : "Полная";
     public string ResultLabel
     {
         get
         {
-            var incomplete = Full is { } full && (full.Benchmark.State != "Completed" || full.SmartDisks.Count == 0);
+            var incomplete = Full is { } full && ((!IsQuickFull && full.Benchmark.State != "Completed") || full.SmartDisks.Count == 0);
             var result = AlertCount > 0 ? $"Требует внимания: {AlertCount}" : "Замеренные показатели в норме";
             return incomplete ? result + " · неполные данные" : result;
         }
@@ -107,6 +109,7 @@ public interface IFullDiagnosticsRunner
     Task<DiagnosticSnapshot> RunAsync(IProgress<DiagnosticProgress> progress);
     Task<DiagnosticSnapshot> RunUserAsync(IProgress<DiagnosticProgress> progress);
     Task<DiagnosticSnapshot> RunQuickAsync(IProgress<DiagnosticProgress> progress);
+    Task<DiagnosticSnapshot> RunUserQuickAsync(IProgress<DiagnosticProgress> progress);
 }
 
 public interface IDiagnosticsRunner
