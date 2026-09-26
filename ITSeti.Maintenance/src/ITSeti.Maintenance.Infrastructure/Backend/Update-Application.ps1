@@ -30,7 +30,7 @@ try {
     $currentVersion = [Version]($currentText -replace '\.\d+$', '')
     $manifestUrl = "https://raw.githubusercontent.com/$repository/main/release.json"
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $release = Invoke-RestMethod -Uri $manifestUrl -Headers @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/1.0.1'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache' } -TimeoutSec 30
+    $release = Invoke-RestMethod -Uri $manifestUrl -Headers @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/1.0.2'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache' } -TimeoutSec 30
     $versionText = [string]$release.version
     $tag = [string]$release.tag
     if ($versionText -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$' -or $tag -cne "v$versionText") { throw 'В манифесте GitHub некорректная версия или тег.' }

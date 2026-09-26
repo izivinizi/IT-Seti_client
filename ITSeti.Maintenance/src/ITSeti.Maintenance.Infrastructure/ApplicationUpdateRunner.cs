@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
+using System.Text.RegularExpressions;
 
 namespace ITSeti.Maintenance.Infrastructure;
 
@@ -13,8 +15,24 @@ public sealed class ApplicationUpdateRunner
 
     public static string? ReadLastStatus()
     {
-        try { return File.Exists(StatusPath) ? File.ReadAllText(StatusPath).Trim() : null; }
+        try
+        {
+            if (!File.Exists(StatusPath)) return null;
+            var status = File.ReadAllText(StatusPath).Trim();
+            return FilterStatusForVersion(status, Assembly.GetEntryAssembly()?.GetName().Version);
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    public static string? FilterStatusForVersion(string? status, Version? runningVersion)
+    {
+        if (string.IsNullOrWhiteSpace(status) || runningVersion is null) return status;
+        var match = Regex.Match(status,
+            @"(?:Версия\s+(?<version>\d+\.\d+\.\d+(?:\.\d+)?)\s+установлена|Установлена последняя версия\s+(?<version>\d+\.\d+\.\d+(?:\.\d+)?))",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success || !Version.TryParse(match.Groups["version"].Value, out var reportedVersion)) return status;
+        static Version Normalize(Version value) => new(value.Major, value.Minor, Math.Max(value.Build, 0));
+        return Normalize(reportedVersion) == Normalize(runningVersion) ? status : null;
     }
 
     public async Task RequestUpdateAsync(CancellationToken cancellationToken = default)

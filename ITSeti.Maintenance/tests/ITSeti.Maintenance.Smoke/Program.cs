@@ -25,6 +25,7 @@ internal static class Program
         if (args.Contains("--update-client-contract")) return CheckUpdateClientContract().GetAwaiter().GetResult();
         if (args.Contains("--interactive-disk-tools")) return CheckInteractiveDiskTools();
         AssertEngineerAccountParsing();
+        AssertUpdateStatusVersionFiltering();
         var fullFixture = Environment.GetEnvironmentVariable("ITSETI_FULL_FIXTURE");
         AssertCleanupSummaryFormatting();
         var output = Path.GetFullPath(Path.Combine("artifacts", "smoke-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")));
@@ -474,6 +475,7 @@ internal static class Program
 
     private static async Task<int> CheckUpdateClientContract()
     {
+        AssertUpdateStatusVersionFiltering();
         static string Payload(string version, string digest, string? url = null) => $$"""
             {"version":"{{version}}","tag":"v{{version}}","assetName":"ITSeti-Maintenance-Setup.exe",
              "size":12345,"digest":"{{digest}}","downloadUrl":"{{url ?? $"https://github.com/izivinizi/IT-Seti_client/releases/download/v{version}/ITSeti-Maintenance-Setup.exe"}}"}
@@ -509,6 +511,17 @@ internal static class Program
 
         Console.WriteLine("PASS: GitHub release manifest version, trusted URL and SHA-256 contract.");
         return 0;
+    }
+
+    private static void AssertUpdateStatusVersionFiltering()
+    {
+        const string stale = "2026-09-26 16:14:45 | Версия 1.2.1 установлена. Запустите приложение снова.";
+        const string current = "2026-09-26 18:40:00 | Версия 1.0.2 установлена. Запустите приложение снова.";
+        if (ApplicationUpdateRunner.FilterStatusForVersion(stale, new Version(1, 0, 2, 0)) is not null)
+            throw new Exception("An update completion status for a different app version was shown");
+        if (ApplicationUpdateRunner.FilterStatusForVersion(current, new Version(1, 0, 2, 0)) != current)
+            throw new Exception("A current update completion status was hidden");
+        Console.WriteLine("PASS: stale updater version status is hidden.");
     }
 
     private sealed class FakeReleaseHandler(string payload) : HttpMessageHandler
