@@ -8,7 +8,7 @@ public sealed record ApplicationRelease(Version Version, string Tag, string Dige
 public sealed class GitHubReleaseClient
 {
     private const string Repository = "izivinizi/IT-Seti_client";
-    private const string ManifestUrl = "https://github.com/izivinizi/IT-Seti_client/releases/latest/download/release.json";
+    private const string ManifestUrl = "https://raw.githubusercontent.com/izivinizi/IT-Seti_client/main/release.json";
     private const string InstallerName = "ITSeti-Maintenance-Setup.exe";
     private readonly HttpClient client;
     private readonly string manifestUrl;
@@ -24,7 +24,7 @@ public sealed class GitHubReleaseClient
     private static HttpClient CreateClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("ITSeti-Maintenance/1.2.1");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("ITSeti-Maintenance/0.13.1");
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         return client;
     }

@@ -193,13 +193,13 @@ if(!$install.Contains('ITSeti-Maintenance-Update') -or !$install.Contains('Updat
    !$updaterSource.Contains('last-result.txt') -or !$updaterSource.Contains('Ошибка обновления:') -or
    !$updaterSource.Contains('ITSeti-Maintenance-Setup.exe') -or !$updaterSource.Contains('ITSeti.Maintenance.dll') -or
    !$updaterSource.Contains('Split-Path $PSScriptRoot -Parent') -or
-   !$updaterSource.Contains('/releases/latest/download/release.json') -or
+   !$updaterSource.Contains('raw.githubusercontent.com/$repository/main/release.json') -or
    !$updaterSource.Contains('downloadUrl') -or $updaterSource -match 'api\.github\.com|runas') {
     throw 'Application update task must be fixed, SYSTEM-only, and validate release SHA-256.'
 }
 $releaseClient=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\GitHubReleaseClient.cs') -Raw
 $releaseRunner=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\ApplicationUpdateRunner.cs') -Raw
-if($releaseClient -notmatch '/releases/latest/download/release\.json' -or
+if($releaseClient -notmatch 'raw\.githubusercontent\.com/izivinizi/IT-Seti_client/main/release\.json' -or
    $releaseClient -match 'api\.github\.com' -or $releaseClient -notmatch 'sha256:' -or
    $releaseClient -notmatch 'releases/download/\{tag\}/\{InstallerName\}' -or
    $releaseRunner -notmatch 'ITSeti-Maintenance-Update' -or $releaseRunner -match '"runas"') {
