@@ -17,12 +17,27 @@ public sealed class ApplicationUpdateRunner
     {
         try
         {
-            if (!File.Exists(StatusPath)) return null;
-            var status = File.ReadAllText(StatusPath).Trim();
+            var status = ReadRawStatus();
             return FilterStatusForVersion(status, Assembly.GetEntryAssembly()?.GetName().Version);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
     }
+
+    public static string? ReadRawStatus()
+    {
+        try { return File.Exists(StatusPath) ? File.ReadAllText(StatusPath).Trim() : null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    public static string GetStatusMessage(string? status)
+    {
+        if (string.IsNullOrWhiteSpace(status)) return "";
+        var separator = status.IndexOf('|');
+        return (separator >= 0 ? status[(separator + 1)..] : status).Trim();
+    }
+
+    public static bool IsReadyToInstall(string? status) =>
+        GetStatusMessage(status).StartsWith("Пакет загружен и проверен. Готов к установке.", StringComparison.OrdinalIgnoreCase);
 
     public static string? FilterStatusForVersion(string? status, Version? runningVersion)
     {
@@ -35,10 +50,39 @@ public sealed class ApplicationUpdateRunner
         return Normalize(reportedVersion) == Normalize(runningVersion) ? status : null;
     }
 
-    public async Task RequestUpdateAsync(CancellationToken cancellationToken = default)
+    public async Task<bool> RequestUpdateAsync(IProgress<string>? progress = null, CancellationToken cancellationToken = default)
     {
+        var requestStarted = DateTime.Now.AddSeconds(-1);
         await RunTaskCommandAsync("/Query", cancellationToken);
         await RunTaskCommandAsync("/Run", cancellationToken);
+
+        var deadline = DateTimeOffset.UtcNow.AddMinutes(30);
+        string? lastMessage = null;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var status = ReadRawStatus();
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                var message = GetStatusMessage(status);
+                var separator = status.IndexOf('|');
+                var hasFreshTimestamp = separator > 0 && DateTime.TryParseExact(
+                    status[..separator].Trim(), "yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeLocal, out var timestamp) && timestamp >= requestStarted;
+                if (hasFreshTimestamp && message != lastMessage)
+                {
+                    lastMessage = message;
+                    progress?.Report(message);
+                    if (IsReadyToInstall(status)) return true;
+                    if (message.StartsWith("Ошибка обновления:", StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException(message["Ошибка обновления:".Length..].Trim());
+                    if (message.Contains("обновление не требуется", StringComparison.OrdinalIgnoreCase)) return false;
+                }
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(400), cancellationToken);
+        }
+
+        throw new TimeoutException("Системная задача не сообщила о готовности установщика за 30 минут. Подробности доступны в журнале обновления.");
     }
 
     private static async Task RunTaskCommandAsync(string operation, CancellationToken cancellationToken)

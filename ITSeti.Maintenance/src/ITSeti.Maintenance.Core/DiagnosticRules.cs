@@ -13,6 +13,34 @@ public static class DiagnosticRules
             : captured;
     }
 
+    public static IReadOnlyList<UserIssue> GetKernelPowerBugcheckIssues(IEnumerable<EventDetails> events)
+    {
+        var parsed = events.Select(item =>
+        {
+            var found = BugcheckCodeCatalog.TryGetKernelPowerCode(item, out var code);
+            return (Item: item, Found: found, Code: code);
+        }).Where(entry => entry.Found && entry.Code != 0);
+
+        return parsed.GroupBy(entry => entry.Code)
+            .Select(group =>
+            {
+                var latest = group.OrderByDescending(entry => entry.Item.Time, StringComparer.Ordinal).First().Item;
+                var name = BugcheckCodeCatalog.All.ContainsKey(group.Key)
+                    ? BugcheckCodeCatalog.GetName(group.Key)
+                    : "Название отсутствует во встроенной таблице Microsoft";
+                var time = DateTimeOffset.TryParse(latest.Time, out var occurredAt)
+                    ? occurredAt.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss")
+                    : latest.Time;
+                var count = group.Count();
+                var repeats = count > 1 ? $" Зафиксировано {count} таких сбоев." : "";
+                var detail = $"Код {group.Key} ({BugcheckCodeCatalog.FormatCode(group.Key)}) — {name}. "
+                    + BugcheckCodeCatalog.GetDescription(group.Key)
+                    + $" Последний случай: {time}.{repeats}";
+                return new UserIssue("Произошла критическая ошибка Windows (синий экран)", detail, "Critical");
+            })
+            .ToArray();
+    }
+
     private static bool IsKernelPower41WithZeroBugcheckCode(EventDetails item) =>
         item.Id == 41 && item.Provider.Contains("Kernel-Power", StringComparison.OrdinalIgnoreCase)
         && Regex.IsMatch(item.Message, @"\bBugcheckCode\s*[:=]\s*0(?:\D|$)", RegexOptions.IgnoreCase);
@@ -21,6 +49,7 @@ public static class DiagnosticRules
     {
         var issues = new List<UserIssue>();
         var full = snapshot.Full;
+        if (full is not null) issues.AddRange(GetKernelPowerBugcheckIssues(full.Events));
         if (snapshot.LastBootAt is { } boot && snapshot.StartedAt - boot > TimeSpan.FromDays(6))
             issues.Add(new("Компьютер давно не перезагружали",
                 "Последняя перезагрузка была более 6 дней назад. Сохраните открытые документы и перезагрузите компьютер, когда закончите работу.", "Warning"));
@@ -116,6 +145,8 @@ public static class DiagnosticRules
         if (full is null) return findings;
         var critical = GetActionableEvents(full.Events).Count(e => e.Level == 1);
         if (critical > 0) findings.Add($"Критических событий в доступной выборке: {critical}");
+        findings.AddRange(GetKernelPowerBugcheckIssues(full.Events)
+            .Select(issue => $"{issue.Title}: {issue.Detail}"));
         foreach (var disk in full.SmartDisks)
         {
             if (Regex.IsMatch(disk.Status, "Caution|Bad|Тревог|Плох", RegexOptions.IgnoreCase))

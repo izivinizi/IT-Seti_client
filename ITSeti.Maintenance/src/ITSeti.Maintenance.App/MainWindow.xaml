@@ -371,7 +371,7 @@
    <Border Width="420" MaxWidth="420" Padding="28" Background="White" CornerRadius="8" HorizontalAlignment="Center" VerticalAlignment="Center">
     <StackPanel>
      <TextBlock Text="Режим инженера" FontSize="20" FontWeight="SemiBold" Foreground="#143C87"/>
-     <TextBlock Text="Введите учётную запись Windows с правами администратора." Foreground="#354A5E" Margin="0,7,0,18" TextWrapping="Wrap"/>
+     <TextBlock Text="Введите учётную запись Windows с правами администратора и её пароль. PIN-код не подходит; пароль не сохраняется." Foreground="#354A5E" Margin="0,7,0,18" TextWrapping="Wrap"/>
      <TextBlock Text="Учётная запись Windows" Foreground="#354A5E" Margin="0,0,0,5"/>
      <ComboBox x:Name="AdminAccount" IsEditable="True" StaysOpenOnEdit="True" IsTextSearchEnabled="False" Height="38" Padding="10,7" FontSize="15" ToolTip="Выберите учётную запись или введите имя, ПК\пользователь, ДОМЕН\пользователь либо user@domain"/>
      <TextBlock Text="Пароль" Foreground="#354A5E" Margin="0,12,0,5"/>

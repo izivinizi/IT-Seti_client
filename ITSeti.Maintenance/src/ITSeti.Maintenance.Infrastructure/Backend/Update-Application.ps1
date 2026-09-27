@@ -30,7 +30,7 @@ try {
     $currentVersion = [Version]($currentText -replace '\.\d+$', '')
     $manifestUrl = "https://raw.githubusercontent.com/$repository/main/release.json"
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $release = Invoke-RestMethod -Uri $manifestUrl -Headers @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/1.0.3'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache' } -TimeoutSec 30
+    $release = Invoke-RestMethod -Uri $manifestUrl -Headers @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/1.0.6'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache' } -TimeoutSec 30
     $versionText = [string]$release.version
     $tag = [string]$release.tag
     if ($versionText -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$' -or $tag -cne "v$versionText") { throw 'В манифесте GitHub некорректная версия или тег.' }
@@ -51,7 +51,46 @@ try {
     if ($downloadUrl -cne $expectedUrl) { throw 'Ссылка на установщик не соответствует доверенному репозиторию.' }
 
     New-Item -ItemType Directory -Path $updateRoot -Force | Out-Null
-    Set-UpdateStatus "Найдена версия $latestVersion. Жду закрытия приложения."
+    Set-UpdateStatus "Найдена версия $latestVersion. Подготавливаю установщик."
+    $request = [Net.HttpWebRequest]::Create($downloadUrl)
+    $request.Method = 'GET'
+    $request.UserAgent = 'ITSeti-Maintenance-Updater/1.0.6'
+    $request.Timeout = 30000
+    $request.ReadWriteTimeout = 30000
+    $response = $request.GetResponse()
+    $inputStream = $response.GetResponseStream()
+    $outputStream = [IO.File]::Open($partial, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $totalBytes = [long]$response.ContentLength
+        $receivedBytes = [long]0
+        $lastPercent = -1
+        $buffer = [byte[]]::new(1048576)
+        while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $outputStream.Write($buffer, 0, $read)
+            $receivedBytes += $read
+            if ($totalBytes -gt 0) {
+                $percent = [int][Math]::Floor(($receivedBytes * 100.0) / $totalBytes)
+                if ($percent -ge $lastPercent + 2 -or $percent -eq 100) {
+                    $lastPercent = $percent
+                    $receivedMb = [Math]::Floor($receivedBytes / 1MB)
+                    $totalMb = [Math]::Ceiling($totalBytes / 1MB)
+                    Set-UpdateStatus "Скачивание установщика: $percent% ($receivedMb из $totalMb МБ)."
+                }
+            }
+        }
+    } finally {
+        if ($outputStream) { $outputStream.Dispose() }
+        if ($inputStream) { $inputStream.Dispose() }
+        if ($response) { $response.Dispose() }
+    }
+    if ((Get-Item -LiteralPath $partial).Length -ne $assetSize) { throw 'Размер скачанного установщика не совпал с манифестом.' }
+    Set-UpdateStatus 'Проверяю SHA-256 установщика.'
+    $actualHash = (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash
+    if ($actualHash -cne $expectedHash) { throw 'SHA-256 установщика не совпал с данными GitHub.' }
+    $installer = Join-Path $updateRoot $assetName
+    Move-Item -LiteralPath $partial -Destination $installer -Force
+
+    Set-UpdateStatus 'Пакет загружен и проверен. Готов к установке.'
     $deadline = [DateTime]::UtcNow.AddMinutes(4)
     do {
         $running = $false
@@ -64,14 +103,6 @@ try {
     } while ($running -and [DateTime]::UtcNow -lt $deadline)
     if ($running) { throw 'Окно приложения не закрылось; обновление отменено.' }
 
-    Set-UpdateStatus 'Скачиваю установщик.'
-    Invoke-WebRequest -Uri $downloadUrl -OutFile $partial -UseBasicParsing -TimeoutSec 600
-    if ((Get-Item -LiteralPath $partial).Length -ne $assetSize) { throw 'Размер скачанного установщика не совпал с манифестом.' }
-    Set-UpdateStatus 'Проверяю SHA-256 установщика.'
-    $actualHash = (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash
-    if ($actualHash -cne $expectedHash) { throw 'SHA-256 установщика не совпал с данными GitHub.' }
-    $installer = Join-Path $updateRoot $assetName
-    Move-Item -LiteralPath $partial -Destination $installer -Force
     Set-UpdateStatus "Устанавливаю версию $latestVersion."
     $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CLOSEAPPLICATIONS') -PassThru -Wait
     if ($process.ExitCode -ne 0) { throw "Установщик завершился с кодом $($process.ExitCode)." }

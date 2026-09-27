@@ -152,7 +152,7 @@ $systemTools=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Inf
 $setupUninstaller=[IO.File]::ReadAllText((Join-Path $Root 'OrganizationUninstall.ps1'),[Text.Encoding]::UTF8)
 $supportView=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\SupportDialog.xaml'),[Text.Encoding]::UTF8)
 $supportCode=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\SupportDialog.xaml.cs'),[Text.Encoding]::UTF8)
-if($softwareView.Contains('Пароль itseti') -or !$softwareCode.Contains('ConfigureEngineerShell();') -or
+if($softwareCode.Contains('MatchesPassword') -or !$softwareCode.Contains('ConfigureEngineerShell();') -or
    !$softwareCode.Contains('HandoffToEngineer(launch.Process)') -or $softwareCode.Contains('ChooseOrganizationInstallMode') -or
    !$softwareAudit.Contains('"Установлено" => "Удалить"') -or
    !$softwareCode.Contains('RunUninstallComponentAsync') -or !$systemTools.Contains('"ms-settings:"') -or
@@ -197,10 +197,15 @@ if(!$install.Contains('ITSeti-Maintenance-Update') -or !$install.Contains('Updat
    !$updaterSource.Contains('S-1-5-18') -or !$updaterSource.Contains('Get-FileHash') -or
    !$updaterSource.Contains('last-result.txt') -or !$updaterSource.Contains('Ошибка обновления:') -or
    !$updaterSource.Contains('ITSeti-Maintenance-Setup.exe') -or !$updaterSource.Contains('ITSeti.Maintenance.dll') -or
+   !$updaterSource.Contains('Скачивание установщика:') -or !$updaterSource.Contains('HttpWebRequest') -or
+   !$updaterSource.Contains('Пакет загружен и проверен. Готов к установке.') -or
    !$updaterSource.Contains('Split-Path $PSScriptRoot -Parent') -or
    !$updaterSource.Contains('raw.githubusercontent.com/$repository/main/release.json') -or
    !$updaterSource.Contains('downloadUrl') -or $updaterSource -match 'api\.github\.com|runas') {
     throw 'Application update task must be fixed, SYSTEM-only, and validate release SHA-256.'
+}
+if($updaterSource.IndexOf('HttpWebRequest') -gt $updaterSource.IndexOf('$deadline = [DateTime]::UtcNow.AddMinutes(4)')) {
+    throw 'The package must download and pass validation before the user app waits to close.'
 }
 $releaseClient=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\GitHubReleaseClient.cs') -Raw
 $releaseRunner=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\ApplicationUpdateRunner.cs') -Raw
@@ -209,6 +214,10 @@ if($releaseClient -notmatch 'raw\.githubusercontent\.com/izivinizi/IT-Seti_clien
    $releaseClient -notmatch 'releases/download/\{tag\}/\{InstallerName\}' -or
    $releaseRunner -notmatch 'ITSeti-Maintenance-Update' -or $releaseRunner -match '"runas"') {
     throw 'Rate-limit-free GitHub release manifest or no-UAC task launcher is missing.'
+}
+if($releaseRunner -notmatch 'IsReadyToInstall' -or $releaseRunner -notmatch 'AddMinutes\(30\)' -or
+   !(Test-Path -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.App\UpdateProgressWindow.xaml'))) {
+    throw 'The update progress window or ready-to-install status polling is missing.'
 }
 $updatePolicy=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Set-WindowsAutomaticUpdates.ps1'
 $updateTokens=$null;$updateErrors=$null

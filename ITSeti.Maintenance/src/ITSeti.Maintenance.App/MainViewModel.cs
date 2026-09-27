@@ -460,6 +460,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public string ApplicationUpdateStatus => applicationUpdateStatus;
     public bool CanCheckApplicationUpdates => !busy && !applicationUpdateCheckRunning && !applicationUpdateRunning;
     public bool CanInstallApplicationUpdate => !busy && !applicationUpdateRunning && !applicationUpdateCheckRunning;
+    public string ApplicationUpdateTarget => availableApplicationRelease?.Version.ToString() ?? "";
     public string FullRunHint => FullDiagnosticsRunner.IsInstalled ? "Запустить установленную проверку без UAC" : "Полная проверка: требуется подтверждение UAC";
     public bool CanRun => !busy;
     public bool CanRunFull => CanRun && fullRunner is not null;
@@ -868,21 +869,35 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         }
     }
 
-    public async Task<bool> RequestApplicationUpdateAsync()
+    public async Task<bool> RequestApplicationUpdateAsync(IProgress<string>? progress = null)
     {
         if (busy || applicationUpdateRunning || availableApplicationRelease is null) return false;
         applicationUpdateRunning = true;
-        applicationUpdateStatus = "Передаём запрос системной задаче…";
+        applicationUpdateStatus = "Передаём запрос системной задаче обновления…";
         Notify();
+        progress?.Report(applicationUpdateStatus);
+        var statusProgress = new Progress<string>(message =>
+        {
+            applicationUpdateStatus = message;
+            Notify();
+            progress?.Report(message);
+        });
         try
         {
-            await new ApplicationUpdateRunner().RequestUpdateAsync();
-            applicationUpdateStatus = "Обновление запущено. Приложение будет закрыто.";
-            return true;
+            var readyToInstall = await new ApplicationUpdateRunner().RequestUpdateAsync(statusProgress);
+            if (!readyToInstall)
+                applicationUpdateStatus = "Обновление не требуется. Установлена последняя версия.";
+            else
+                applicationUpdateStatus = "Пакет загружен и проверен. Закрываю приложение для установки.";
+            Notify();
+            progress?.Report(applicationUpdateStatus);
+            return readyToInstall;
         }
         catch (Exception ex)
         {
             applicationUpdateStatus = "Не удалось запустить обновление: " + ex.Message;
+            Notify();
+            progress?.Report(applicationUpdateStatus);
             return false;
         }
         finally

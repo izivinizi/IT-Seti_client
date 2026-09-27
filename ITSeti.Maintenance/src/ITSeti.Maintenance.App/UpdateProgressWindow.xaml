@@ -1,0 +1,21 @@
+<Window x:Class="ITSeti.Maintenance.App.UpdateProgressWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Обновление приложения" Width="470" SizeToContent="Height"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        Background="#F3F6F8" FontFamily="Segoe UI Variable Text, Segoe UI"
+        ShowInTaskbar="True">
+    <Border Background="White" BorderBrush="#DDE6EB" BorderThickness="1" Padding="26">
+        <StackPanel>
+            <TextBlock Text="Обновление приложения" FontSize="22" FontWeight="SemiBold" Foreground="#143C87"/>
+            <TextBlock x:Name="VersionLabel" FontSize="16" Foreground="#263C52" Margin="0,7,0,18"/>
+            <ProgressBar x:Name="UpdateProgress" Height="8" IsIndeterminate="True" Foreground="#326EFF" Background="#E6EDF2" BorderThickness="0"/>
+            <TextBlock x:Name="StatusLabel" Text="Подключение к системной задаче обновления…"
+                       FontSize="16" Foreground="#263C52" TextWrapping="Wrap" Margin="0,16,0,0"/>
+            <TextBlock x:Name="HintLabel" Text="Приложение закроется после загрузки и проверки установщика."
+                       FontSize="14" Foreground="#52677A" TextWrapping="Wrap" Margin="0,10,0,0"/>
+            <Button x:Name="CloseButton" Content="Закрыть" Padding="18,8" HorizontalAlignment="Right"
+                    Margin="0,20,0,0" Visibility="Collapsed" IsDefault="True" Click="Close_Click"/>
+        </StackPanel>
+    </Border>
+</Window>

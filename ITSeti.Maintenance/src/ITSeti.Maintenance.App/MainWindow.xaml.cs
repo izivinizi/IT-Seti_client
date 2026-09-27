@@ -2,7 +2,6 @@ using System.IO;
 using System.ComponentModel;
 using System.Windows;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Security;
 using System.Threading;
 using System.Windows.Input;
@@ -245,45 +244,38 @@ public partial class MainWindow : Window
     {
         var password = AdminPassword.SecurePassword.Copy();
         AdminPassword.Clear();
-        if (!MatchesPassword(password, "itseti"))
+        var account = AdminAccount.Text;
+        UnlockButton.IsEnabled = false;
+        try
         {
-            var account = AdminAccount.Text;
-            UnlockButton.IsEnabled = false;
-            try
+            var launch = await Task.Run(() => EngineerWindowLauncher.TryStartWithWindowsCredentials(
+                account, password, historyDatabasePath));
+            if (launch.Process is null)
             {
-                var launch = await Task.Run(() => EngineerWindowLauncher.TryStartWithWindowsCredentials(
-                    account, password, historyDatabasePath));
-                if (launch.Process is null)
-                {
-                    AdminError.Text = FormatCredentialError(launch.ErrorCode);
-                    AdminError.Visibility = Visibility.Visible;
-                    AdminPassword.Focus();
-                    return;
-                }
-                HandoffToEngineer(launch.Process);
-            }
-            catch (Win32Exception ex)
-            {
-                AdminError.Text = FormatCredentialError(ex.NativeErrorCode);
+                AdminError.Text = FormatCredentialError(launch.ErrorCode);
                 AdminError.Visibility = Visibility.Visible;
                 AdminPassword.Focus();
+                return;
             }
-            catch (Exception ex)
-            {
-                AdminError.Text = "Не удалось открыть инженерское окно: " + ex.Message;
-                AdminError.Visibility = Visibility.Visible;
-                AdminPassword.Focus();
-            }
-            finally
-            {
-                password.Dispose();
-                UnlockButton.IsEnabled = true;
-            }
-            return;
+            HandoffToEngineer(launch.Process);
         }
-
-        password.Dispose();
-        ShowEngineerShell();
+        catch (Win32Exception ex)
+        {
+            AdminError.Text = FormatCredentialError(ex.NativeErrorCode);
+            AdminError.Visibility = Visibility.Visible;
+            AdminPassword.Focus();
+        }
+        catch (Exception ex)
+        {
+            AdminError.Text = "Не удалось открыть инженерское окно: " + ex.Message;
+            AdminError.Visibility = Visibility.Visible;
+            AdminPassword.Focus();
+        }
+        finally
+        {
+            password.Dispose();
+            UnlockButton.IsEnabled = true;
+        }
     }
 
     private static string FormatCredentialError(int errorCode) => errorCode switch
@@ -293,19 +285,6 @@ public partial class MainWindow : Window
         1385 => "Для этой учётной записи запрещён интерактивный вход в Windows. Используйте другую учётную запись администратора.",
         _ => $"Не удалось открыть инженерское окно (код Windows {errorCode}). Проверьте формат имени: пользователь, ПК\\пользователь или ДОМЕН\\пользователь."
     };
-
-    private static bool MatchesPassword(SecureString password, string expected)
-    {
-        var buffer = Marshal.SecureStringToBSTR(password);
-        try
-        {
-            if (Marshal.ReadInt32(buffer, -sizeof(int)) != expected.Length * sizeof(char)) return false;
-            for (var index = 0; index < expected.Length; index++)
-                if ((char)Marshal.ReadInt16(buffer, index * sizeof(char)) != expected[index]) return false;
-            return true;
-        }
-        finally { Marshal.ZeroFreeBSTR(buffer); }
-    }
 
     private void ShowEngineerShell()
     {
@@ -408,9 +387,13 @@ public partial class MainWindow : Window
         if (!ViewModel.CanInstallApplicationUpdate || ViewModel.ApplicationUpdateStatus.StartsWith("Установлена последняя", StringComparison.OrdinalIgnoreCase)) return;
         if (!ViewModel.ApplicationUpdateStatus.StartsWith("Доступна версия", StringComparison.OrdinalIgnoreCase)) return;
         if (MessageBox.Show(this,
-            "Приложение закроется. Системная задача скачает установщик последней версии и проверит его SHA-256 перед обновлением.",
+            "Откроется окно хода обновления. Установщик будет скачан и проверен по SHA-256. После этого приложение закроется, чтобы Windows могла заменить файлы.",
             "Обновление приложения", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-        if (await ViewModel.RequestApplicationUpdateAsync())
+        var progressWindow = new UpdateProgressWindow(ViewModel.ApplicationUpdateTarget, ViewModel.RequestApplicationUpdateAsync)
+        {
+            Owner = this
+        };
+        if (progressWindow.ShowDialog() == true)
         {
             exitForUpdate = true;
             Application.Current.Shutdown();

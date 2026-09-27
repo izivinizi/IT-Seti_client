@@ -10,7 +10,7 @@ $credentialTry = @($ast.FindAll({ param($node)
 }, $true))
 if ($credentialTry.Count -ne 1) { throw 'Credential launch block not found.' }
 $code = [scriptblock]::Create($credentialTry[0].Extent.Text.Replace('$PSScriptRoot', '$fixtureRoot'))
-$fixture = Join-Path ([IO.Path]::GetTempPath()) ('itseti-bootstrap-' + [guid]::NewGuid().ToString('N') + '.xml')
+$fixture = Join-Path ([IO.Path]::GetTempPath()) ('maintenance-bootstrap-' + [guid]::NewGuid().ToString('N') + '.xml')
 try {
     [IO.File]::WriteAllText($fixture, '<credentials><username>Admin</username><password>test-fixture-only</password></credentials>')
     foreach ($scenario in @('success', 'access-denied', 'disabled-service', 'wmi-denied', 'missing-account', 'helper-failure', 'user-account')) {

@@ -1,7 +1,7 @@
 param([string]$Root='.')
 $ErrorActionPreference='Stop'
 $rootPath=(Resolve-Path -LiteralPath $Root).Path
-$testRoot=Join-Path $env:TEMP ('itseti-org-test-'+[guid]::NewGuid().ToString('N'))
+$testRoot=Join-Path $env:TEMP ('maintenance-org-test-'+[guid]::NewGuid().ToString('N'))
 $setup=Join-Path $testRoot 'ITSETI-Setup\system'
 try {
     $packages=Join-Path $setup 'packages'

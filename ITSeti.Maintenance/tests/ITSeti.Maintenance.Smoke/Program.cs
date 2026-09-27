@@ -18,6 +18,17 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Contains("--diagnostic-rules-contract"))
+        {
+            AssertRules();
+            Console.WriteLine("PASS: diagnostic rules and offline bugcheck catalog.");
+            return 0;
+        }
+        if (args.Contains("--update-progress-contract"))
+        {
+            AssertUpdateStatusVersionFiltering();
+            return 0;
+        }
         if (args.Contains("--progress-regression") || args.Contains("--installed-user-check"))
             return CheckProgressRegression(args.Contains("--installed-user-check"));
         if (args.Contains("--organization-setup-contract")) return CheckBundledOrganizationSetup().GetAwaiter().GetResult();
@@ -129,9 +140,10 @@ internal static class Program
                     throw new Exception("The user screen must show an in-progress diagnostic state");
                 await firstRun;
                 var first = window.ViewModel.Selected ?? throw new Exception("No snapshot produced");
-                if (first.TotalMemoryBytes == 0 || first.CpuPercent is < 0 or > 100 || first.Disks.Count == 0 || first.QuickDisks is not { Count: > 0 }
+                if (first.TotalMemoryBytes == 0 || first.CpuPercent is < 0 or > 100 || first.Disks.Count == 0
+                    || first.QuickDisks is not { Count: > 0 } && !first.Notes.Any(note => note.Contains("Состояние накопителей через Windows определить не удалось", StringComparison.Ordinal))
                     || first.LastBootAt is null || first.LastBootAt > first.StartedAt)
-                    throw new Exception("Invalid system measurements");
+                    throw new Exception($"Invalid system measurements: RAM={first.TotalMemoryBytes}, CPU={first.CpuPercent}, disks={first.Disks.Count}, quickDisks={first.QuickDisks?.Count ?? 0}, boot={first.LastBootAt}, started={first.StartedAt:O}");
                 if (first.CpuTemperatureC is < 5 or > 120
                     || first.CpuTemperatureC is not null && first.CpuTemperatureStatus?.Contains("LibreHardwareMonitor", StringComparison.Ordinal) != true)
                     throw new Exception("CPU temperature source returned an invalid value or an unexpected provider");
@@ -155,12 +167,15 @@ internal static class Program
                     throw new Exception("Old-boot warning is missing");
                 if (DiagnosticRules.GetUserIssues(first with { LastBootAt = first.StartedAt - TimeSpan.FromDays(6) })
                     .Any(i => i.Title.Contains("перезагружали"))) throw new Exception("Six-day reboot boundary is wrong");
-                if (!window.ViewModel.UserDiskHealth.Contains("по данным Windows") || !window.ViewModel.Coverage.Contains("полной диагностике"))
+                var hasQuickDiskHealth = first.QuickDisks is { Count: > 0 };
+                if (hasQuickDiskHealth
+                    ? !window.ViewModel.UserDiskHealth.Contains("по данным Windows") || !window.ViewModel.Coverage.Contains("полной диагностике")
+                    : !window.ViewModel.UserDiskHealth.Contains("не проверено") || !window.ViewModel.Coverage.Contains("определить не удалось"))
                     throw new Exception("Quick disk health or user explanation missing");
                 await window.ViewModel.RunQuickAsync();
                 if (window.ViewModel.History.Count != initialHistoryCount + 2) throw new Exception(window.ViewModel.Status);
                 var saved = await new SqliteHistoryStore(database).GetRecentAsync();
-                if (saved.Count != initialHistoryCount + 2 || saved[1].Id != first.Id || saved[1].QuickDisks?.Count != first.QuickDisks.Count)
+                if (saved.Count != initialHistoryCount + 2 || saved[1].Id != first.Id || saved[1].QuickDisks?.Count != first.QuickDisks?.Count)
                     throw new Exception("SQLite history roundtrip failed");
                 window.ViewModel.Selected = window.ViewModel.History[1];
                 if (window.ViewModel.Selected.Id != first.Id) throw new Exception("History selection failed");
@@ -233,16 +248,9 @@ internal static class Program
                     throw new Exception("Invalid Windows credentials did not produce an error");
                 if (adminShell.Visibility != Visibility.Collapsed || !window.IsVisible)
                     throw new Exception("Wrong admin password accepted or closed the user window");
-                password.Password = "it-seti";
-                Click(unlockButton);
-                while (!unlockButton.IsEnabled) await Task.Delay(25);
-                if (adminError.Visibility != Visibility.Visible)
-                    throw new Exception("Legacy misspelled password unexpectedly opened engineer mode");
-                if (adminShell.Visibility != Visibility.Collapsed) throw new Exception("Old admin password accepted");
-                password.Password = "itseti";
-                Click(unlockButton);
+                OpenEngineerShellForTest(window);
                 if (adminShell.Visibility != Visibility.Visible || userShell.Visibility != Visibility.Collapsed)
-                    throw new Exception("Admin mode did not open");
+                    throw new Exception("Test engineer shell did not open");
                 if (window.ViewModel.UserCpuName == "Модель процессора не определена")
                     throw new Exception("Processor model is missing below the usage graph");
                 if (window.FindName("AdminRmsValue") is not TextBox { IsReadOnly: true, IsReadOnlyCaretVisible: true }
@@ -394,11 +402,7 @@ internal static class Program
                 }
                 var returnedToUser = adminShell.Visibility != Visibility.Visible;
                 if (returnedToUser)
-                {
-                    Click((Button)window.FindName("AdminModeButton")!);
-                    ((PasswordBox)window.FindName("AdminPassword")!).Password = "itseti";
-                    Click((Button)window.FindName("UnlockButton")!);
-                }
+                    OpenEngineerShellForTest(window);
                 var reviewDirectory = Path.Combine(output, "review-run");
                 Directory.CreateDirectory(reviewDirectory);
                 File.WriteAllText(Path.Combine(reviewDirectory, "stage.txt"), "Проверка завершена");
@@ -539,7 +543,12 @@ internal static class Program
             throw new Exception("An update completion status for a different app version was shown");
         if (ApplicationUpdateRunner.FilterStatusForVersion(current, new Version(1, 0, 3, 0)) != current)
             throw new Exception("A current update completion status was hidden");
-        Console.WriteLine("PASS: stale updater version status is hidden.");
+        const string download = "2026-09-27 12:00:00 | Скачивание установщика: 42% (72 из 172 МБ).";
+        const string ready = "2026-09-27 12:01:00 | Пакет загружен и проверен. Готов к установке.";
+        if (ApplicationUpdateRunner.IsReadyToInstall(download) || !ApplicationUpdateRunner.IsReadyToInstall(ready)
+            || ApplicationUpdateRunner.GetStatusMessage(download) != "Скачивание установщика: 42% (72 из 172 МБ).")
+            throw new Exception("Updater progress must preserve download status and only signal readiness after verification");
+        Console.WriteLine("PASS: stale updater status filtering and progress-stage detection.");
     }
 
     private sealed class FakeReleaseHandler(string payload) : HttpMessageHandler
@@ -667,6 +676,28 @@ internal static class Program
             throw new Exception("Three Kernel-Power 41 events with BugcheckCode 0 must be reported");
         if (DiagnosticRules.GetActionableEvents([kernelPowerNoise[0] with { Message = "BugcheckCode: 1" }]).Count != 1)
             throw new Exception("A nonzero Kernel-Power bugcheck must remain actionable");
+        if (BugcheckCodeCatalog.All.Count < 379
+            || BugcheckCodeCatalog.GetName(209) != "DRIVER_IRQL_NOT_LESS_OR_EQUAL"
+            || BugcheckCodeCatalog.GetName(0xDF) != "IMPERSONATING_WORKER_THREAD"
+            || BugcheckCodeCatalog.FormatCode(209) != "0x000000D1")
+            throw new Exception("The offline Microsoft bugcheck catalog is incomplete or code 209 is incorrect");
+        var blueScreen = new EventDetails("System", "Microsoft-Windows-Kernel-Power", 41, 1,
+            "2026-09-27T10:20:30.0000000+05:00", "BugcheckCode: 209", 104);
+        var blueScreenSnapshot = snapshot with { Full = full with { Events = [blueScreen] } };
+        var blueScreenIssue = DiagnosticRules.GetUserIssues(blueScreenSnapshot)
+            .Single(issue => issue.Title.Contains("синий экран", StringComparison.OrdinalIgnoreCase));
+        if (blueScreenIssue.Severity != "Critical"
+            || !blueScreenIssue.Detail.Contains("0x000000D1", StringComparison.Ordinal)
+            || !blueScreenIssue.Detail.Contains("DRIVER_IRQL_NOT_LESS_OR_EQUAL", StringComparison.Ordinal)
+            || !blueScreenIssue.Detail.Contains("драйвер", StringComparison.OrdinalIgnoreCase)
+            || !DiagnosticRules.GetFindings(blueScreenSnapshot).Any(line => line.Contains("BugcheckCode") || line.Contains("DRIVER_IRQL_NOT_LESS_OR_EQUAL")))
+            throw new Exception("Kernel-Power BugcheckCode 209 must be shown as a decoded critical error for users");
+        var unknownBlueScreen = blueScreen with { Message = "BugcheckCode: 4294967295" };
+        var unknownIssue = DiagnosticRules.GetUserIssues(snapshot with { Full = full with { Events = [unknownBlueScreen] } })
+            .Single(issue => issue.Title.Contains("синий экран", StringComparison.OrdinalIgnoreCase));
+        if (!unknownIssue.Detail.Contains("0xFFFFFFFF", StringComparison.Ordinal)
+            || !unknownIssue.Detail.Contains("Название отсутствует", StringComparison.Ordinal))
+            throw new Exception("Unknown Kernel-Power bugchecks must still be reported with their code");
         var process = new ProcessDetails("AmneziaVPN.exe", "AmneziaVPN Service", "Amnezia", "Valid", @"C:\Apps\AmneziaVPN.exe");
         var withLogAndProcess = snapshot with { Full = full with
         {
@@ -864,7 +895,7 @@ internal static class Program
         app.InitializeComponent();
         var directory = Path.Combine(Path.GetTempPath(), "ITSeti-progress-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
-        var window = new MainWindow(Path.Combine(directory, "history.db"));
+        var window = new MainWindow(Path.Combine(directory, "history.db"), engineerOnly: true);
         var exitCode = 0;
         app.DispatcherUnhandledException += (_, e) =>
         {
@@ -878,9 +909,6 @@ internal static class Program
             try
             {
                 while (!window.ViewModel.CanRun) await Task.Delay(50);
-                Click((Button)window.FindName("AdminModeButton")!);
-                ((PasswordBox)window.FindName("AdminPassword")!).Password = "itseti";
-                Click((Button)window.FindName("UnlockButton")!);
                 var tabs = (TabControl)window.FindName("AdminTabs")!;
                 var entries = window.ViewModel.CheckProgressEntries;
                 var list = (ListBox)window.FindName("CheckProgressList")!;
@@ -945,6 +973,14 @@ internal static class Program
     }
 
     private static void Click(Button button) => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+    private static void OpenEngineerShellForTest(MainWindow window)
+    {
+        var method = typeof(MainWindow).GetMethod("ShowEngineerShell",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("Engineer shell test hook is missing");
+        method.Invoke(window, null);
+    }
 
     private static void AssertCleanupSummaryFormatting()
     {
