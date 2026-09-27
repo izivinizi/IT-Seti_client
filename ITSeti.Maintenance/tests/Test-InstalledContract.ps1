@@ -227,6 +227,9 @@ $accountTokens=$null;$accountErrors=$null
 if($accountErrors -or (Get-Content -LiteralPath $accountScript -Raw) -notmatch 'if\(\$admin\)\{''it-seti''\}else\{''Admin''\}') {
     throw 'Local admin creation must preserve the Admin/it-seti selection from the existing setup script.'
 }
+$accountRunner=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\LocalAdminAccountRunner.cs'))
+if($accountRunner -notmatch 'ArgumentList\.Add\("-ExecutionPolicy"\)' -or $accountRunner -notmatch 'ArgumentList\.Add\("Bypass"\)' -or
+   $accountRunner -notmatch 'StandardErrorEncoding') {throw 'Local admin creation must use a process-scoped execution-policy override and readable UTF-8 errors.'}
 if($install -notmatch 'ITSeti-Maintenance-Repair' -or $install -notmatch 'InstalledRepair.ps1') {throw 'Independent repair task is missing.'}
 if($install -notmatch 'ITSeti-Maintenance-Cleanup' -or $install -notmatch 'InstalledCleanup.ps1' -or $install -notmatch 'CleanupRuns') {throw 'Installed cleanup task or protected results directory is missing.'}
 $cleanupEntry=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCleanup.ps1'

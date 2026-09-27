@@ -1,4 +1,4 @@
-$ErrorActionPreference='Stop'
+﻿$ErrorActionPreference='Stop'
 $base=Join-Path $env:ProgramData 'ITSeti\Maintenance'
 $requestRoot=Join-Path $base 'OrganizationSetupRequests'
 $resultRoot=Join-Path $base 'OrganizationSetupRuns'
@@ -19,8 +19,9 @@ try {
     $operation=if($payload.Operation){[string]$payload.Operation}else{'Install'}
     if($component -and $component -notin @('AnyDesk','RMS','OCS','Panel','WinRAR','Yandex')){throw 'Unsupported organization software component.'}
     if($operation -notin @('Install','Uninstall')){throw 'Unsupported organization setup operation.'}
-    $sourceValue=if($operation -eq 'Install'){[string]$payload.Source}else{''}
-    $source=if($sourceValue){[IO.Path]::GetFullPath($sourceValue)}else{$null}
+    $source=if($operation -eq 'Install'){
+        Join-Path (Split-Path -Parent $PSScriptRoot) 'Setup\ITSETI-Setup'
+    }else{$null}
     if($operation -eq 'Uninstall'){
         if($component -in @('WinRAR','Yandex')){
             Remove-Item -LiteralPath $request.FullName -Force
@@ -84,8 +85,8 @@ try {
         Move-Item -LiteralPath $temporary -Destination $result -Force
         return
     }
-    if(!$source -or $source.Contains('"') -or !(Test-Path -LiteralPath (Join-Path $source 'system\Install.ps1') -PathType Leaf)){
-        throw 'Selected ITSETI-Setup folder is unavailable.'
+    if(!$source -or !(Test-Path -LiteralPath (Join-Path $source 'system\packages\AnyDesk-installer.exe') -PathType Leaf)){
+        throw 'Встроенный комплект ПО ИТ-Сети не найден в папке приложения.'
     }
     Remove-Item -LiteralPath $request.FullName -Force
     $sourcePackages=Join-Path $source 'system\packages'
@@ -93,7 +94,6 @@ try {
     $stagedSystem=Join-Path $stagedRoot 'system'
     $stagedPackages=Join-Path $stagedSystem 'packages'
     New-Item -ItemType Directory -Path $stagedPackages -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $source 'system\Install.ps1') -Destination (Join-Path $stagedSystem 'Install.ps1') -Force
     $packageMap=@{
         AnyDesk='AnyDesk-installer.exe'
         RMS='Host-IT-SETI.RMS.7.7.3.0v3.msi'

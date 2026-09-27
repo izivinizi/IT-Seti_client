@@ -113,7 +113,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     }
     public ObservableCollection<OrganizationComponent> SetupComponents { get; } = [];
     public IReadOnlyList<SystemToolShortcut> SystemTools { get; } = SystemToolsLauncher.GetShortcuts();
-    private string? setupSource;
+    private string? bundledSetupDirectory;
     private bool setupInstallRunning;
     private string softwareActionStatus = "";
     private readonly GitHubReleaseClient applicationReleaseClient = new();
@@ -121,13 +121,17 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private bool applicationUpdateCheckRunning;
     private bool applicationUpdateRunning;
     private string applicationUpdateStatus = ApplicationUpdateRunner.ReadLastStatus() ?? "Проверка обновлений ещё не выполнялась";
-    public bool HasSetupSource => setupSource is not null;
-    public bool CanInstallSetup => !setupInstallRunning && HasSetupSource;
+    public bool HasBundledSetup => bundledSetupDirectory is not null;
+    public bool CanInstallSetup => !setupInstallRunning && HasBundledSetup;
     public bool CanManageSetup => !setupInstallRunning;
     public bool CanLaunchDiskTools => fullRunner is FullDiagnosticsRunner;
     public string SoftwareActionStatus => softwareActionStatus;
-    public string SetupSource => setupSource ?? "Комплект ITSETI-Setup не найден";
-    public string? SetupSourcePath => setupSource;
+    public string SetupBundleStatus => bundledSetupDirectory is null
+        ? "Встроенный комплект ПО не найден"
+        : "Комплект ПО ИТ-Сети включён в приложение";
+    public string SetupBundleTooltip => bundledSetupDirectory is null
+        ? "Установочные файлы ИТ-Сети отсутствуют в папке приложения."
+        : "Файлы AnyDesk, RMS, OCS и панели установлены вместе с приложением.";
     public void SetSetupStatus(string message) { softwareActionStatus = message; Notify(); }
     public void SetSoftwareActionStatus(string message) { softwareActionStatus = message; Notify(); }
     public string SetupSummary => $"Требуют внимания: {SetupComponents.Count(c => c.NeedsAttention)} из {SetupComponents.Count}";
@@ -404,12 +408,12 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     }
     public string UserStatus => userStatusOverride ?? status;
 
-    public void RefreshSetupAudit(string? source = null)
+    public void RefreshSetupAudit()
     {
-        setupSource = source ?? OrganizationSoftwareAudit.FindSource();
+        bundledSetupDirectory = OrganizationSoftwareAudit.FindBundledDirectory();
         var statuses = SetupComponents.ToDictionary(component => component.InstallKey, component => component.ActionStatus);
         SetupComponents.Clear();
-        foreach (var component in OrganizationSoftwareAudit.Inspect(setupSource))
+        foreach (var component in OrganizationSoftwareAudit.Inspect(bundledSetupDirectory))
             SetupComponents.Add(component with { ActionStatus = statuses.GetValueOrDefault(component.InstallKey) ?? "" });
         Notify();
     }

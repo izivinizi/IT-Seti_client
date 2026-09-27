@@ -5,7 +5,6 @@
     [ValidateSet('AnyDesk', 'RMS', 'OCS', 'Panel')][string]$Component
 )
 $ErrorActionPreference = 'Stop'
-$auditedScriptHash = 'D15BA9507807B6B27094634952A59F3204D954AC6EB88F5180B0BCECE062355D'
 $packages = @{
     AnyDesk = @{ File = 'AnyDesk-installer.exe'; Hash = 'B9AD79EAF7A4133F95F24C3B9D976C72F34264DC5C99030F0E57992CB5621F78' }
     RMS = @{ File = 'Host-IT-SETI.RMS.7.7.3.0v3.msi'; Hash = '9A8E4096C155B7432BDC35F5079169B4F496D4E4A0AAC943DA44B5E877E27ABF' }
@@ -36,14 +35,17 @@ function Find-SetupSource {
     $candidates = New-Object Collections.Generic.List[string]
     if ($InstallerDirectory) {
         $candidates.Add((Join-Path $InstallerDirectory 'ITSETI-Setup'))
+        $candidates.Add((Join-Path $InstallerDirectory 'Setup\ITSETI-Setup'))
         $candidates.Add($InstallerDirectory)
     }
-    $drives = @([IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq 'Removable' -or $_.DriveType -eq 'Fixed' } |
-        Sort-Object @{ Expression = { if ($_.DriveType -eq 'Removable') { 0 } else { 1 } } })
-    foreach ($drive in $drives) {
-        try { if ($drive.IsReady) { $candidates.Add((Join-Path $drive.RootDirectory.FullName 'ITSETI-Setup')) } } catch { }
-    }
-    return @($candidates | Where-Object { Test-Path -LiteralPath (Join-Path $_ 'system\Install.ps1') -PathType Leaf } | Select-Object -First 1)
+    $required = @($packages.Values | ForEach-Object { $_.File })
+    return @($candidates | Select-Object -Unique | Where-Object {
+        $root = Join-Path $_ 'system\packages'
+        (Test-Path -LiteralPath (Join-Path $root $required[0]) -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $root $required[1]) -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $root $required[2]) -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $root $required[3]) -PathType Leaf)
+    } | Select-Object -First 1)
 }
 
 function Test-PinnedFile([string]$Path, [string]$ExpectedHash) {
@@ -180,11 +182,8 @@ function Install-Component([string]$Name, [string]$Root) {
 
 try {
     $source = Find-SetupSource
-    if (!$source.Count) { Save-Result 'Комплект ITSETI-Setup не найден.'; exit 2 }
+    if (!$source.Count) { Save-Result 'Встроенный комплект ПО ИТ-Сети не найден.'; exit 2 }
     $source = [IO.Path]::GetFullPath([string]$source)
-    $script = Join-Path $source 'system\Install.ps1'
-    $actualScriptHash = (Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash
-    if ($actualScriptHash -ne $auditedScriptHash) { Save-Result 'Install.ps1 changed since audit.'; exit 2 }
 
     $selected = if ($Component) { @($Component) } else { @('AnyDesk', 'RMS', 'OCS', 'Panel') }
     foreach ($name in $selected) {

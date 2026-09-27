@@ -1,13 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType><TargetFramework>net9.0-windows</TargetFramework><UseWPF>true</UseWPF>
-    <AssemblyName>ITSeti.Maintenance</AssemblyName><Version>1.0.2</Version><AssemblyVersion>1.0.2.0</AssemblyVersion><FileVersion>1.0.2.0</FileVersion>
+    <AssemblyName>ITSeti.Maintenance</AssemblyName><Version>1.0.3</Version><AssemblyVersion>1.0.3.0</AssemblyVersion><FileVersion>1.0.3.0</FileVersion>
     <ApplicationIcon>Assets\favicon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="..\ITSeti.Maintenance.Infrastructure\ITSeti.Maintenance.Infrastructure.csproj" /></ItemGroup>
   <ItemGroup>
     <Resource Include="Assets\logo.png" />
     <Resource Include="Assets\favicon.ico" />
+    <Content Include="..\..\Setup\ITSETI-Setup\**\*">
+      <Link>Setup\ITSETI-Setup\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
     <None Include="..\..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\Tools\**\*">
       <Link>Tools\%(RecursiveDir)%(Filename)%(Extension)</Link>

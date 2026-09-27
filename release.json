@@ -1,8 +1,8 @@
 {
-    "version":  "1.0.2",
-    "tag":  "v1.0.2",
+    "version":  "1.0.3",
+    "tag":  "v1.0.3",
     "assetName":  "ITSeti-Maintenance-Setup.exe",
-    "size":  129206511,
-    "digest":  "sha256:4ca059a0f9a2b11a60171df9698e9c23b797f16d959745780ffc7e7fb0aca74b",
-    "downloadUrl":  "https://github.com/izivinizi/IT-Seti_client/releases/download/v1.0.2/ITSeti-Maintenance-Setup.exe"
+    "size":  180191816,
+    "digest":  "sha256:c86eb29f88d6ef1ca82319f7ad3f1a606efe6fc61ba34262c37e9f29460c989c",
+    "downloadUrl":  "https://github.com/izivinizi/IT-Seti_client/releases/download/v1.0.3/ITSeti-Maintenance-Setup.exe"
 }

@@ -32,6 +32,10 @@ if(!(Test-Path -LiteralPath (Join-Path $sourceApp 'ITSeti.Maintenance.exe') -Pat
 foreach($relative in @('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe','PawnIO\PawnIO_setup.exe')){
     if(!(Test-Path -LiteralPath (Join-Path $sourceTools $relative) -PathType Leaf)){throw "Tool is missing: $relative"}
 }
+$sourceSetup=Join-Path $sourceApp 'Setup\ITSETI-Setup\system'
+foreach($relative in @('packages\AnyDesk-installer.exe','packages\Host-IT-SETI.RMS.7.7.3.0v3.msi','packages\OCS-Agent-Installerv4.exe','packages\DesktopInfo3230.exe','panel\DesktopInfo.ini','panel\update-support-ids.ps1','panel\start-panel.vbs')){
+    if(!(Test-Path -LiteralPath (Join-Path $sourceSetup $relative) -PathType Leaf)){throw "Встроенный комплект ПО неполный: $relative"}
+}
 $install=$InstallRoot
 $installStage='Создание каталогов и копирование файлов'
 New-Item -ItemType Directory -Path $install,$data,(Join-Path $data 'Runs'),(Join-Path $data 'Repairs'),(Join-Path $data 'CleanupRequests'),(Join-Path $data 'CleanupRuns'),(Join-Path $data 'WindowsUpdate'),(Join-Path $data 'OrganizationSetupRequests'),(Join-Path $data 'OrganizationSetupRuns') -Force | Out-Null

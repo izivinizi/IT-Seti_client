@@ -20,6 +20,7 @@ internal static class Program
     {
         if (args.Contains("--progress-regression") || args.Contains("--installed-user-check"))
             return CheckProgressRegression(args.Contains("--installed-user-check"));
+        if (args.Contains("--organization-setup-contract")) return CheckBundledOrganizationSetup().GetAwaiter().GetResult();
         if (args.Contains("--installed-quick-check")) return CheckInstalledQuick().GetAwaiter().GetResult();
         if (args.Contains("--installed-full-check")) return CheckInstalledFull().GetAwaiter().GetResult();
         if (args.Contains("--update-client-contract")) return CheckUpdateClientContract().GetAwaiter().GetResult();
@@ -322,12 +323,12 @@ internal static class Program
                 var diskToolStart = ElevatedProcessLauncher.CreateStartInfo(@"C:\Tools\DiskInfo64.exe", @"C:\Tools");
                 if (diskToolStart.UseShellExecute || diskToolStart.Verb.Length > 0)
                     throw new Exception("Disk utilities must launch in the current user session without UAC");
-                var detectedSetup = OrganizationSoftwareAudit.FindSource();
-                if (File.Exists(@"F:\Service\ITSETI-Setup\system\Install.ps1")
-                    && !string.Equals(detectedSetup, @"F:\Service\ITSETI-Setup", StringComparison.OrdinalIgnoreCase))
-                    throw new Exception("Moved ITSETI-Setup folder was not discovered under Service");
-                await AssertSetupSignatureCheck(output);
-                foreach (var name in new[] { "InstallSetupButton", "CreateAdminAccountButton", "LaunchDiskInfoButton", "LaunchDiskMarkButton", "LaunchTreeSizeButton" })
+                var detectedSetup = OrganizationSoftwareAudit.FindBundledDirectory();
+                var expectedSetup = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "Setup", "ITSETI-Setup"));
+                if (detectedSetup is null || !string.Equals(Path.GetFullPath(detectedSetup), expectedSetup, StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("Organization software must be bundled in the application directory");
+                await AssertSetupSignatureCheck();
+                foreach (var name in new[] { "InstallSetupButton", "CreateAdminAccountButton", "RefreshSetupAuditButton", "LaunchDiskInfoButton", "LaunchDiskMarkButton", "LaunchTreeSizeButton" })
                     if (window.FindName(name) is not Button { IsEnabled: true }) throw new Exception($"ПО action is unavailable: {name}");
                 AssertDiskToolResolution(output);
                 typeof(MainViewModel).GetField("identity", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
@@ -513,13 +514,30 @@ internal static class Program
         return 0;
     }
 
+    private static async Task<int> CheckBundledOrganizationSetup()
+    {
+        var bundledDirectory = OrganizationSoftwareAudit.FindBundledDirectory()
+            ?? throw new Exception("The in-app IT-Seti software package was not found next to the application.");
+        var problems = await OrganizationSetupRunner.CheckAsync();
+        if (problems.Count > 0)
+            throw new Exception("Bundled IT-Seti packages failed hash/signature checks: " + string.Join(" | ", problems));
+        foreach (var component in new[] { "WinRAR", "Yandex" })
+        {
+            var bundledProblems = await OrganizationSetupRunner.CheckAsync(component);
+            if (bundledProblems.Count > 0)
+                throw new Exception($"Bundled {component} failed hash/signature checks: {string.Join(" | ", bundledProblems)}");
+        }
+        Console.WriteLine("PASS: all IT-Seti software packages are bundled in the app and pass hash/signature checks.");
+        return 0;
+    }
+
     private static void AssertUpdateStatusVersionFiltering()
     {
         const string stale = "2026-09-26 16:14:45 | Версия 1.2.1 установлена. Запустите приложение снова.";
-        const string current = "2026-09-26 18:40:00 | Версия 1.0.2 установлена. Запустите приложение снова.";
-        if (ApplicationUpdateRunner.FilterStatusForVersion(stale, new Version(1, 0, 2, 0)) is not null)
+        const string current = "2026-09-26 18:40:00 | Версия 1.0.3 установлена. Запустите приложение снова.";
+        if (ApplicationUpdateRunner.FilterStatusForVersion(stale, new Version(1, 0, 3, 0)) is not null)
             throw new Exception("An update completion status for a different app version was shown");
-        if (ApplicationUpdateRunner.FilterStatusForVersion(current, new Version(1, 0, 2, 0)) != current)
+        if (ApplicationUpdateRunner.FilterStatusForVersion(current, new Version(1, 0, 3, 0)) != current)
             throw new Exception("A current update completion status was hidden");
         Console.WriteLine("PASS: stale updater version status is hidden.");
     }
@@ -593,25 +611,19 @@ internal static class Program
             throw new Exception("DiskMarkA64.exe was not resolved");
     }
 
-    private static async Task AssertSetupSignatureCheck(string output)
+    private static async Task AssertSetupSignatureCheck()
     {
-        var root = Path.Combine(output, "setup signature fixture");
-        var packages = Path.Combine(root, "system", "packages");
-        Directory.CreateDirectory(packages);
-        await File.WriteAllTextAsync(Path.Combine(root, "system", "Install.ps1"), "# deliberately unaudited fixture");
-        var names = new[] { "AnyDesk-installer.exe", "Host-IT-SETI.RMS.7.7.3.0v3.msi", "OCS-Agent-Installerv4.exe", "DesktopInfo3230.exe" };
-        foreach (var package in names)
-            await File.WriteAllTextAsync(Path.Combine(packages, package), "not a signed installer");
-        var dotnet = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe");
-        File.Copy(dotnet, Path.Combine(packages, names[0]), true);
-        var problems = await OrganizationSetupRunner.CheckAsync(root);
-        if (!problems.Any(problem => problem.Contains("изменён после ревизии", StringComparison.OrdinalIgnoreCase))
-            || names.Any(name => !problems.Any(problem => problem.StartsWith(name + ": SHA-256", StringComparison.OrdinalIgnoreCase)))
-            || problems.Any(problem => problem.Contains("проверка Windows недоступна", StringComparison.OrdinalIgnoreCase)))
-            throw new Exception("Package preflight did not report the modified script and every unpinned package: " + string.Join(" | ", problems));
+        var bundledDirectory = OrganizationSoftwareAudit.FindBundledDirectory()
+            ?? throw new Exception("The application output is missing its bundled IT-Seti software package.");
+        if (!string.Equals(Path.GetFullPath(bundledDirectory),
+                Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "Setup", "ITSETI-Setup")), StringComparison.OrdinalIgnoreCase))
+            throw new Exception("Software package resolution escaped the application directory.");
+        var problems = await OrganizationSetupRunner.CheckAsync();
+        if (problems.Count != 0)
+            throw new Exception("Bundled organization packages failed preflight: " + string.Join(" | ", problems));
         foreach (var component in new[] { "WinRAR", "Yandex" })
         {
-            var bundledProblems = await OrganizationSetupRunner.CheckAsync(null, component);
+            var bundledProblems = await OrganizationSetupRunner.CheckAsync(component);
             if (bundledProblems.Count != 0)
                 throw new Exception($"Bundled {component} failed preflight: {string.Join(" | ", bundledProblems)}");
         }

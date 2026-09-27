@@ -13,29 +13,23 @@ public sealed record OrganizationComponent(string Name, string State, string Det
 
 public static class OrganizationSoftwareAudit
 {
-    public static string? FindSource()
+    public static string? FindBundledDirectory()
     {
         var bundled = Path.Combine(AppContext.BaseDirectory, "Setup", "ITSETI-Setup");
-        if (File.Exists(Path.Combine(bundled, "system", "Install.ps1"))) return bundled;
-        foreach (var drive in DriveInfo.GetDrives().Where(d => d.DriveType is DriveType.Removable or DriveType.Fixed))
+        var requiredFiles = new[]
         {
-            try
-            {
-                if (!drive.IsReady) continue;
-                foreach (var source in new[]
-                {
-                    Path.Combine(drive.RootDirectory.FullName, "ITSETI-Setup"),
-                    Path.Combine(drive.RootDirectory.FullName, "Service", "ITSETI-Setup")
-                })
-                    if (File.Exists(Path.Combine(source, "system", "Install.ps1"))) return source;
-            }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-        }
-        return null;
+            "system\\packages\\AnyDesk-installer.exe",
+            "system\\packages\\Host-IT-SETI.RMS.7.7.3.0v3.msi",
+            "system\\packages\\OCS-Agent-Installerv4.exe",
+            "system\\packages\\DesktopInfo3230.exe",
+            "system\\panel\\DesktopInfo.ini",
+            "system\\panel\\update-support-ids.ps1",
+            "system\\panel\\start-panel.vbs"
+        };
+        return requiredFiles.All(file => File.Exists(Path.Combine(bundled, file))) ? bundled : null;
     }
 
-    public static IReadOnlyList<OrganizationComponent> Inspect(string? source)
+    public static IReadOnlyList<OrganizationComponent> Inspect(string? bundledDirectory)
     {
         var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
         var programFiles86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
@@ -49,10 +43,10 @@ public static class OrganizationSoftwareAudit
         var yandex = Existing(programFiles, programFiles86, @"Yandex\YandexBrowser\Application", "browser.exe");
         var rows = new List<OrganizationComponent>
         {
-            Evaluate("AnyDesk", "AnyDesk", anyDesk, HasService("AnyDesk"), source, "AnyDesk-installer.exe"),
-            Evaluate("RMS Host", "RMS", rms, HasService("RManService"), source, "Host-IT-SETI.RMS.7.7.3.0v3.msi", new Version(7, 7, 3, 0)),
-            Evaluate("OCS Inventory", "OCS", File.Exists(ocs) ? ocs : null, HasService("OCS Inventory Service"), source, "OCS-Agent-Installerv4.exe"),
-            Evaluate("Панель ИТ-Сети", "Panel", File.Exists(desktop) ? desktop : null, File.Exists(panel), source, "DesktopInfo3230.exe", new Version(3, 23, 0)),
+            Evaluate("AnyDesk", "AnyDesk", anyDesk, HasService("AnyDesk"), bundledDirectory, "AnyDesk-installer.exe"),
+            Evaluate("RMS Host", "RMS", rms, HasService("RManService"), bundledDirectory, "Host-IT-SETI.RMS.7.7.3.0v3.msi", new Version(7, 7, 3, 0)),
+            Evaluate("OCS Inventory", "OCS", File.Exists(ocs) ? ocs : null, HasService("OCS Inventory Service"), bundledDirectory, "OCS-Agent-Installerv4.exe"),
+            Evaluate("Панель ИТ-Сети", "Panel", File.Exists(desktop) ? desktop : null, File.Exists(panel), bundledDirectory, "DesktopInfo3230.exe", new Version(3, 23, 0)),
             EvaluateStandalone("WinRAR", "WinRAR", winRar, "winrar-x64-723ru.exe", new Version(7, 23, 0)),
             EvaluateStandalone("Яндекс Браузер", "Yandex", yandex, "Yandex.exe", new Version(26, 8, 4, 893))
         };

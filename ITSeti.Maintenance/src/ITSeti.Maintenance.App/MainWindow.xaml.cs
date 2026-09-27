@@ -9,7 +9,6 @@ using System.Windows.Input;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
-using Microsoft.Win32;
 using ITSeti.Maintenance.Infrastructure;
 
 namespace ITSeti.Maintenance.App;
@@ -509,14 +508,13 @@ public partial class MainWindow : Window
     private async Task RunOrganizationInstallAsync(string? component)
     {
         if (!ViewModel.BeginSetupInstall()) return;
-        var source = ViewModel.SetupSourcePath;
         try
         {
-            var problems = (await OrganizationSetupRunner.CheckAsync(source, component)).ToList();
+            var problems = (await OrganizationSetupRunner.CheckAsync(component)).ToList();
             if (component is null)
             {
                 foreach (var bundled in new[] { "WinRAR", "Yandex" })
-                    problems.AddRange(await OrganizationSetupRunner.CheckAsync(null, bundled));
+                    problems.AddRange(await OrganizationSetupRunner.CheckAsync(bundled));
             }
             if (problems.Count > 0)
             {
@@ -533,10 +531,10 @@ public partial class MainWindow : Window
                 if (component is not null) ViewModel.SetSetupComponentStatus(component, message);
             });
             if (component is not null) ViewModel.SetSetupComponentStatus(component, "Установка…");
-            var exitCode = component is null ? await OrganizationSetupRunner.RunBaseAsync(source!, progress)
+            var exitCode = component is null ? await OrganizationSetupRunner.RunBaseAsync(progress)
                 : component is "WinRAR" or "Yandex" ? await OrganizationSetupRunner.RunBundledComponentAsync(component, progress)
-                : await OrganizationSetupRunner.RunComponentAsync(source!, component, progress);
-            ViewModel.RefreshSetupAudit(source);
+                : await OrganizationSetupRunner.RunComponentAsync(component, progress);
+            ViewModel.RefreshSetupAudit();
             if (component is not null) ViewModel.SetSetupComponentStatus(component, "Установлено");
             if (component is null)
             {
@@ -550,7 +548,7 @@ public partial class MainWindow : Window
                     }
                     ViewModel.SetSetupComponentStatus(key, "Установка…");
                     await OrganizationSetupRunner.RunBundledComponentAsync(key, new Progress<string>(message => ViewModel.SetSetupComponentStatus(key, message)));
-                    ViewModel.RefreshSetupAudit(source);
+                    ViewModel.RefreshSetupAudit();
                     ViewModel.SetSetupComponentStatus(key, "Установлено");
                 }
             }
@@ -567,17 +565,6 @@ public partial class MainWindow : Window
         finally { ViewModel.EndSetupInstall(); }
     }
 
-    private void ChooseSetupSource_Click(object sender, RoutedEventArgs e)
-    {
-        var dialog = new OpenFolderDialog { Title = "Папка ITSETI-Setup" };
-        if (dialog.ShowDialog(this) != true) return;
-        if (!File.Exists(Path.Combine(dialog.FolderName, "system", "Install.ps1")))
-        {
-            MessageBox.Show(this, "В этой папке нет system\\Install.ps1.", "Комплект не найден", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        ViewModel.RefreshSetupAudit(dialog.FolderName);
-    }
     private async void LaunchDiskInfo_Click(object sender, RoutedEventArgs e) => await LaunchDiskToolAsync(diskInfo: true);
     private async void LaunchDiskMark_Click(object sender, RoutedEventArgs e) => await LaunchDiskToolAsync(diskInfo: false);
     private async void LaunchTreeSize_Click(object sender, RoutedEventArgs e)

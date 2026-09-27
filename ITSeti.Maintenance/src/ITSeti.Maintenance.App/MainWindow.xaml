@@ -223,8 +223,8 @@
      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <StackPanel Margin="20">
        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-        <StackPanel VerticalAlignment="Center"><TextBlock Text="{Binding SetupSummary}" Foreground="#2D4354"/><TextBlock Text="{Binding SetupSource}" Foreground="#354A5E" TextTrimming="CharacterEllipsis" ToolTip="{Binding SetupSource}"/></StackPanel>
-        <StackPanel Grid.Column="1" Orientation="Horizontal"><Button Click="ChooseSetupSource_Click" Padding="10,7" ToolTip="Выбрать папку ITSETI-Setup" Margin="0,0,7,0"><TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets"/></Button><Button Click="RefreshSetupAudit_Click" Padding="10,7" ToolTip="Обновить сведения"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets"/></Button></StackPanel>
+        <StackPanel VerticalAlignment="Center"><TextBlock Text="{Binding SetupSummary}" Foreground="#2D4354"/><TextBlock Text="{Binding SetupBundleStatus}" Foreground="#354A5E" ToolTip="{Binding SetupBundleTooltip}"/></StackPanel>
+        <Button x:Name="RefreshSetupAuditButton" Grid.Column="1" Click="RefreshSetupAudit_Click" Padding="10,7" ToolTip="Повторно проверить, какие программы установлены на этом компьютере" Cursor="Hand"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" Margin="0,0,7,0"/><TextBlock Text="Проверить ПО"/></StackPanel></Button>
        </Grid>
        <TextBlock Text="{Binding SetupWarning}" TextWrapping="Wrap" Foreground="#896617" Margin="0,13,0,13"/>
        <Grid Margin="0,0,0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="1.2*"/><ColumnDefinition Width="1.1*"/><ColumnDefinition Width="3*"/><ColumnDefinition Width="1.1*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -239,8 +239,7 @@
        <TextBlock Text="Установка программ" Style="{StaticResource SectionHeading}" Margin="0,0,0,8"/>
        <WrapPanel>
          <Button x:Name="InstallSetupButton" Click="InstallSetup_Click" IsEnabled="{Binding CanInstallSetup}" Padding="12,8" Margin="0,0,8,8" Background="#326EFF" Foreground="White" BorderThickness="0" Cursor="Hand" Content="Установить всё" ToolTip="AnyDesk, RMS, OCS, панель ИТ-Сети, WinRAR и Яндекс Браузер"/>
-        <Button x:Name="CreateAdminAccountButton" Click="CreateAdminAccount_Click" Padding="12,8" Margin="0,0,8,8" Cursor="Hand" Content="Создать учётку администратора" ToolTip="Admin, а если она уже есть — it-seti"/>
-        <Button Click="RefreshSetupAudit_Click" Padding="10,8" Margin="0,0,8,8" ToolTip="Обновить состояние ПО" Cursor="Hand"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets"/></Button>
+         <Button x:Name="CreateAdminAccountButton" Click="CreateAdminAccount_Click" Padding="12,8" Margin="0,0,8,8" Cursor="Hand" Content="Создать учётку администратора" ToolTip="Admin, а если она уже есть — it-seti"/>
        </WrapPanel>
        <TextBlock Text="{Binding SoftwareActionStatus}" Foreground="#354A5E" TextWrapping="Wrap" Margin="0,3,0,8"/>
        <TextBlock Text="Дисковые утилиты" Style="{StaticResource SectionHeading}" Margin="0,8,0,8"/>

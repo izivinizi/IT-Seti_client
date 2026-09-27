@@ -10,7 +10,6 @@ namespace ITSeti.Maintenance.Infrastructure;
 public static class OrganizationSetupRunner
 {
     private static readonly Guid GenericVerifyV2 = new("00AAC56B-CD44-11D0-8CC2-00C04FC295EE");
-    private const string AuditedScriptHash = "D15BA9507807B6B27094634952A59F3204D954AC6EB88F5180B0BCECE062355D";
     private sealed record Package(string FileName, string Sha256);
     private static readonly IReadOnlyDictionary<string, Package> Packages = new Dictionary<string, Package>(StringComparer.Ordinal)
     {
@@ -32,7 +31,7 @@ public static class OrganizationSetupRunner
     };
     private static readonly SemaphoreSlim RunLock = new(1, 1);
 
-    public static async Task<IReadOnlyList<string>> CheckAsync(string? source, string? component = null)
+    public static async Task<IReadOnlyList<string>> CheckAsync(string? component = null)
     {
         var problems = new List<string>();
         if (component is not null && BundledPackages.TryGetValue(component, out var bundled))
@@ -46,21 +45,14 @@ public static class OrganizationSetupRunner
                 problems.Add($"{bundled.FileName}: неверный хеш или подпись установщика.");
             return problems;
         }
-        if (string.IsNullOrWhiteSpace(source)) return ["Комплект ITSETI-Setup не найден."];
+        var bundledDirectory = OrganizationSoftwareAudit.FindBundledDirectory();
+        if (string.IsNullOrWhiteSpace(bundledDirectory)) return ["Встроенный комплект ПО ИТ-Сети не найден."];
         if (component is not null && !Packages.ContainsKey(component)) return ["Неизвестный компонент установки."];
-        var script = Path.Combine(source, "system", "Install.ps1");
-        if (!File.Exists(script)) return ["В комплекте нет system\\Install.ps1."];
-        using (var stream = File.OpenRead(script))
-        {
-            var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream));
-            if (!hash.Equals(AuditedScriptHash, StringComparison.OrdinalIgnoreCase))
-                problems.Add("Скрипт комплекта изменён после ревизии; требуется повторная проверка.");
-        }
         var selectedPackages = component is null ? Packages : Packages.Where(item => item.Key == component)
             .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
         foreach (var (key, package) in selectedPackages)
         {
-            var path = Path.Combine(source, "system", "packages", package.FileName);
+            var path = Path.Combine(bundledDirectory, "system", "packages", package.FileName);
             if (!File.Exists(path)) { problems.Add($"Нет пакета {package.FileName}."); continue; }
             var signature = await Task.Run(() => VerifyAuthenticode(path));
             using var stream = File.OpenRead(path);
@@ -73,7 +65,7 @@ public static class OrganizationSetupRunner
         {
             foreach (var (name, expectedHash) in PanelFileHashes)
             {
-                var path = Path.Combine(source, "system", "panel", name);
+                var path = Path.Combine(bundledDirectory, "system", "panel", name);
                 if (!File.Exists(path)) { problems.Add($"Нет файла панели {name}."); continue; }
                 using var stream = File.OpenRead(path);
                 var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream));
@@ -175,22 +167,22 @@ public static class OrganizationSetupRunner
     private static readonly string MaintenanceRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance");
 
-    public static async Task<int> RunBaseAsync(string source, IProgress<string>? progress = null)
-        => await RunAsync(source, null, "Install", progress);
+    public static async Task<int> RunBaseAsync(IProgress<string>? progress = null)
+        => await RunAsync(null, "Install", progress);
 
-    public static async Task<int> RunComponentAsync(string source, string component, IProgress<string>? progress = null)
-        => await RunAsync(source, component, "Install", progress);
+    public static async Task<int> RunComponentAsync(string component, IProgress<string>? progress = null)
+        => await RunAsync(component, "Install", progress);
 
     public static async Task<int> RunBundledComponentAsync(string component, IProgress<string>? progress = null)
     {
         if (!BundledPackages.ContainsKey(component)) throw new ArgumentException("Неизвестный компонент приложения.", nameof(component));
-        return await RunAsync(null, component, "Install", progress);
+        return await RunAsync(component, "Install", progress);
     }
 
     public static async Task<int> RunUninstallComponentAsync(string component, IProgress<string>? progress = null)
-        => await RunAsync(null, component, "Uninstall", progress);
+        => await RunAsync(component, "Uninstall", progress);
 
-    private static async Task<int> RunAsync(string? source, string? component, string operation, IProgress<string>? progress)
+    private static async Task<int> RunAsync(string? component, string operation, IProgress<string>? progress)
     {
         await RunLock.WaitAsync();
         try
@@ -198,9 +190,12 @@ public static class OrganizationSetupRunner
         if (component is null && operation != "Install") throw new InvalidOperationException("Для действия требуется выбрать компонент.");
         if (operation == "Install")
         {
-            if (source is null && (component is null || !BundledPackages.ContainsKey(component)))
-                throw new InvalidOperationException("Не выбрана папка комплекта ITSETI-Setup.");
-            var problems = await CheckAsync(source, component);
+            if (component is null || !BundledPackages.ContainsKey(component))
+            {
+                if (OrganizationSoftwareAudit.FindBundledDirectory() is null)
+                throw new InvalidOperationException("Встроенный комплект ПО ИТ-Сети не найден.");
+            }
+            var problems = await CheckAsync(component);
             if (problems.Count > 0) throw new InvalidOperationException(string.Join(Environment.NewLine, problems));
         }
         var requestRoot = Path.Combine(MaintenanceRoot, "OrganizationSetupRequests");
@@ -211,7 +206,7 @@ public static class OrganizationSetupRunner
         var id = Guid.NewGuid().ToString("N");
         var request = Path.Combine(requestRoot, id + ".json");
         var result = Path.Combine(resultRoot, id, "result.txt");
-        await File.WriteAllTextAsync(request, JsonSerializer.Serialize(new { Source = source is null ? null : Path.GetFullPath(source), Component = component, Operation = operation }), new UTF8Encoding(false));
+        await File.WriteAllTextAsync(request, JsonSerializer.Serialize(new { Component = component, Operation = operation }), new UTF8Encoding(false));
         try
         {
             using var task = new Process

@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Security.Principal;
+using System.Text;
 
 namespace ITSeti.Maintenance.Infrastructure;
 
@@ -22,9 +23,14 @@ public static class LocalAdminAccountRunner
             CreateNoWindow = true,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
-            RedirectStandardError = true
+            RedirectStandardError = true,
+            StandardInputEncoding = new UTF8Encoding(false),
+            StandardOutputEncoding = new UTF8Encoding(false),
+            StandardErrorEncoding = new UTF8Encoding(false)
         };
         start.ArgumentList.Add("-NoProfile");
+        start.ArgumentList.Add("-ExecutionPolicy");
+        start.ArgumentList.Add("Bypass");
         start.ArgumentList.Add("-File");
         start.ArgumentList.Add(script);
         using var process = new Process { StartInfo = start };
@@ -44,7 +50,15 @@ public static class LocalAdminAccountRunner
             process.Kill(entireProcessTree: true);
             throw new TimeoutException("Создание учётной записи не завершилось за две минуты.");
         }
-        if (process.ExitCode != 0) throw new InvalidOperationException((await error).Trim());
+        if (process.ExitCode != 0)
+        {
+            var message = (await error).Trim();
+            if (message.Contains("about_Execution_Policies", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("running scripts is disabled", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("PSSecurityException", StringComparison.OrdinalIgnoreCase))
+                message = "Запуск скрипта блокирует политика PowerShell Windows. На доменном компьютере обратитесь к администратору домена.";
+            throw new InvalidOperationException(message.Length > 0 ? message : "Скрипт не смог создать учётную запись.");
+        }
         return (await output).Trim();
     }
 }

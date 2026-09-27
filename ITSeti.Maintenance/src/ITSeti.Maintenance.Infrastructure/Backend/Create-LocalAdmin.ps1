@@ -1,4 +1,7 @@
 ﻿$ErrorActionPreference='Stop'
+$utf8=New-Object System.Text.UTF8Encoding($false)
+[Console]::InputEncoding=$utf8
+[Console]::OutputEncoding=$utf8
 try {
     $principal=[Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
     if(!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Требуются права администратора Windows.'}
