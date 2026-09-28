@@ -99,6 +99,11 @@ public static class DiagnosticRules
             foreach (var disk in full.SmartDisks.Where(d => DiskLifetime.ExceedsWarning(d.PowerOnHours)))
                 issues.Add(new($"Накопитель {disk.Model} наработал более 60 000 часов",
                     $"Наработка: {DiskLifetime.Format(disk.PowerOnHours)}. Это повод внимательнее следить за состоянием SMART и резервными копиями, но само по себе не означает неисправность.", "Warning"));
+            foreach (var disk in full.PhysicalDisks.Where(d => DiskLifetime.ExceedsWarning(d.PowerOnHours)
+                         && !full.SmartDisks.Any(s => string.Equals(s.Model, d.Model, StringComparison.OrdinalIgnoreCase)
+                             && DiskLifetime.ExceedsWarning(s.PowerOnHours))))
+                issues.Add(new($"Накопитель {disk.Model} наработал более 60 000 часов",
+                    $"По данным Windows: {DiskLifetime.Format(disk.PowerOnHours)}. Проверьте резервные копии и подробный SMART при возможности.", "Warning"));
             var benchmark = full.Benchmark;
             var warning = GetReadWarningThreshold(snapshot, benchmark);
             var criticalSpeed = benchmark.MediaType switch { "SSD" => 180, "HDD" => 80, _ => 0 };
@@ -155,6 +160,10 @@ public static class DiagnosticRules
                 findings.Add($"Наработка {disk.Model}: {DiskLifetime.Format(disk.PowerOnHours)}. Порог предупреждения — более 60 000 ч.");
             if (disk.MediaType == "SSD" && IsLinkLimited(disk.TransferMode)) findings.Add($"Ограничение интерфейса {disk.Model}: {disk.TransferMode}. Поддержка порта/слота ПК не подтверждена.");
         }
+        foreach (var disk in full.PhysicalDisks.Where(d => DiskLifetime.ExceedsWarning(d.PowerOnHours)
+                     && !full.SmartDisks.Any(s => string.Equals(s.Model, d.Model, StringComparison.OrdinalIgnoreCase)
+                         && DiskLifetime.ExceedsWarning(s.PowerOnHours))))
+            findings.Add($"Наработка {disk.Model} по данным Windows: {DiskLifetime.Format(disk.PowerOnHours)}. Порог предупреждения — более 60 000 ч.");
         var hdds = full.PhysicalDisks.Where(d => d.MediaType == "HDD").Select(d => d.Model)
             .Concat(full.SmartDisks.Where(d => d.MediaType == "HDD").Select(d => d.Model)).Distinct(StringComparer.OrdinalIgnoreCase);
         foreach (var model in hdds) findings.Add($"{model}: HDD, не SSD. Запуск программ и работа с мелкими файлами могут быть медленнее даже при нормальной скорости чтения.");

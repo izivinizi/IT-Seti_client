@@ -65,7 +65,7 @@ function Save-Result([string]$Name,[switch]$Pending) {
         Notes=$notes
         Full=@{
             CpuName=[string]$s.CPU;GpuName=[string]$s.GPU;MemoryType=[string]$s.MemoryType;CpuTemperatureC=$(if($null -ne $s.CpuTemperatureC){[double]$s.CpuTemperatureC}else{$null});Elevated=[bool]$script:Admin
-            PhysicalDisks=@(foreach($d in $s.Disks){@{Model=[string]$d.FriendlyName;MediaType=[string]$d.MediaType;Health=[string]$d.HealthStatus}})
+            PhysicalDisks=@(foreach($d in $s.Disks){@{Model=[string]$d.FriendlyName;MediaType=[string]$d.MediaType;Health=[string]$d.HealthStatus;PowerOnHours=$(if($null -ne $d.PowerOnHours){[long]$d.PowerOnHours}else{$null})}})
             SmartDisks=@(foreach($d in $s.Smart){@{Model=[string]$d.Model;Status=[string]$d.Status;Letters=[string]$d.Letters;MediaType=[string]$d.MediaType;TransferMode=[string]$d.TransferMode;PowerOnHours=$(if($null -ne $d.PowerOnHours){[long]$d.PowerOnHours}else{$null})}})
             Processes=@(foreach($p in $s.Processes){@{Name=[string]$p.Name;Description=[string]$p.Description;Publisher=$(if($p.Signature -eq 'Valid'){$p.Signer}else{[string]$p.Company+' (из файла)'});Signature=[string]$p.Signature;Path=[string]$p.Path}})
             TopMemoryProcesses=@($script:TopMemoryProcesses)

@@ -42,6 +42,7 @@ internal static class Program
         AssertCleanupSummaryFormatting();
         var output = Path.GetFullPath(Path.Combine("artifacts", "smoke-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")));
         Directory.CreateDirectory(output);
+        AssertScheduledCheckPolicy(output);
         var temperatureCachePath = Path.Combine(output, "temperature-cache.json");
         File.WriteAllText(temperatureCachePath, JsonSerializer.Serialize(new CpuTemperatureReading(62, "smoke", DateTimeOffset.UtcNow)));
         if (CpuTemperatureCache.ReadFresh(temperatureCachePath)?.TemperatureC != 62)
@@ -794,6 +795,33 @@ internal static class Program
             throw new Exception("Incomplete disk test presented as cause of slowness");
     }
 
+    private static void AssertScheduledCheckPolicy(string output)
+    {
+        var root = Path.Combine(output, "scheduled-policy");
+        var systemData = Path.Combine(root, "system");
+        var userData = Path.Combine(root, "user");
+        var run = Path.Combine(systemData, "Runs", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(run);
+        Directory.CreateDirectory(userData);
+        var now = DateTimeOffset.UtcNow;
+        var result = Path.Combine(run, "result.json");
+        File.WriteAllText(result, "{}");
+        File.WriteAllText(Path.Combine(systemData, "latest-full.txt"), run);
+        File.WriteAllText(Path.Combine(systemData, "last-quick-run.txt"), now.AddDays(-30).ToString("O"));
+        var method = typeof(ITSeti.Maintenance.App.App).GetMethod("IsScheduledCheckDue",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?? throw new Exception("Scheduled check policy was not found");
+        bool IsDue() => (bool)(method.Invoke(null, [userData, systemData, now])
+            ?? throw new Exception("Scheduled check policy returned no result"));
+
+        File.SetLastWriteTimeUtc(result, now.UtcDateTime.AddHours(-1));
+        if (IsDue()) throw new Exception("A completed full check must suppress the quick check reminder");
+        File.SetLastWriteTimeUtc(result, now.UtcDateTime.AddDays(-15));
+        if (!IsDue()) throw new Exception("The quick check reminder did not become due after 14 days");
+        File.WriteAllText(Path.Combine(userData, "scheduled-reminder-snooze.txt"), now.AddDays(1).ToString("O"));
+        if (IsDue()) throw new Exception("A snoozed quick check reminder appeared early");
+    }
+
     private static async Task AssertCleanupContract(string output)
     {
         var backend = Path.Combine(AppContext.BaseDirectory, "Backend");
@@ -825,7 +853,10 @@ internal static class Program
             !diskWorker.Contains("SkipBenchmark", StringComparison.Ordinal) ||
             !installedCheck.Contains("-SkipDiskBenchmark:$Quick", StringComparison.Ordinal))
             throw new Exception("Quick full check does not skip the sampler and disk benchmark while retaining SMART");
-        await AssertUserCleanupWorker(output, backend, "interactive", "TEST OK");
+        await AssertUserCleanupWorker(output, backend, "fallback", "TEST OK");
+        var cleanupWorker = await File.ReadAllTextAsync(Path.Combine(backend, "UserCleanupWorker.ps1"));
+        if (cleanupWorker.Contains("/sageset:", StringComparison.OrdinalIgnoreCase))
+            throw new Exception("User cleanup must not open category selection");
         await AssertUserCleanupWorker(output, backend, "abort", "Очистка не запускалась");
         var model = new ITSeti.Maintenance.App.MainViewModel(new WindowsDiagnosticsRunner(),
             new SqliteHistoryStore(Path.Combine(output, "disk-groups.db")));

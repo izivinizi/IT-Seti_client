@@ -131,9 +131,10 @@ if($defenderErrors -or !$defenderScript.Contains("ValidateSet('Status', 'Enable'
    $defenderScript -match 'Set-ItemProperty|reg\.exe|Set-Service|TamperProtection\s*=|IsTamperProtected\s*=' -or
    !$defenderController.Contains('IsAdministrator()') -or !$defenderController.Contains('WindowsBuiltInRole.Administrator') -or
    !$defenderWindow.Contains('Это снизит защиту компьютера') -or !$defenderWindow.Contains('ToggleWindowsDefender_Click') -or
-   !$defenderXaml.Contains('WindowsDefenderButtonLabel') -or !$defenderXaml.Contains('Открыть Tools.rar') -or
-   !$packageBuilder.Contains("'Tools.rar'") -or !(Test-Path -LiteralPath (Join-Path $Root 'Tools\Tools.rar') -PathType Leaf)) {
-    throw 'Defender toggle must use the supported admin-only preference API, and Tools.rar must be included as an inert archive.'
+   !$defenderXaml.Contains('WindowsDefenderButtonLabel') -or $defenderXaml.Contains('Открыть Tools.rar') -or
+   !$packageBuilder.Contains("Remove-Item -LiteralPath (Join-Path `$destination 'Tools.rar')") -or
+   (Test-Path -LiteralPath (Join-Path $Root 'Tools\Tools.rar') -PathType Leaf)) {
+    throw 'Defender toggle must use the supported admin-only preference API, and the removed Tools.rar must stay out of the package.'
 }
 if($organizationRunner -match 'Verb\s*=\s*"runas"' -or !$organizationRunner.Contains('ITSeti-Maintenance-OrganizationSetup') -or
    !$organizationRunner.Contains('RunComponentAsync') -or !$organizationRunner.Contains('RunUninstallComponentAsync') -or !$organizationRunner.Contains('PanelFileHashes') -or

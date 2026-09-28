@@ -16,22 +16,26 @@ try {
     $chosenSignal=if(Test-Path -LiteralPath $signal){$signal}else{$localSignal}
     $value=[IO.File]::ReadAllText($chosenSignal).Trim()
     if($value -eq 'abort'){Status ('Очистка не запускалась | пользователь: '+$identity); return}
-    if($value -notmatch '^\d{4}$' -and $value -ne 'interactive'){throw 'Некорректный режим очистки.'}
+    if($value -notmatch '^\d{4}$' -and $value -ne 'fallback'){throw 'Некорректный режим очистки.'}
     Status ("Очистка профиля "+$identity)
     if(!$TestOnly) {
-        # Use the existing token, never ShellExecute/RunAs. Fail rather than change identity.
-        $start=New-Object Diagnostics.ProcessStartInfo
-        $start.FileName=Join-Path $env:windir 'System32\cleanmgr.exe'
-        if($value -eq 'interactive'){$start.Arguments='/d '+$env:SystemDrive.TrimEnd(':'); Status ('Открыта очистка '+$identity+'. Выберите доступные категории и подтвердите очистку в окне Windows.')}
-        else {$start.Arguments='/sagerun:'+([int]$value)}
-        $start.UseShellExecute=$false
-        $start.CreateNoWindow=$false
-        $start.WindowStyle='Normal'
-        $p=[Diagnostics.Process]::Start($start)
-        $p.WaitForExit()
-        if($p.ExitCode -ne 0){throw ('cleanmgr: код '+$p.ExitCode)}
+        if($value -eq 'fallback') {
+            Get-ChildItem -LiteralPath $env:TEMP -Force -ErrorAction SilentlyContinue |
+                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            Get-ChildItem -LiteralPath (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Explorer') -Filter 'thumbcache_*.db' -Force -ErrorAction SilentlyContinue |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+            Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+        } else {
+            $start=New-Object Diagnostics.ProcessStartInfo
+            $start.FileName=Join-Path $env:windir 'System32\cleanmgr.exe'
+            $start.Arguments='/sagerun:'+([int]$value)
+            $start.UseShellExecute=$false
+            $start.CreateNoWindow=$false
+            $p=[Diagnostics.Process]::Start($start)
+            $p.WaitForExit()
+            if($p.ExitCode -ne 0){throw ('cleanmgr: код '+$p.ExitCode)}
+        }
     }
-    if($value -eq 'interactive' -and !$TestOnly){Status ('Окно очистки закрыто | '+$identity+'. Выполнение зависит от выбранных и подтверждённых действий.')}
-    else {Status ("Завершена | пользователь: "+$identity+$(if($TestOnly){' | TEST OK'}))}
+    Status ("Завершена | пользователь: "+$identity+$(if($value -eq 'fallback'){' | базовая очистка профиля'}else{''})+$(if($TestOnly){' | TEST OK'}))
 } catch { Status ('Не выполнена: '+$_.Exception.Message) }
 finally { 'done' | Set-Content -LiteralPath (Join-Path $JobRoot 'done.txt') }

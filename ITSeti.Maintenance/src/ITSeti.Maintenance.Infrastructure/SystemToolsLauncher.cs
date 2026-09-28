@@ -44,7 +44,7 @@ public static class SystemToolsLauncher
         "terminal" => Terminal(),
         "control" => new(key, "Панель управления", "\uE713", Path.Combine(System, "control.exe"), []),
         "settings" => new(key, "Параметры Windows", "\uE713", "ms-settings:", [], true),
-        "adapters" => new(key, "Сетевые адаптеры", "\uE774", Path.Combine(System, "control.exe"), ["ncpa.cpl"]),
+        "adapters" => new(key, "Сетевые адаптеры", "\uE774", Path.Combine(System, "rundll32.exe"), ["shell32.dll,Control_RunDLL", "ncpa.cpl"]),
         "info" => new(key, "Сведения о системе", "\uE9D9", Path.Combine(System, "msinfo32.exe"), []),
         "security" => new(key, "Безопасность Windows", "\uE72E", "windowsdefender:", [], true),
         _ => throw new ArgumentOutOfRangeException(nameof(key), "Неизвестная системная команда.")

@@ -78,6 +78,6 @@ foreach($file in @('FullCheckWorker.ps1','HeadlessDiskWorker.ps1','ResourceSampl
 $env:ITSETI_CPU_TEMPERATURE_FILE=$cpuTemperatureFile
 & ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $run 'FullCheckWorker.ps1'),[Text.Encoding]::UTF8))) -RunRoot $run -ToolsRoot $tools -HeadlessDiskSpd -TrustedTools -StartRepair:$StartRepair -SkipResourceSampling:$Quick -SkipDiskBenchmark:$Quick
 Remove-Item Env:ITSETI_CPU_TEMPERATURE_FILE -ErrorAction SilentlyContinue
-if($Quick -and (Test-Path -LiteralPath (Join-Path $run 'result.json'))){
+if(Test-Path -LiteralPath (Join-Path $run 'result.json')){
     [IO.File]::WriteAllText((Join-Path $base 'last-quick-run.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII)
 }

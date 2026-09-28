@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Security.Principal;
 using System.Text;
 
 namespace ITSeti.Maintenance.Infrastructure;
@@ -13,33 +14,46 @@ public sealed class UserCleanupRunner
 {
     private static readonly string QueueRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance", "CleanupRequests");
     private static readonly string ResultsRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance", "CleanupRuns");
-    private static readonly string JobsRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ServiceMaintenance", "UserJobs");
+    private readonly string jobsRoot;
+    private readonly string? cleanupUserSid;
+
+    public UserCleanupRunner(string? cleanupUserSid = null, string? cleanupUserLocalData = null)
+    {
+        this.cleanupUserSid = cleanupUserSid;
+        jobsRoot = Path.Combine(cleanupUserLocalData ?? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ServiceMaintenance", "UserJobs");
+    }
 
     public static string LatestSummary
     {
-        get
+        get => ReadLatestSummary(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ServiceMaintenance", "UserJobs"));
+    }
+
+    public string InstanceLatestSummary => ReadLatestSummary(jobsRoot);
+
+    private static string ReadLatestSummary(string rootPath)
+    {
+        try
         {
-            try
-            {
-                if (!Directory.Exists(JobsRoot)) return "Очистка ещё не выполнялась";
-                var root = Directory.GetDirectories(JobsRoot).OrderByDescending(Directory.GetCreationTimeUtc).FirstOrDefault();
-                if (root is null) return "Очистка ещё не выполнялась";
-                var resultRoot = Path.Combine(ResultsRoot, Path.GetFileName(root));
-                static string? Read(string root, params string[] names) => names.Select(name => Path.Combine(root, name))
-                    .Where(File.Exists).Select(File.ReadAllText).FirstOrDefault()?.Trim();
-                var user = Read(root, "user-status.txt") ?? "нет результата";
-                var admin = Read(resultRoot, "admin-cleanup.txt", "admin-stage.txt")
-                    ?? Read(root, "admin-cleanup.txt", "admin-stage.txt") ?? "системная очистка не запускалась";
-                return $"Пользователь: {user} | Система: {admin}";
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return "Статус очистки недоступен: " + ex.Message; }
+            if (!Directory.Exists(rootPath)) return "Очистка ещё не выполнялась";
+            var root = Directory.GetDirectories(rootPath).OrderByDescending(Directory.GetCreationTimeUtc).FirstOrDefault();
+            if (root is null) return "Очистка ещё не выполнялась";
+            var resultRoot = Path.Combine(ResultsRoot, Path.GetFileName(root));
+            static string? Read(string root, params string[] names) => names.Select(name => Path.Combine(root, name))
+                .Where(File.Exists).Select(File.ReadAllText).FirstOrDefault()?.Trim();
+            var user = Read(root, "user-status.txt") ?? "нет результата";
+            var admin = Read(resultRoot, "admin-cleanup.txt", "admin-stage.txt")
+                ?? Read(root, "admin-cleanup.txt", "admin-stage.txt") ?? "системная очистка не запускалась";
+            return $"Пользователь: {user} | Система: {admin}";
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return "Статус очистки недоступен: " + ex.Message; }
     }
 
     public async Task<CleanupResult> RunAsync(IProgress<string>? progress = null)
     {
         var backend = Path.Combine(AppContext.BaseDirectory, "Backend");
-        var root = Path.Combine(JobsRoot, Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(jobsRoot, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         File.Copy(Path.Combine(backend, "UserCleanupWorker.ps1"), Path.Combine(root, "UserCleanupWorker.ps1"));
 
@@ -54,7 +68,7 @@ public sealed class UserCleanupRunner
             if (!installed)
             {
                 progress?.Report("Очистка профиля без системных прав…");
-                await SignalUserAsync(root, "interactive");
+                await SignalUserAsync(root, "fallback");
                 userReleased = true;
                 await WaitForExitAsync(user, TimeSpan.FromHours(2));
                 return new CleanupResult(await ReadStatusAsync(root, "user-status.txt"), "Файлы обновлений не очищены: приложение не установлено");
@@ -100,7 +114,7 @@ public sealed class UserCleanupRunner
             progress?.Report("Системная очистка недоступна. Очищается профиль пользователя…");
             if (!userReleased && !HasSignal(root, resultRoot) && !user.HasExited)
             {
-                await SignalUserAsync(root, "interactive");
+                await SignalUserAsync(root, "fallback");
                 userReleased = true;
             }
             if (user.HasExited || ex is TimeoutException && userReleased)
@@ -135,7 +149,7 @@ public sealed class UserCleanupRunner
         if (task.ExitCode != 0) throw new InvalidOperationException($"Задание очистки не запустилось (код {task.ExitCode}): {(await errors).Trim()} {(await output).Trim()}. Переустановите приложение.");
     }
 
-    private static Process StartWorker(string script, string root, string signalRoot)
+    private Process StartWorker(string script, string root, string signalRoot)
     {
         static string EncodePath(string path) => Convert.ToBase64String(Encoding.UTF8.GetBytes(path));
         var command = $"$r=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{EncodePath(root)}')); "
@@ -151,6 +165,9 @@ public sealed class UserCleanupRunner
             Arguments = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand "
                 + Convert.ToBase64String(Encoding.Unicode.GetBytes(command))
         };
+        using var current = WindowsIdentity.GetCurrent();
+        if (cleanupUserSid is not null && !string.Equals(current.User?.Value, cleanupUserSid, StringComparison.OrdinalIgnoreCase))
+            return InteractiveUserProcessLauncher.StartPowerShell(info.Arguments, root, cleanupUserSid);
         return Process.Start(info) ?? throw new InvalidOperationException("Не удалось запустить штатную очистку Windows.");
     }
 

@@ -29,14 +29,15 @@ public partial class MainWindow : Window
 
     public MainWindow(string databasePath) : this(databasePath, false) { }
 
-    public MainWindow(string databasePath, bool engineerOnly)
+    public MainWindow(string databasePath, bool engineerOnly, string? cleanupUserSid = null, string? cleanupUserLocalData = null)
     {
         InitializeComponent();
         historyDatabasePath = Path.GetFullPath(databasePath);
         this.engineerOnly = engineerOnly;
         AdminAccount.Text = Environment.MachineName + "\\" + Environment.UserName;
         if (!engineerOnly) ConfigureUserShellSize();
-        ViewModel = new MainViewModel(new WindowsDiagnosticsRunner(), new SqliteHistoryStore(historyDatabasePath), fullRunner);
+        ViewModel = new MainViewModel(new WindowsDiagnosticsRunner(), new SqliteHistoryStore(historyDatabasePath),
+            fullRunner, engineerOnly ? new UserCleanupRunner(cleanupUserSid, cleanupUserLocalData) : null);
         ViewModel.SetWindowsDefenderAccess(EngineerWindowLauncher.IsAdministrator());
         DataContext = ViewModel;
         if (engineerOnly) ConfigureEngineerShell();
@@ -395,9 +396,48 @@ public partial class MainWindow : Window
         };
         if (progressWindow.ShowDialog() == true)
         {
+            try { await StartUpdateProgressHostAsync(ViewModel.ApplicationUpdateTarget); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "Не удалось открыть окно установки: " + ex.Message
+                    + "\nУстановщик уже проверен; обновление продолжится после закрытия приложения.",
+                    "Обновление приложения", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
             exitForUpdate = true;
             Application.Current.Shutdown();
         }
+    }
+
+    private static async Task StartUpdateProgressHostAsync(string targetVersion)
+    {
+        var script = Path.Combine(AppContext.BaseDirectory, "Backend", "UpdateProgressHost.ps1");
+        if (!File.Exists(script)) throw new FileNotFoundException("Окно обновления не включено в пакет.", script);
+        var ready = Path.Combine(Path.GetTempPath(), "ITSeti-update-" + Guid.NewGuid().ToString("N") + ".ready");
+        var status = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "ITSeti", "Maintenance", "Updates", "last-result.txt");
+        var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        foreach (var argument in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-STA", "-File", script,
+                     "-StatusPath", status, "-ReadyPath", ready, "-Version", targetVersion })
+            start.ArgumentList.Add(argument);
+        using var monitor = Process.Start(start) ?? throw new InvalidOperationException("Windows не запустила окно обновления.");
+        try
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(8);
+            while (!File.Exists(ready) && DateTime.UtcNow < deadline)
+            {
+                if (monitor.HasExited) throw new InvalidOperationException("Окно обновления завершилось до запуска.");
+                await Task.Delay(100);
+            }
+            if (!File.Exists(ready)) throw new TimeoutException("Окно обновления не ответило за 8 секунд.");
+            var result = await File.ReadAllTextAsync(ready);
+            if (result != "ready") throw new InvalidOperationException(result);
+        }
+        finally { try { File.Delete(ready); } catch (IOException) { } }
     }
     private void SaveInventory_Click(object sender, RoutedEventArgs e)
     {
@@ -577,18 +617,6 @@ public partial class MainWindow : Window
         }
         try { Process.Start(new ProcessStartInfo("explorer.exe", '"' + tools + '"') { UseShellExecute = true }); }
         catch (Exception ex) { MessageBox.Show(this, ex.Message, "Не удалось открыть каталог утилит", MessageBoxButton.OK, MessageBoxImage.Warning); }
-    }
-
-    private void OpenToolsArchive_Click(object sender, RoutedEventArgs e)
-    {
-        var archive = Path.Combine(AppContext.BaseDirectory, "Tools", "Tools.rar");
-        if (!File.Exists(archive))
-        {
-            MessageBox.Show(this, "Архив Tools.rar не найден в комплекте приложения.", "Утилиты", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-        try { Process.Start(new ProcessStartInfo(archive) { UseShellExecute = true }); }
-        catch (Exception ex) { MessageBox.Show(this, "Не удалось открыть архив: " + ex.Message, "Архив утилит", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
 
     private void LaunchSystemTool_Click(object sender, RoutedEventArgs e)

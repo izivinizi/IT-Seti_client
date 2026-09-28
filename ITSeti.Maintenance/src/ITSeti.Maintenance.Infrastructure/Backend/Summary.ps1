@@ -125,7 +125,16 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
     try {
         $s.Volumes=@(Get-WmiObject Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop | Select-Object DeviceID,Size,FreeSpace,VolumeSerialNumber)
         if(Get-Command Get-PhysicalDisk -ErrorAction SilentlyContinue) {
-            $s.Disks=@(Get-PhysicalDisk -ErrorAction Stop | Where-Object {$_.BusType -ne 'USB'} | Select-Object FriendlyName,MediaType,HealthStatus)
+            $s.Disks=@(Get-PhysicalDisk -ErrorAction Stop | Where-Object {$_.BusType -ne 'USB'} | ForEach-Object {
+                $disk=$_;$hours=$null
+                if(Get-Command Get-StorageReliabilityCounter -ErrorAction SilentlyContinue){
+                    try {
+                        $counter=$disk | Get-StorageReliabilityCounter -ErrorAction Stop
+                        if($null -ne $counter.PowerOnHours -and [long]$counter.PowerOnHours -gt 0){$hours=[long]$counter.PowerOnHours}
+                    } catch {}
+                }
+                New-Object PSObject -Property @{FriendlyName=[string]$disk.FriendlyName;MediaType=[string]$disk.MediaType;HealthStatus=[string]$disk.HealthStatus;PowerOnHours=$hours}
+            })
         } else {
             $s.Disks=@(Get-WmiObject Win32_DiskDrive -ErrorAction Stop | Select-Object @{n='FriendlyName';e={$_.Model}},@{n='MediaType';e={'тип см. CDI'}},@{n='HealthStatus';e={$_.Status}})
         }

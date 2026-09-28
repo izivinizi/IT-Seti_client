@@ -79,7 +79,9 @@ public partial class App : Application
 
             var database = EngineerWindowLauncher.GetArgument(e.Args, "--history-db")
                 ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ITSeti", "Maintenance", "history.db");
-            MainWindow = new MainWindow(database, engineerOnly: true);
+            MainWindow = new MainWindow(database, engineerOnly: true,
+                EngineerWindowLauncher.GetArgument(e.Args, "--client-sid"),
+                EngineerWindowLauncher.GetArgument(e.Args, "--client-local-data"));
             MainWindow.Show();
             return;
         }
@@ -94,7 +96,7 @@ public partial class App : Application
             {
                 var reminderTask = e.Args.Contains("--reminder-task", StringComparer.OrdinalIgnoreCase);
                 if (reminderTask) DeleteScheduledReminder();
-                if (!reminderTask && !IsScheduledCheckDue(data))
+                if (!IsScheduledCheckDue(data))
                 {
                     Shutdown();
                     return;
@@ -173,17 +175,37 @@ public partial class App : Application
         }
     }
 
-    private static bool IsScheduledCheckDue(string userData)
+    private static bool IsScheduledCheckDue(string userData, string? systemDataOverride = null, DateTimeOffset? utcNow = null)
     {
-        var systemData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance");
+        var systemData = systemDataOverride ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance");
+        var now = utcNow ?? DateTimeOffset.UtcNow;
         var lastPath = Path.Combine(systemData, "last-quick-run.txt");
-        if (File.Exists(lastPath) && DateTimeOffset.TryParse(File.ReadAllText(lastPath), CultureInfo.InvariantCulture,
-                DateTimeStyles.None, out var lastRun) && DateTimeOffset.UtcNow - lastRun < TimeSpan.FromDays(14))
+        var lastRun = File.Exists(lastPath) && DateTimeOffset.TryParse(File.ReadAllText(lastPath), CultureInfo.InvariantCulture,
+            DateTimeStyles.None, out var recordedRun) ? recordedRun : DateTimeOffset.MinValue;
+        var runsRoot = Path.Combine(systemData, "Runs") + Path.DirectorySeparatorChar;
+        foreach (var pointer in new[] { "latest-full.txt", "latest-auto-full.txt" })
+        {
+            var pointerPath = Path.Combine(systemData, pointer);
+            if (!File.Exists(pointerPath)) continue;
+            try
+            {
+                var run = Path.GetFullPath(File.ReadAllText(pointerPath).Trim());
+                if (!run.StartsWith(runsRoot, StringComparison.OrdinalIgnoreCase)) continue;
+                var result = Path.Combine(run, "result.json");
+                if (File.Exists(result))
+                {
+                    var completed = new DateTimeOffset(File.GetLastWriteTimeUtc(result), TimeSpan.Zero);
+                    if (completed > lastRun) lastRun = completed;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
+        }
+        if (now - lastRun < TimeSpan.FromDays(14))
             return false;
 
         var snoozePath = Path.Combine(userData, "scheduled-reminder-snooze.txt");
         return !File.Exists(snoozePath) || !DateTimeOffset.TryParse(File.ReadAllText(snoozePath), CultureInfo.InvariantCulture,
-            DateTimeStyles.None, out var snoozedUntil) || DateTimeOffset.UtcNow >= snoozedUntil;
+            DateTimeStyles.None, out var snoozedUntil) || now >= snoozedUntil;
     }
 
     private static string ReminderTaskName

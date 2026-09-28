@@ -1,5 +1,5 @@
 ﻿$script:UserCleanupNames = @('Recycle Bin','Temporary Files','Thumbnail Cache','Internet Cache Files','Internet Cache','D3D Shader Cache')
-$script:CleanupNames = $script:UserCleanupNames + @('Delivery Optimization Files','Update Cleanup','Device Driver Packages')
+$script:CleanupNames = @('Delivery Optimization Files','Update Cleanup','Device Driver Packages')
 function New-CleanupProfile([string[]]$Names) {
     $keys=@(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches' -ErrorAction Stop)
     $selected=@($keys | Where-Object {$Names -contains $_.PSChildName})
@@ -54,10 +54,6 @@ function Invoke-Cleanup([switch]$Preview) {
     if(!$script:CompactOutput -or $Preview) {
         $selected | ForEach-Object { Write-Host "  $($_.PSChildName)" }
         Write-Host 'Только согласованные категории. Загрузки и профили браузеров не очищаются.'
-    }
-    $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    if($currentIdentity -ne $OriginalIdentity) {
-        Write-Host "ВНИМАНИЕ: запущено под $currentIdentity. Очистка пользовательских категорий может не охватить профиль $OriginalIdentity." -ForegroundColor Yellow
     }
     if($Preview) { return }
     if(Get-Command Assert-DiskTestIdle -ErrorAction SilentlyContinue){Assert-DiskTestIdle}

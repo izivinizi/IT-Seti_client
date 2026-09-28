@@ -263,7 +263,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             }
             var media = !string.IsNullOrWhiteSpace(drive.MediaType) && drive.MediaType != "Unknown" ? drive.MediaType : match?.MediaType ?? "Не определён";
             var health = match is null ? $"Windows: {drive.Health}" : $"SMART: {match.Status} · Windows: {drive.Health}";
-            groups.Add(new(drive.Model, media, health, match?.TransferMode ?? "", partitions, match?.PowerOnHours));
+            groups.Add(new(drive.Model, media, health, match?.TransferMode ?? "", partitions, match?.PowerOnHours ?? drive.PowerOnHours));
         }
         foreach (var item in smart.Where(item => !usedSmart.Contains(item)))
             groups.Add(new(item.Model, item.MediaType, "SMART: " + item.Status, item.TransferMode, VolumesFor(item), item.PowerOnHours));
@@ -341,11 +341,13 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                     state = "Windows сообщает о проблеме с диском";
                 else state = quick is { Count: > 0 } ? "Состояние проверено по данным Windows" : "Состояние диска не проверено";
             }
-            if (UserSystemSmartDisk?.PowerOnHours is long hours)
+            if (UserSystemPowerOnHours is long hours)
                 state += " · наработка " + DiskLifetime.Format(hours);
             return state;
         }
     }
+    private long? UserSystemPowerOnHours => UserSystemSmartDisk?.PowerOnHours
+        ?? (UserDiagnosticSnapshot?.Full?.PhysicalDisks is { Count: 1 } disks ? disks[0].PowerOnHours : null);
     private SmartDiskDetails? UserSystemSmartDisk
     {
         get
@@ -483,7 +485,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public bool? WindowsDefenderEnabled => windowsDefenderState?.RealTimeProtectionEnabled;
     public bool IsBusy => busy;
     public bool IsBackgroundMaintenanceRunning => cleanupRunning || repairRunning;
-    public string CleanupStatusDetails => cleanupResult ?? UserCleanupRunner.LatestSummary;
+    public string CleanupStatusDetails => cleanupResult ?? cleanupRunner?.InstanceLatestSummary ?? UserCleanupRunner.LatestSummary;
     public string RepairStatusDetails => repairResult ?? SystemRepairRunner.LatestStatus;
     public string CleanupStatus => BriefCleanupStatus(CleanupStatusDetails);
     public string StandaloneRepairStatus => BriefMaintenanceStatus(RepairStatusDetails);
@@ -552,7 +554,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         Selected.Full?.ResourceSampling?.MemoryHighSamples >= 5 ? MetricWarningBrush : MetricGoodBrush;
     public string MemoryDetail => Selected is null || Selected.TotalMemoryBytes == 0 ? "Замер не выполнен"
         : $"Свободно {Selected.AvailableMemoryBytes / 1073741824.0:N1} из {Selected.TotalMemoryBytes / 1073741824.0:N1} ГБ";
-    public string DiskCount => Selected?.Disks.Count.ToString() ?? "—";
+    public string DiskCount => Selected?.Disks.FirstOrDefault(d => d.Name.StartsWith(Environment.GetEnvironmentVariable("SystemDrive") ?? "C:", StringComparison.OrdinalIgnoreCase))?.Usage ?? "—";
     public Brush DiskStatusBrush
     {
         get
@@ -582,7 +584,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             return issue?.Severity switch { "Critical" => MetricCriticalBrush, "Warning" => MetricWarningBrush, _ => MetricGoodBrush };
         }
     }
-    public string DiskDetail => Selected is null ? "Нет данных" : $"Разделов с нехваткой места: {Selected.Disks.Count(d => d.FreeBytes < 15L * 1073741824)}";
+    public string DiskDetail => Selected?.Disks.FirstOrDefault(d => d.Name.StartsWith(Environment.GetEnvironmentVariable("SystemDrive") ?? "C:", StringComparison.OrdinalIgnoreCase)) is { } disk
+        ? $"{disk.Name} · свободно {disk.FreeBytes / 1073741824.0:N1} ГБ" : "Нет данных";
     public string SystemDiskSummary
     {
         get
@@ -596,22 +599,33 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             var physical = Selected.Full?.PhysicalDisks.FirstOrDefault(d =>
                 smart is not null && string.Equals(d.Model, smart.Model, StringComparison.OrdinalIgnoreCase))
                 ?? (Selected.Full?.PhysicalDisks.Count == 1 ? Selected.Full.PhysicalDisks[0] : null);
-            var parts = new List<string> { drive };
-            if (smart is not null) parts.Add(smart.Model);
-            else if (physical is not null) parts.Add(physical.Model);
+            var identity = new List<string> { drive };
+            if (smart is not null) identity.Add(smart.Model);
+            else if (physical is not null) identity.Add(physical.Model);
             var media = smart?.MediaType ?? physical?.MediaType;
-            if (!string.IsNullOrWhiteSpace(media) && media != "Unknown") parts.Add(media);
-            if (!string.IsNullOrWhiteSpace(smart?.Status)) parts.Add("SMART " + smart.Status);
-            else if (!string.IsNullOrWhiteSpace(physical?.Health)) parts.Add(physical.Health);
-            if (!string.IsNullOrWhiteSpace(smart?.TransferMode)) parts.Add(smart.TransferMode.Replace(" | ", "/"));
-            if (smart?.PowerOnHours is long hours) parts.Add("наработка " + DiskLifetime.Format(hours));
-            if (Selected.Full?.Benchmark is { State: "Completed" } benchmark
-                && string.Equals(benchmark.Drive.TrimEnd('\\'), drive, StringComparison.OrdinalIgnoreCase))
-                parts.Add($"SEQ чт/зп {benchmark.Read?.ToString("N0") ?? "—"}/{benchmark.Write?.ToString("N0") ?? "—"} МБ/с");
+            if (!string.IsNullOrWhiteSpace(media) && media != "Unknown") identity.Add(media);
+            var health = !string.IsNullOrWhiteSpace(smart?.Status) ? "SMART " + smart.Status : physical?.Health;
+            if (!string.IsNullOrWhiteSpace(health)) identity.Add(health);
+            var details = new List<string>();
+            if (!string.IsNullOrWhiteSpace(smart?.TransferMode)) details.Add("Интерфейс: " + smart.TransferMode.Replace(" | ", "/"));
+            if ((smart?.PowerOnHours ?? physical?.PowerOnHours) is long hours) details.Add("Наработка: " + DiskLifetime.Format(hours));
+            var lines = new List<string> { string.Join(" · ", identity) };
+            if (details.Count > 0) lines.Add(string.Join(" · ", details));
             if (volume is not null)
-                parts.Add($"{volume.FreeBytes / 1073741824.0:N1}/{volume.TotalBytes / 1073741824.0:N1} ГБ свободно · занято {volume.UsedPercent:N0}%");
-            else parts.Add("свободное место не измерено");
-            return string.Join(" · ", parts);
+                lines.Add($"Свободно {volume.FreeBytes / 1073741824.0:N1} из {volume.TotalBytes / 1073741824.0:N1} ГБ · занято {volume.UsedPercent:N0}%");
+            else lines.Add("Свободное место не измерено");
+            return string.Join(Environment.NewLine, lines);
+        }
+    }
+    public string SystemDiskSpeedSummary
+    {
+        get
+        {
+            var drive = (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").TrimEnd('\\');
+            return Selected?.Full?.Benchmark is { State: "Completed" } benchmark
+                && string.Equals(benchmark.Drive.TrimEnd('\\'), drive, StringComparison.OrdinalIgnoreCase)
+                ? $"SEQ чт/зп {benchmark.Read?.ToString("N0") ?? "—"}/{benchmark.Write?.ToString("N0") ?? "—"} МБ/с"
+                : "";
         }
     }
     public string SnapshotDate => Selected is null ? "Сохранённых проверок пока нет" : $"Проверка от {Selected.DateLabel}";
@@ -711,28 +725,35 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             return lines.Count > 0 ? string.Join(Environment.NewLine, lines) : "По измеренным показателям замечаний нет";
         }
     }
-    public string OverviewFindings
+    public IReadOnlyList<UserIssue> OverviewIssues
     {
         get
         {
-            if (Selected is null) return "Проверка ещё не выполнялась";
-            var issues = DiagnosticRules.GetUserIssues(Selected)
-                .Where(issue => !issue.Title.Contains("обычном жёстком диске", StringComparison.OrdinalIgnoreCase))
-                .Select(issue => issue.Title.StartsWith("На диске ", StringComparison.OrdinalIgnoreCase)
-                    ? issue.Title + (Selected.Disks.FirstOrDefault(d => issue.Title.Contains(d.Name.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) is { } disk
-                        ? $": свободно {disk.FreeBytes / 1073741824.0:N1} ГБ" : "")
-                    : issue.Title == "Системный диск читает данные медленно" && Selected.Full?.Benchmark.Read is double read
-                        ? $"Системный диск: чтение {read:N0} МБ/с" : issue.Title).ToList();
+            if (Selected is null) return [];
+            var issues = DiagnosticRules.GetUserIssues(Selected).ToList();
             if (Selected.Full is { } full)
             {
-                issues.AddRange(DiagnosticRules.GetActionableEvents(full.Events).Where(e => e.Level == 1)
-                    .Select(e => $"Критическое событие Windows: {e.Provider}, код {e.Id}.").Distinct().Take(3));
-                if (full.Benchmark.State is "Failed" or "Skipped") issues.Add("Скорость диска: нет результата");
-                if (full.SmartDisks.Count == 0) issues.Add("SMART: нет данных");
+                issues.AddRange(DiagnosticRules.GetActionableEvents(full.Events)
+                    .Where(e => e.Level == 1 && !(e.Id == 41 && e.Provider.Contains("Kernel-Power", StringComparison.OrdinalIgnoreCase)))
+                    .OrderByDescending(e => e.Time)
+                    .GroupBy(e => (e.Provider, e.Id))
+                    .Take(3)
+                    .Select(group =>
+                    {
+                        var item = group.First();
+                        var message = item.Message.ReplaceLineEndings(" ").Trim();
+                        if (message.Length > 200) message = message[..199] + "…";
+                        return new UserIssue($"Критическое событие Windows: {item.Provider} #{item.Id}", message, "Critical");
+                    }));
             }
-            return issues.Count == 0 ? "Отклонений не обнаружено" : string.Join(Environment.NewLine, issues);
+            return issues.OrderByDescending(issue => issue.Priority).ToArray();
         }
     }
+    public string OverviewFindings => string.Join(Environment.NewLine, OverviewIssues.Select(issue => issue.Title + ". " + issue.Detail));
+    public string OverviewStatus => Selected is null ? "Проверка ещё не выполнялась"
+        : OverviewIssues.Count == 0 ? "Отклонений не обнаружено" : $"Требуют внимания: {OverviewIssues.Count}";
+    public string OverviewUptimeLabel => UserUptimeLabel.Length > 0 ? UserUptimeLabel : "Последний запуск Windows: нет данных";
+    public string OverviewCoverage => UserCoverage;
     public string HistoryCount => $"Сохранено проверок: {History.Count}";
     public string SelectedHistorySummary => Selected?.HistoryDetailLabel ?? "Выберите проверку в списке.";
     public EventDetails? SelectedEvent

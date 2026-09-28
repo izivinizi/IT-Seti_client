@@ -13,6 +13,8 @@ internal static class EngineerWindowLauncher
     private const string BootstrapArgument = "--engineer-bootstrap";
     private const string EngineerArgument = "--engineer-window";
     private const string DatabaseArgument = "--history-db";
+    private const string ClientSidArgument = "--client-sid";
+    private const string ClientDataArgument = "--client-local-data";
 
     public sealed record CredentialLaunchResult(Process? Process, int ErrorCode);
 
@@ -20,6 +22,10 @@ internal static class EngineerWindowLauncher
     {
         var executable = Environment.ProcessPath
             ?? throw new InvalidOperationException("Не удалось определить путь к приложению.");
+        using var clientIdentity = WindowsIdentity.GetCurrent();
+        var clientSid = clientIdentity.User?.Value
+            ?? throw new InvalidOperationException("Не удалось определить пользователя Windows.");
+        var clientData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var lastError = 1326;
         var passwordPointer = Marshal.SecureStringToGlobalAllocUnicode(password);
         try
@@ -48,6 +54,10 @@ internal static class EngineerWindowLauncher
                     start.ArgumentList.Add(BootstrapArgument);
                     start.ArgumentList.Add(DatabaseArgument);
                     start.ArgumentList.Add(Path.GetFullPath(historyDatabase));
+                    start.ArgumentList.Add(ClientSidArgument);
+                    start.ArgumentList.Add(clientSid);
+                    start.ArgumentList.Add(ClientDataArgument);
+                    start.ArgumentList.Add(clientData);
                     try
                     {
                         return new(Process.Start(start)
@@ -82,6 +92,14 @@ internal static class EngineerWindowLauncher
         start.ArgumentList.Add(EngineerArgument);
         start.ArgumentList.Add(DatabaseArgument);
         start.ArgumentList.Add(Path.GetFullPath(database));
+        foreach (var argument in new[] { ClientSidArgument, ClientDataArgument })
+        {
+            if (GetArgument(args, argument) is { } value)
+            {
+                start.ArgumentList.Add(argument);
+                start.ArgumentList.Add(value);
+            }
+        }
         using var process = Process.Start(start)
             ?? throw new InvalidOperationException("Windows не запустила инженерское окно.");
         return true;

@@ -3,7 +3,7 @@
 [Setup]
 AppId={{CFA7B53D-16A9-4D77-9D82-EE68369AB185}
 AppName=ИТ-Сети Обслуживание ПК
-AppVersion=1.0.6
+AppVersion=1.1.1
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance
 DefaultGroupName=ИТ-Сети
@@ -150,6 +150,8 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
+    WizardForm.ProgressGauge.Style := npbstMarquee;
+    WizardForm.StatusLabel.Caption := 'Настраиваем обслуживание компьютера. Это может занять около минуты...';
     MaintenanceResult := ExpandConstant('{commonappdata}\ITSeti\Maintenance\install-error.txt');
     DeleteFile(MaintenanceResult);
     if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
@@ -167,6 +169,7 @@ begin
         RaiseException('Не удалось сохранить инвентарный номер.');
     if SoftwareCheck.Checked then
     begin
+      WizardForm.StatusLabel.Caption := 'Устанавливаем выбранные программы. Дождитесь результата...';
       ResultPath := ExpandConstant('{tmp}\org-install-result.txt');
       SoftwareCode := 2;
       if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
@@ -182,5 +185,8 @@ begin
       else
         MsgBox('Программы ИТ-Сети установлены.', mbInformation, MB_OK);
     end;
+    WizardForm.ProgressGauge.Style := npbstNormal;
+    WizardForm.ProgressGauge.Position := WizardForm.ProgressGauge.Max;
+    WizardForm.StatusLabel.Caption := 'Установка завершена.';
   end;
 end;
