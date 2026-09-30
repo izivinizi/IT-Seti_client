@@ -1,56 +1,43 @@
-using System.Diagnostics;
-using System.IO;
-using System.Text;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
 
 namespace ITSeti.Maintenance.App;
 
 internal static class WindowsAdminAccountDiscovery
 {
+    private const int ErrorMoreData = 234;
+
     public static IReadOnlyList<string> FindCandidates()
     {
+        if (!OperatingSystem.IsWindows()) return [];
         try
         {
-            var powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-                "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-            if (!File.Exists(powershell)) return [];
-
-            const string command = "$ErrorActionPreference='Stop'; "
-                + "$g=Get-WmiObject Win32_Group -Filter \"LocalAccount=True AND SID='S-1-5-32-544'\"; "
-                + "if($g){$g.GetRelated('Win32_UserAccount') | Where-Object {!$_.Disabled -and !$_.Lockout -and $_.Domain -and $_.Name} | "
-                + "ForEach-Object {$n=[string]$_.Domain+[char]92+[string]$_.Name; "
-                + "[Console]::WriteLine([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($n)))}}";
-            var start = new ProcessStartInfo(powershell)
+            var group = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null)
+                .Translate(typeof(NTAccount)).Value.Split('\\').Last();
+            var localMachine = Environment.MachineName;
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var resume = 0;
+            int status;
+            do
             {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Windows)
-            };
-            start.ArgumentList.Add("-NoProfile");
-            start.ArgumentList.Add("-NonInteractive");
-            start.ArgumentList.Add("-ExecutionPolicy");
-            start.ArgumentList.Add("Bypass");
-            start.ArgumentList.Add("-EncodedCommand");
-            start.ArgumentList.Add(Convert.ToBase64String(Encoding.Unicode.GetBytes(command)));
-
-            using var process = Process.Start(start);
-            if (process is null) return [];
-            var output = process.StandardOutput.ReadToEndAsync();
-            _ = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(2500))
-            {
-                process.Kill(entireProcessTree: true);
-                return [];
-            }
-            if (process.ExitCode != 0) return [];
-
-            var candidates = output.GetAwaiter().GetResult().Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries)
-                .Select(line => Encoding.UTF8.GetString(Convert.FromBase64String(line.Trim())))
-                .Where(name => name.Contains('\\') && !name.EndsWith("\\", StringComparison.Ordinal))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            return candidates.OrderBy(AccountPriority).ThenBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
+                status = NetLocalGroupGetMembers(null, group, 2, out var buffer, -1,
+                    out var entries, out _, ref resume);
+                try
+                {
+                    if (status != 0 && status != ErrorMoreData) break;
+                    var size = Marshal.SizeOf<LocalGroupMemberInfo2>();
+                    for (var i = 0; i < entries; i++)
+                    {
+                        var item = Marshal.PtrToStructure<LocalGroupMemberInfo2>(buffer + i * size);
+                        if (item.SidUsage != 1) continue;
+                        var account = Marshal.PtrToStringUni(item.DomainAndName);
+                        if (account is not null && account.StartsWith(localMachine + "\\", StringComparison.OrdinalIgnoreCase))
+                            names.Add(account);
+                    }
+                }
+                finally { if (buffer != IntPtr.Zero) NetApiBufferFree(buffer); }
+            } while (status == ErrorMoreData);
+            return names.OrderBy(AccountPriority).ThenBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
         }
         catch
         {
@@ -66,4 +53,19 @@ internal static class WindowsAdminAccountDiscovery
         if (name.Equals("user", StringComparison.OrdinalIgnoreCase)) return 2;
         return 3;
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LocalGroupMemberInfo2
+    {
+        public IntPtr Sid;
+        public int SidUsage;
+        public IntPtr DomainAndName;
+    }
+
+    [DllImport("Netapi32.dll", CharSet = CharSet.Unicode)]
+    private static extern int NetLocalGroupGetMembers(string? serverName, string groupName, int level,
+        out IntPtr buffer, int preferredMaximumLength, out int entriesRead, out int totalEntries, ref int resumeHandle);
+
+    [DllImport("Netapi32.dll")]
+    private static extern int NetApiBufferFree(IntPtr buffer);
 }

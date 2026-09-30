@@ -62,6 +62,8 @@ internal static class Program
             throw new Exception("CPU temperature selection picked a derived limit or a lower-priority sensor");
         if (CpuTemperatureReader.SelectBestReading([("Core #1 Distance to TjMax", 54.0)]) is not null)
             throw new Exception("Distance-to-limit sensor was reported as CPU temperature");
+        if (!CpuTemperatureReader.IsCpuBoardSensor("CPU Socket") || CpuTemperatureReader.IsCpuBoardSensor("System"))
+            throw new Exception("Motherboard CPU sensor filter accepted an ambient sensor");
         var cacheRacePath = Path.Combine(Path.GetTempPath(), "ITSeti-temperature-" + Guid.NewGuid().ToString("N") + ".json");
         File.WriteAllText(cacheRacePath, JsonSerializer.Serialize(new CpuTemperatureReading(62, "smoke", DateTimeOffset.UtcNow)));
         var cacheWriter = Task.Run(() =>

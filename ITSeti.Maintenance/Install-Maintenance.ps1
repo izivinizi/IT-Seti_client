@@ -10,8 +10,9 @@ function Write-InstallLog([string]$Message) {
     } catch { }
 }
 trap {
-    $detail='Этап: '+$installStage+[Environment]::NewLine+$_.Exception.ToString()+[Environment]::NewLine+$_.ScriptStackTrace
-    Write-InstallLog ('ОШИБКА '+$detail)
+    $detail='Этап: '+$installStage+[Environment]::NewLine+$_.Exception.Message
+    $technical=$_.Exception.ToString()+[Environment]::NewLine+$_.ScriptStackTrace
+    Write-InstallLog ('ОШИБКА '+$detail+[Environment]::NewLine+$technical)
     if($ResultFile){
         try {
             $resultDirectory=Split-Path -Parent $ResultFile
@@ -113,6 +114,7 @@ try {
     $temperatureTaskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew
     $taskPrincipal=New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
     $powershell=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if(!(Test-Path -LiteralPath $powershell -PathType Leaf)){throw "PowerShell не найден: $powershell"}
     $scheduler=New-Object -ComObject Schedule.Service
     $scheduler.Connect()
     foreach($name in @($taskName,'ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair','ITSeti-Maintenance-Cleanup','ITSeti-Maintenance-OrganizationSetup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates','ITSeti-Maintenance-Update',$temperatureTaskName)){
@@ -133,8 +135,20 @@ try {
         $trigger=if($name -eq 'ITSeti-Maintenance-QuickFull'){$quickTrigger}elseif($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$autoFullTrigger}else{$taskTrigger}
         $settings=if($name -eq 'ITSeti-Maintenance-Update'){$updateTaskSettings}elseif($isTemperatureTask){$temperatureTaskSettings}else{$taskSettings}
         try {
-            Register-ScheduledTask -TaskName $name -Action $taskAction -Trigger $trigger -Settings $settings -Principal $taskPrincipal -Force | Out-Null
-            $task=$scheduler.GetFolder('\').GetTask($name)
+            $lastTaskError=$null
+            for($attempt=1;$attempt -le 3;$attempt++){
+                try {
+                    Register-ScheduledTask -TaskName $name -Action $taskAction -Trigger $trigger -Settings $settings -Principal $taskPrincipal -Force -ErrorAction Stop | Out-Null
+                    $task=$scheduler.GetFolder('\').GetTask($name)
+                    $lastTaskError=$null
+                    break
+                } catch {
+                    $lastTaskError=$_.Exception
+                    Write-InstallLog ("Попытка ${attempt}/3 для задачи ${name}: "+$lastTaskError.Message)
+                    if($attempt -lt 3){Start-Sleep -Seconds $attempt}
+                }
+            }
+            if($lastTaskError){throw $lastTaskError}
             $task.SetSecurityDescriptor('D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;BU)',0)
             $registered=Get-ScheduledTask -TaskName $name -ErrorAction Stop
             $registeredSid=if($registered.Principal.UserId -eq 'S-1-5-18'){'S-1-5-18'}else{([Security.Principal.NTAccount]$registered.Principal.UserId).Translate([Security.Principal.SecurityIdentifier]).Value}

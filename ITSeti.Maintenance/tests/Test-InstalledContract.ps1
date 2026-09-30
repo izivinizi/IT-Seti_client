@@ -44,7 +44,7 @@ $tempPrefix=[IO.Path]::GetFullPath($env:TEMP).TrimEnd('\')+'\'
 if(!$sampleRoot.StartsWith($tempPrefix,[StringComparison]::OrdinalIgnoreCase)){throw 'Sampler test directory escaped the temporary folder.'}
 New-Item -ItemType Directory -Path $sampleRoot -Force | Out-Null
 try {
-    & ([scriptblock]::Create($sampler)) -RunRoot $sampleRoot -Seconds 0 -Interval 1
+    & (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\ResourceSampler.ps1') -RunRoot $sampleRoot -Seconds 0 -Interval 1
     $final=Get-Content -LiteralPath (Join-Path $sampleRoot 'resource-sample.json') -Raw | ConvertFrom-Json
     if($final.Error){
         if($final.Samples -ne 0){throw 'Sampler failure was not reported accurately.'}

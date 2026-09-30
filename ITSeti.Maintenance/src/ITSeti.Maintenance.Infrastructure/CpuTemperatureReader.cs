@@ -17,7 +17,7 @@ public static class CpuTemperatureReader
 
         var samples = new List<(string Name, double Value)>(SampleCount);
         var zeroSensors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var computer = new Computer { IsCpuEnabled = true };
+        var computer = new Computer { IsCpuEnabled = true, IsMotherboardEnabled = true };
         try
         {
             computer.Open();
@@ -27,8 +27,16 @@ public static class CpuTemperatureReader
                 foreach (var hardware in computer.Hardware.Where(item => item.HardwareType == HardwareType.Cpu))
                     UpdateAndCollect(hardware, readings, zeroSensors);
 
-                if (SelectBestReading(readings) is { } selected)
-                    samples.Add(selected);
+                var selected = SelectBestReading(readings);
+                if (selected is null)
+                {
+                    var boardReadings = new List<(string Name, double Value)>();
+                    foreach (var hardware in computer.Hardware.Where(item => item.HardwareType == HardwareType.Motherboard))
+                        UpdateAndCollect(hardware, boardReadings, zeroSensors);
+                    selected = SelectBestReading(boardReadings.Where(reading => IsCpuBoardSensor(reading.Name)));
+                }
+                if (selected is not null)
+                    samples.Add(selected.Value);
 
                 if (sample + 1 < SampleCount) Thread.Sleep(150);
             }
@@ -87,6 +95,11 @@ public static class CpuTemperatureReader
         name.Contains("distance", StringComparison.OrdinalIgnoreCase)
         || name.Contains("tjmax", StringComparison.OrdinalIgnoreCase)
         || name.Contains("thermal limit", StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsCpuBoardSensor(string name) =>
+        name.Contains("cpu", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("processor", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("socket", StringComparison.OrdinalIgnoreCase);
 
     private static int GetSensorPriority(string name)
     {

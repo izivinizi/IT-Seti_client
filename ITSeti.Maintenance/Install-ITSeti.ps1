@@ -46,21 +46,9 @@ try {
     $password = [string]$xml.credentials.password
     if ($requestedName -notmatch '^[a-zA-Z0-9._-]+$' -or !$password) { throw 'Saved administrator credentials are invalid.' }
 
-    $accounts = @(Get-WmiObject Win32_UserAccount -Filter 'LocalAccount=True' -ErrorAction Stop |
-        Where-Object { !$_.Disabled -and !$_.Lockout })
-    $administrators = Get-WmiObject Win32_Group -Filter "LocalAccount=True AND SID='S-1-5-32-544'" -ErrorAction Stop
-    if (!$administrators) { throw 'Local Administrators group was not found.' }
-    $adminSids = @($administrators.GetRelated('Win32_UserAccount') | ForEach-Object { $_.SID })
-    $account = $null
-    foreach ($candidate in @($requestedName, 'Admin', 'it-seti', 'user') | Select-Object -Unique) {
-        $found = @($accounts | Where-Object { $adminSids -contains $_.SID -and $_.Name -ieq $candidate })
-        if ($found.Count -eq 1) { $account = $found[0]; break }
-    }
-    if (!$account) { throw 'Configured local administrator account was not found.' }
-
     $secret = ConvertTo-SecureString $password -AsPlainText -Force
-    $credential = New-Object Management.Automation.PSCredential (($env:COMPUTERNAME + '\' + $account.Name), $secret)
-    Write-Host "Starting installer as $env:COMPUTERNAME\$($account.Name). Windows may ask for UAC confirmation."
+    $credential = New-Object Management.Automation.PSCredential (($env:COMPUTERNAME + '\' + $requestedName), $secret)
+    Write-Host "Starting installer as $env:COMPUTERNAME\$requestedName. Windows may ask for UAC confirmation."
     $secondaryLogon=Get-Service -Name 'seclogon' -ErrorAction Stop
     if($secondaryLogon.StartType -eq 'Disabled'){
         throw 'Windows Secondary Logon service is disabled by policy; stored credentials cannot launch the installer until an administrator enables it.'
@@ -69,6 +57,7 @@ try {
         $helper = Join-Path $PSScriptRoot 'Install-ITSeti-Admin.ps1'
         if (!(Test-Path -LiteralPath $helper -PathType Leaf)) { throw 'Administrator launch helper is missing.' }
         $powershell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        Write-Host 'Waiting for Windows to validate the local account and launch the installer...'
         $installer = Start-AdministratorHelper -PowerShell $powershell -Helper $helper -Credential $credential
         if ($installer.ExitCode -eq 9001) { throw 'Administrator helper could not launch the installer.' }
         if ($installer.ExitCode -ne 0) { exit $installer.ExitCode }

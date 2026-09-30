@@ -102,13 +102,18 @@ public partial class MainWindow : Window
     {
         AdminTabs.SelectedItem = ProgressTab;
         await ViewModel.RunFullAsync();
+        await InstallAvailableUpdateAfterFullCheckAsync();
     }
     private async void RunQuickFull_Click(object sender, RoutedEventArgs e)
     {
         AdminTabs.SelectedItem = ProgressTab;
         await ViewModel.RunQuickFullAsync();
     }
-    private async void RunUserFull_Click(object sender, RoutedEventArgs e) => await ViewModel.RunUserFullAsync();
+    private async void RunUserFull_Click(object sender, RoutedEventArgs e)
+    {
+        await ViewModel.RunUserFullAsync();
+        await InstallAvailableUpdateAfterFullCheckAsync();
+    }
     private async void RunCleanup_Click(object sender, RoutedEventArgs e) => await ViewModel.RunCleanupAsync();
     private async void RunRepair_Click(object sender, RoutedEventArgs e)
     {
@@ -385,9 +390,21 @@ public partial class MainWindow : Window
     private async void InstallAppUpdate_Click(object sender, RoutedEventArgs e)
     {
         await ViewModel.CheckApplicationUpdatesAsync();
+        await InstallAvailableUpdateAsync(confirm: true);
+    }
+
+    private async Task InstallAvailableUpdateAfterFullCheckAsync()
+    {
+        if (!ViewModel.LastFullSucceeded) return;
+        await ViewModel.CheckApplicationUpdatesAsync(automatic: true);
+        await InstallAvailableUpdateAsync(confirm: false);
+    }
+
+    private async Task InstallAvailableUpdateAsync(bool confirm)
+    {
         if (!ViewModel.CanInstallApplicationUpdate || ViewModel.ApplicationUpdateStatus.StartsWith("Установлена последняя", StringComparison.OrdinalIgnoreCase)) return;
         if (!ViewModel.ApplicationUpdateStatus.StartsWith("Доступна версия", StringComparison.OrdinalIgnoreCase)) return;
-        if (MessageBox.Show(this,
+        if (confirm && MessageBox.Show(this,
             "Откроется окно хода обновления. Установщик будет скачан и проверен по SHA-256. После этого приложение закроется, чтобы Windows могла заменить файлы.",
             "Обновление приложения", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
         var progressWindow = new UpdateProgressWindow(ViewModel.ApplicationUpdateTarget, ViewModel.RequestApplicationUpdateAsync)

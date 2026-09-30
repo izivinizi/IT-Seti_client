@@ -89,6 +89,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     }
     private readonly DiagnosticDebugView debugView = new();
     private string? lastFullError;
+    public bool LastFullSucceeded { get; private set; }
     private string? currentFullStage;
     private bool debugPreferSelected;
     public string DebugSource => debugView.Source;
@@ -1044,7 +1045,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private async Task RunFullCoreAsync(bool userMode, bool quickMode = false)
     {
         if (busy || fullRunner is null) return;
-        if (!quickMode) _ = CheckApplicationUpdatesAsync(automatic: true);
+        LastFullSucceeded = false;
         if (!userMode)
         {
             CheckProgressEntries.Clear();
@@ -1116,6 +1117,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             Selected = snapshot;
             await history.SaveAsync(snapshot);
             await ReloadAsync();
+            LastFullSucceeded = true;
             status = quickMode ? "Быстрая полная проверка завершена. Результат сохранён" : "Полная проверка завершена. Результат сохранён";
             if (!userMode)
             {

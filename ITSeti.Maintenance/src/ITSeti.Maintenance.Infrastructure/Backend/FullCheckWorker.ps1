@@ -3,6 +3,7 @@ $ErrorActionPreference='Stop'
 $CpuTemperatureFile=$env:ITSETI_CPU_TEMPERATURE_FILE
 $RunRoot=(Resolve-Path -LiteralPath $RunRoot).Path
 $ScriptRoot=$RunRoot
+. (Join-Path $ScriptRoot 'CpuLoad.ps1')
 $Days=7;$Samples=5
 $script:Admin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 $script:CompactOutput=$true

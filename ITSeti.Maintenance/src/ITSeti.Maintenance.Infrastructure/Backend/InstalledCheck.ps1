@@ -72,7 +72,7 @@ if($null -eq $sensor) {
 }
 [IO.File]::WriteAllText($cpuTemperatureFile,($sensor | ConvertTo-Json -Compress),[Text.Encoding]::UTF8)
 $source=$PSScriptRoot
-foreach($file in @('FullCheckWorker.ps1','HeadlessDiskWorker.ps1','ResourceSampler.ps1','Summary.ps1','DiskTools.ps1','Runtime.ps1','EventWorker.ps1','Repair.ps1','RepairWorker.ps1','NativeDiskMark.cs','allowed-processes.json','allowed-processes-win7.txt','allowed-publishers.txt','Set-WindowsAutomaticUpdates.ps1','Update-Application.ps1')) {
+foreach($file in @('FullCheckWorker.ps1','HeadlessDiskWorker.ps1','ResourceSampler.ps1','CpuLoad.ps1','Summary.ps1','DiskTools.ps1','Runtime.ps1','EventWorker.ps1','Repair.ps1','RepairWorker.ps1','NativeDiskMark.cs','allowed-processes.json','allowed-processes-win7.txt','allowed-publishers.txt','Set-WindowsAutomaticUpdates.ps1','Update-Application.ps1')) {
     Copy-Item -LiteralPath (Join-Path $source $file) -Destination $run -ErrorAction Stop
 }
 $env:ITSETI_CPU_TEMPERATURE_FILE=$cpuTemperatureFile

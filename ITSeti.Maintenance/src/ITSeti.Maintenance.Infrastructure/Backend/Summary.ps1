@@ -103,9 +103,7 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
         $s.TotalRAM=[double]$os.TotalVisibleMemorySize/1MB
         $loads=@(); $free=@()
         for($i=0;$i -lt $Samples;$i++) {
-            $counter=Get-WmiObject Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'" -ErrorAction Stop
-            if(!$counter) {throw 'Счётчик CPU недоступен'}
-            $loads += [double]$counter.PercentProcessorTime
+            $loads += [double](Get-CpuLoadPercent)
             $free += [double](Get-WmiObject Win32_OperatingSystem -ErrorAction Stop).FreePhysicalMemory/1MB
             if($i -lt $Samples-1) {Start-Sleep -Seconds 1}
         }

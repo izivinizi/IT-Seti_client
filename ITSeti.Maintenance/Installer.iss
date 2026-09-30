@@ -3,7 +3,7 @@
 [Setup]
 AppId={{CFA7B53D-16A9-4D77-9D82-EE68369AB185}
 AppName=ИТ-Сети Обслуживание ПК
-AppVersion=1.1.1
+AppVersion=1.1.2
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance
 DefaultGroupName=ИТ-Сети
@@ -40,6 +40,9 @@ Source: "Uninstall-ITSeti.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{autoprograms}\ИТ-Сети Обслуживание ПК"; Filename: "{app}\ITSeti.Maintenance.exe"
 Name: "{autodesktop}\ИТ-Сети Обслуживание ПК"; Filename: "{app}\ITSeti.Maintenance.exe"
 Name: "{autoprograms}\Удалить ИТ-Сети"; Filename: "{app}\Uninstall-ITSeti.cmd"; IconFilename: "{app}\ITSeti.Maintenance.exe"
+
+[Run]
+Filename: "{app}\ITSeti.Maintenance.exe"; Description: "Запустить ИТ-Сети Обслуживание ПК"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallRun]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Uninstall-Maintenance.ps1"""; Flags: runhidden waituntilterminated; RunOnceId: "ITSetiMaintenanceCleanup"

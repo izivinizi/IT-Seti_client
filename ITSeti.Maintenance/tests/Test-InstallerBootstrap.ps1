@@ -13,23 +13,14 @@ $code = [scriptblock]::Create($credentialTry[0].Extent.Text.Replace('$PSScriptRo
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('maintenance-bootstrap-' + [guid]::NewGuid().ToString('N') + '.xml')
 try {
     [IO.File]::WriteAllText($fixture, '<credentials><username>Admin</username><password>test-fixture-only</password></credentials>')
-    foreach ($scenario in @('success', 'access-denied', 'disabled-service', 'wmi-denied', 'missing-account', 'helper-failure', 'user-account')) {
+    foreach ($scenario in @('success', 'access-denied', 'disabled-service', 'domain-wmi-unavailable', 'helper-failure')) {
         & {
             $fixtureRoot = [IO.Path]::GetFullPath($Root)
             $credentialFile = $fixture
             $setup = Join-Path $fixtureRoot 'ITSeti-Maintenance-Setup.exe'
             $script:launches = @()
             function Get-WmiObject {
-                param($Class, $Filter, $ErrorAction)
-                if ($scenario -eq 'wmi-denied') { throw 'WMI access denied' }
-                $account = [pscustomobject]@{ Name = $(if($scenario -eq 'user-account'){'user'}else{'aDmIn'}); SID = 'S-1-5-21-1-2-3-1001'; Disabled = $false; Lockout = $false }
-                if ($Class -eq 'Win32_UserAccount') {
-                    if ($scenario -ne 'missing-account') { return $account }
-                    return
-                }
-                $group = [pscustomobject]@{ Account = $account }
-                $group | Add-Member ScriptMethod GetRelated { param($Class) $this.Account }
-                return $group
+                throw 'The bootstrap must not query WMI before local logon.'
             }
             function Get-Service {
                 param($Name, $ErrorAction)
@@ -47,7 +38,7 @@ try {
             }
             & $code
             $last = $script:launches[-1]
-            if ($scenario -in 'success','user-account') {
+            if ($scenario -in 'success','domain-wmi-unavailable') {
                 if ($last.Verb -or $last.File -notlike '*powershell.exe' -or $last.Arguments -notlike '*Install-ITSeti-Admin.ps1*') { throw 'Filtered credentials must launch the elevation helper.' }
                 if (!$last.User.StartsWith($env:COMPUTERNAME + '\')) { throw 'Account must be local even on a domain PC.' }
             } elseif ($last.Verb -ne 'RunAs' -or $last.File -ne $setup) { throw ('UAC fallback failed: ' + $scenario) }
