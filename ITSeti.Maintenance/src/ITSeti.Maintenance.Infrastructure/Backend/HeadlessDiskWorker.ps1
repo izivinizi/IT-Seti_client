@@ -1,5 +1,6 @@
 ﻿param([string]$ScriptRoot,[string]$ToolsRoot,[switch]$SkipBenchmark)
 $ErrorActionPreference='Stop'
+$BenchmarkReadyFile=Join-Path $ScriptRoot 'benchmark-ready.signal'
 $script:Snapshot=@{Smart=@();Notes=@()}
 $script:DiskResult=$null
 $script:DiskFailure=''
@@ -79,6 +80,12 @@ try {
         Write-DiskProgress "CrystalDiskInfo: SMART data received for $($script:Snapshot.Smart.Count) drive(s)"
     } catch {$script:Snapshot.Notes+=('SMART: '+$_.Exception.Message);Write-DiskProgress ('CrystalDiskInfo: '+$_.Exception.Message)}
     if($SkipBenchmark){Write-DiskProgress 'DiskSpd: пропущено быстрой проверкой';return}
+    if($BenchmarkReadyFile) {
+        Write-DiskProgress 'DiskSpd: ожидание окончания выборки нагрузки'
+        $readyDeadline=[DateTime]::UtcNow.AddSeconds(120)
+        while(!(Test-Path -LiteralPath $BenchmarkReadyFile -PathType Leaf) -and [DateTime]::UtcNow -lt $readyDeadline){Start-Sleep -Milliseconds 250}
+        if(!(Test-Path -LiteralPath $BenchmarkReadyFile -PathType Leaf)){throw 'Resource sampling did not signal benchmark readiness.'}
+    }
     $exe=Join-Path $ToolsRoot 'CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe'
     if(!(Test-Path -LiteralPath $exe -PathType Leaf)){throw 'DiskSpd64.exe is missing from the installed CrystalDiskMark bundle.'}
     $drive=Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='$env:SystemDrive'" -ErrorAction Stop

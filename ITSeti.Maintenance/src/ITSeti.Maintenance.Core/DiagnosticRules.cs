@@ -50,16 +50,16 @@ public static class DiagnosticRules
         var issues = new List<UserIssue>();
         var full = snapshot.Full;
         if (full is not null) issues.AddRange(GetKernelPowerBugcheckIssues(full.Events));
-        if (snapshot.LastBootAt is { } boot && snapshot.StartedAt - boot > TimeSpan.FromDays(6))
+        if (snapshot.LastBootAt is { } boot && snapshot.StartedAt - boot > TimeSpan.FromDays(8))
             issues.Add(new("Компьютер давно не перезагружали",
-                "Последняя перезагрузка была более 6 дней назад. Сохраните открытые документы и перезагрузите компьютер, когда закончите работу.", "Warning"));
+                $"Последняя перезагрузка была {(int)(snapshot.StartedAt - boot).TotalDays} дней назад. Сохраните открытые документы и перезагрузите компьютер, когда закончите работу.", "Warning"));
         if (snapshot.WindowsBuild is int windowsBuild && windowsBuild < 17763)
             issues.Add(new("Версия Windows устарела", $"Установлена {FormatWindows(snapshot)}. Это ниже Windows 10 версии 1809 (сборка 17763); система давно не получает актуальную поддержку и обновления безопасности.", "Warning"));
         var sample = full?.ResourceSampling is { Samples: >= 6, Error: "" } complete ? complete : null;
         var cpuTemperature = snapshot.CpuTemperatureC ?? full?.CpuTemperatureC;
-        if (cpuTemperature is >= 90)
+        if (cpuTemperature is >= 85)
             issues.Add(new("Критически высокая температура процессора", $"Датчик показывает {cpuTemperature:N0} °C. Дайте компьютеру остыть и проверьте охлаждение.", "Critical"));
-        else if (cpuTemperature is > 80)
+        else if (cpuTemperature is >= 75)
             issues.Add(new("Повышенная температура процессора", $"Датчик показывает {cpuTemperature:N0} °C. Проверьте охлаждение, если температура держится высокой.", "Warning"));
         if (snapshot.TotalMemoryBytes > 0)
         {
@@ -85,7 +85,7 @@ public static class DiagnosticRules
         }
         if (sample is not null && sample.CpuHighSamples >= 5)
             issues.Add(new("Процессор долго работал на пределе", "Нагрузка держалась выше 90% большую часть проверки. Из-за этого программы могут отвечать медленно.", "Warning"));
-        foreach (var disk in snapshot.Disks.Where(d => d.TotalBytes > 0 && d.FreeBytes < 15L * 1073741824))
+        foreach (var disk in snapshot.Disks.Where(d => d.TotalBytes >= 50L * 1073741824 && d.FreeBytes < 15L * 1073741824))
         {
             var severe = disk.FreeBytes < 5L * 1073741824;
             issues.Add(new($"На диске {disk.Name} мало места", $"Свободно {disk.FreeBytes / 1073741824.0:N1} ГБ. Можно выполнить очистку или посмотреть, какие файлы занимают место.", severe ? "Critical" : "Warning"));
@@ -94,8 +94,13 @@ public static class DiagnosticRules
             issues.Add(new($"Диск {disk.Model} требует проверки", "Windows сообщает о проблеме с накопителем. Сохраните важные файлы и обратитесь к специалисту.", "Critical"));
         if (full is not null)
         {
-            foreach (var disk in full.SmartDisks.Where(d => Regex.IsMatch(d.Status, "Caution|Bad|Тревог|Плох", RegexOptions.IgnoreCase)))
-                issues.Add(new($"Состояние диска {disk.Model} вызывает опасения", "Сохраните важные файлы и обратитесь к специалисту для проверки диска.", "Critical"));
+            foreach (var disk in full.SmartDisks.Where(d => Regex.IsMatch(d.Status, "Caution|Bad|Тревог|Плох", RegexOptions.IgnoreCase)
+                         || !string.IsNullOrWhiteSpace(d.SmartWarnings)))
+            {
+                var details = string.IsNullOrWhiteSpace(disk.SmartWarnings) ? "Сохраните важные файлы и обратитесь к специалисту для проверки диска."
+                    : $"SMART: {disk.SmartWarnings}. Сохраните важные файлы и проверьте накопитель.";
+                issues.Add(new($"Состояние диска {disk.Model} вызывает опасения", details, "Critical"));
+            }
             foreach (var disk in full.SmartDisks.Where(d => DiskLifetime.ExceedsWarning(d.PowerOnHours)))
                 issues.Add(new($"Накопитель {disk.Model} наработал более 60 000 часов",
                     $"Наработка: {DiskLifetime.Format(disk.PowerOnHours)}. Это повод внимательнее следить за состоянием SMART и резервными копиями, но само по себе не означает неисправность.", "Warning"));
@@ -111,8 +116,6 @@ public static class DiagnosticRules
                 issues.Add(new("Системный диск читает данные медленно", $"Измерено {read:N0} МБ/с, ориентир для этого типа диска — от {warning} МБ/с. Результат стоит перепроверить, когда компьютер не занят другими задачами.", read < criticalSpeed ? "Critical" : "Warning"));
             if (benchmark.MediaType == "HDD")
                 issues.Add(new("Система установлена на обычном жёстком диске", "Программы могут запускаться медленнее, чем на твердотельном диске. Это не неисправность.", "Warning"));
-            foreach (var disk in full.SmartDisks.Where(d => d.MediaType == "SSD" && IsLinkLimited(d.TransferMode) && d.TransferMode.StartsWith("SATA/", StringComparison.OrdinalIgnoreCase)))
-                issues.Add(new($"Диск {disk.Model} подключён не в самом быстром режиме", "Сам диск поддерживает более быстрое подключение. Специалист может проверить кабель и порт компьютера.", "Warning"));
             if (sample is not null && benchmark.MediaType is ("SSD" or "HDD"))
             {
                 var latency = Math.Max(sample.DiskReadLatencyMs ?? 0, sample.DiskWriteLatencyMs ?? 0);
@@ -128,22 +131,22 @@ public static class DiagnosticRules
     public static IReadOnlyList<string> GetFindings(DiagnosticSnapshot snapshot)
     {
         var findings = new List<string>();
-        if (snapshot.LastBootAt is { } boot && snapshot.StartedAt - boot > TimeSpan.FromDays(6))
+        if (snapshot.LastBootAt is { } boot && snapshot.StartedAt - boot > TimeSpan.FromDays(8))
             findings.Add($"Windows не перезагружалась {(int)(snapshot.StartedAt - boot).TotalDays} дней. Перед перезагрузкой сохраните открытые документы.");
         if (snapshot.WindowsBuild is int windowsBuild && windowsBuild < 17763)
             findings.Add($"Windows ниже версии 1809: {FormatWindows(snapshot)}.");
         var sample = snapshot.Full?.ResourceSampling is { Samples: >= 6, Error: "" } complete ? complete : null;
         var cpuTemperature = snapshot.CpuTemperatureC ?? snapshot.Full?.CpuTemperatureC;
-        if (cpuTemperature is >= 90)
-            findings.Add($"CPU: критически высокая температура {cpuTemperature:N0} °C (порог 90 °C).");
-        else if (cpuTemperature is > 80)
-            findings.Add($"CPU: температура {cpuTemperature:N0} °C выше 80 °C.");
+        if (cpuTemperature is >= 85)
+            findings.Add($"CPU: критически высокая температура {cpuTemperature:N0} °C (порог 85 °C).");
+        else if (cpuTemperature is >= 75)
+            findings.Add($"CPU: температура {cpuTemperature:N0} °C достигла порога 75 °C.");
         if (sample?.CpuHighSamples >= 5) findings.Add($"CPU: ≥90% в {sample.CpuHighSamples} из {sample.Samples} замеров за 30 секунд");
         if (sample?.MemoryHighSamples >= 5) findings.Add($"ОЗУ: ≥90% в {sample.MemoryHighSamples} из {sample.Samples} замеров за 30 секунд");
         if (sample is not null && sample.LowAvailableSamples >= 5 && sample.PagingHighSamples >= 3)
             findings.Add("ОЗУ: менее 500 МБ доступно и активная подкачка");
         if (snapshot.TotalMemoryBytes > 0 && snapshot.TotalMemoryBytes <= 4.5 * 1073741824) findings.Add("ОЗУ: 4 ГБ или меньше");
-        findings.AddRange(snapshot.Disks.Where(d => d.FreeBytes < 15L * 1073741824).Select(d => $"{d.Name} свободно {d.FreeBytes / 1073741824.0:N1} ГБ"));
+        findings.AddRange(snapshot.Disks.Where(d => d.TotalBytes >= 50L * 1073741824 && d.FreeBytes < 15L * 1073741824).Select(d => $"{d.Name} свободно {d.FreeBytes / 1073741824.0:N1} ГБ"));
         var full = snapshot.Full;
         foreach (var disk in (full?.PhysicalDisks ?? snapshot.QuickDisks ?? []).Where(d => HasBadWindowsHealth(d.Health)))
             findings.Add($"Windows: тревожное состояние {disk.Model}: {disk.Health}");
@@ -154,8 +157,9 @@ public static class DiagnosticRules
             .Select(issue => $"{issue.Title}: {issue.Detail}"));
         foreach (var disk in full.SmartDisks)
         {
-            if (Regex.IsMatch(disk.Status, "Caution|Bad|Тревог|Плох", RegexOptions.IgnoreCase))
-                findings.Add($"SMART {disk.Model}: {disk.Status}");
+            if (Regex.IsMatch(disk.Status, "Caution|Bad|Тревог|Плох", RegexOptions.IgnoreCase)
+                || !string.IsNullOrWhiteSpace(disk.SmartWarnings))
+                findings.Add($"SMART {disk.Model}: {disk.Status}{(string.IsNullOrWhiteSpace(disk.SmartWarnings) ? "" : "; " + disk.SmartWarnings)}");
             if (DiskLifetime.ExceedsWarning(disk.PowerOnHours))
                 findings.Add($"Наработка {disk.Model}: {DiskLifetime.Format(disk.PowerOnHours)}. Порог предупреждения — более 60 000 ч.");
             if (disk.MediaType == "SSD" && IsLinkLimited(disk.TransferMode)) findings.Add($"Ограничение интерфейса {disk.Model}: {disk.TransferMode}. Поддержка порта/слота ПК не подтверждена.");

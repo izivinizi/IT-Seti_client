@@ -10,6 +10,16 @@ trap {
     exit 1
 }
 $latestName=if($Quick){'latest-quick.txt'}elseif($StartRepair){'latest-auto-full.txt'}else{'latest-full.txt'}
+if($Quick){
+    $lastRunFile=Join-Path $base 'last-quick-run.txt'
+    $lastRun=[DateTimeOffset]::MinValue
+    if((Test-Path -LiteralPath $lastRunFile -PathType Leaf) -and
+       [DateTimeOffset]::TryParse([IO.File]::ReadAllText($lastRunFile),[ref]$lastRun) -and
+       [DateTimeOffset]::UtcNow-$lastRun.ToUniversalTime() -lt [TimeSpan]::FromDays(14)){
+        Remove-Item -LiteralPath $run -Force
+        exit 0
+    }
+}
 $pending=Join-Path $base ($latestName+'.pending')
 [IO.File]::WriteAllText($pending,$run,[Text.Encoding]::UTF8)
 Move-Item -LiteralPath $pending -Destination (Join-Path $base $latestName) -Force
@@ -76,8 +86,14 @@ foreach($file in @('FullCheckWorker.ps1','HeadlessDiskWorker.ps1','ResourceSampl
     Copy-Item -LiteralPath (Join-Path $source $file) -Destination $run -ErrorAction Stop
 }
 $env:ITSETI_CPU_TEMPERATURE_FILE=$cpuTemperatureFile
-& ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $run 'FullCheckWorker.ps1'),[Text.Encoding]::UTF8))) -RunRoot $run -ToolsRoot $tools -HeadlessDiskSpd -TrustedTools -StartRepair:$StartRepair -SkipResourceSampling:$Quick -SkipDiskBenchmark:$Quick
+& ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $run 'FullCheckWorker.ps1'),[Text.Encoding]::UTF8))) -RunRoot $run -ToolsRoot $tools -HeadlessDiskSpd -TrustedTools -UserMode:$Quick
 Remove-Item Env:ITSETI_CPU_TEMPERATURE_FILE -ErrorAction SilentlyContinue
 if(Test-Path -LiteralPath (Join-Path $run 'result.json')){
     [IO.File]::WriteAllText((Join-Path $base 'last-quick-run.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII)
+    if($StartRepair){
+        $pending=Join-Path $base 'pending-auto-full-maintenance.txt'
+        $temporary=$pending+'.pending'
+        [IO.File]::WriteAllText($temporary,(Split-Path $run -Leaf),[Text.Encoding]::ASCII)
+        Move-Item -LiteralPath $temporary -Destination $pending -Force
+    }
 }

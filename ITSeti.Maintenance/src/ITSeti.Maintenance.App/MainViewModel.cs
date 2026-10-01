@@ -172,6 +172,9 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private readonly MachineIdentityStore identityStore = new();
     private MachineIdentity identity = new(null, null, null, []);
     private string adminInventoryInput = "";
+    private string adminAccountAuditStatus = "Проверка учётных записей администраторов ещё не выполнялась.";
+    private IReadOnlyList<string> unexpectedAdminAccounts = [];
+    private bool currentAccountUnexpectedAdministrator;
     public string AdminInventoryInput { get => adminInventoryInput; set { adminInventoryInput = value; Notify(); } }
     public string UserInventoryLabel => identity.InventoryNumber is { } number ? $"Инв. № {number}" : "Инв. № не указан";
     public string UserRmsLabel => identity.RmsId is { } id ? $"RMS: {id}" : "RMS: не найден";
@@ -213,7 +216,12 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             if (!busy && selected is not null && value?.Id != selected.Id) debugPreferSelected = true;
             selected = value;
             Disks.Clear();
-            if (value is not null) foreach (var disk in value.Disks) Disks.Add(disk);
+            if (value is not null)
+            {
+                var systemDrive = (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").TrimEnd('\\');
+                foreach (var disk in value.Disks.OrderByDescending(d => string.Equals(d.Name.TrimEnd('\\'), systemDrive, StringComparison.OrdinalIgnoreCase)))
+                    Disks.Add(disk);
+            }
             Replace(PhysicalDisks, value?.Full?.PhysicalDisks ?? value?.QuickDisks);
             Replace(SmartDisks, value?.Full?.SmartDisks);
             Replace(DiskGroups, BuildDiskGroups(value));
@@ -263,7 +271,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                 foreach (var volume in partitions) assignedVolumes.Add(volume.Name);
             }
             var media = !string.IsNullOrWhiteSpace(drive.MediaType) && drive.MediaType != "Unknown" ? drive.MediaType : match?.MediaType ?? "Не определён";
-            var health = match is null ? $"Windows: {drive.Health}" : $"SMART: {match.Status} · Windows: {drive.Health}";
+            var smartDetail = match is null || string.IsNullOrWhiteSpace(match.SmartWarnings) ? "" : " · " + match.SmartWarnings;
+            var health = match is null ? $"Windows: {drive.Health}" : $"SMART: {match.Status}{smartDetail} · Windows: {drive.Health}";
             groups.Add(new(drive.Model, media, health, match?.TransferMode ?? "", partitions, match?.PowerOnHours ?? drive.PowerOnHours));
         }
         foreach (var item in smart.Where(item => !usedSmart.Contains(item)))
@@ -272,9 +281,20 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         var unmatched = snapshot.Disks.Where(volume => !assignedVolumes.Contains(volume.Name)).ToList();
         if (unmatched.Count > 0)
             groups.Add(new("Накопитель не определён", "", "Windows-разделы; привязка к физическому диску не получена", "", unmatched));
-        return groups;
+        var systemDrive = (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").TrimEnd('\\');
+        return groups.OrderByDescending(group => group.Partitions.Any(partition =>
+            string.Equals(partition.Name.TrimEnd('\\'), systemDrive, StringComparison.OrdinalIgnoreCase))).ToArray();
     }
     public string ComputerName => Environment.MachineName;
+    public string AdminAccountAuditStatus => adminAccountAuditStatus;
+    public async Task RefreshAdminAccountAuditAsync()
+    {
+        var audit = await Task.Run(WindowsAdminAccountDiscovery.InspectAdministrators);
+        adminAccountAuditStatus = audit.Status;
+        unexpectedAdminAccounts = audit.UnexpectedAccounts;
+        currentAccountUnexpectedAdministrator = WindowsAdminAccountDiscovery.IsCurrentAccountUnexpectedAdministrator();
+        Notify();
+    }
     private static readonly string CurrentAccountContext = ReadCurrentAccountContext();
     public string CurrentAccountSummary => CurrentAccountContext;
     private static string ReadCurrentAccountContext()
@@ -297,7 +317,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private DiagnosticSnapshot? UserDiagnosticSnapshot => Selected ?? live;
     private DiskSnapshot? SystemDisk => UserSnapshot?.Disks.FirstOrDefault(d => d.Name.StartsWith(Environment.GetEnvironmentVariable("SystemDrive") ?? "C:", StringComparison.OrdinalIgnoreCase))
         ?? UserSnapshot?.Disks.OrderByDescending(d => d.UsedPercent).FirstOrDefault();
-    private DiskSnapshot? LowSpaceDisk => UserSnapshot?.Disks.Where(d => d.TotalBytes > 0 && d.FreeBytes < 15L * 1073741824)
+    private DiskSnapshot? LowSpaceDisk => UserSnapshot?.Disks.Where(d => d.TotalBytes >= 50L * 1073741824 && d.FreeBytes < 15L * 1073741824)
         .OrderBy(d => d.FreeBytes).FirstOrDefault();
     public bool HasLowDiskSpace => LowSpaceDisk is not null;
     public string LowSpaceActionLabel => LowSpaceDisk is { } disk ? $"Что занимает {disk.Name.TrimEnd('\\')}" : "Что занимает место";
@@ -327,8 +347,13 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             string state;
             if (full is not null)
             {
-                if (full.SmartDisks.Any(d => System.Text.RegularExpressions.Regex.IsMatch(d.Status, "Caution|Bad|Тревог|Плох", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-                    || full.PhysicalDisks.Any(d => System.Text.RegularExpressions.Regex.IsMatch(d.Health, "Warning|Unhealthy|Degraded|Pred Fail|Error|Тревог|Плох", System.Text.RegularExpressions.RegexOptions.IgnoreCase)))
+                var systemSmart = UserSystemSmartDisk;
+                var systemPhysical = systemSmart is null
+                    ? full.PhysicalDisks.Count == 1 ? full.PhysicalDisks[0] : null
+                    : full.PhysicalDisks.FirstOrDefault(d => string.Equals(d.Model, systemSmart.Model, StringComparison.OrdinalIgnoreCase));
+                if (systemSmart is not null && (System.Text.RegularExpressions.Regex.IsMatch(systemSmart.Status, "Caution|Bad|Тревог|Плох", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                    || !string.IsNullOrWhiteSpace(systemSmart.SmartWarnings))
+                    || systemPhysical is not null && System.Text.RegularExpressions.Regex.IsMatch(systemPhysical.Health, "Warning|Unhealthy|Degraded|Pred Fail|Error|Тревог|Плох", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                     state = "Состояние диска требует внимания";
                 else if (UserSystemSmartDisk is { Status.Length: > 0 }) state = "Состояние диска: норма";
                 else if (full.SmartDisks.Count > 0) state = "Состояние SMART получено";
@@ -459,7 +484,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         setupInstallRunning = false;
         Notify();
     }
-    public string ScheduleStatus => FullDiagnosticsRunner.IsInstalled ? "Быстрая проверка: раз в 14 дней · полная с восстановлением: раз в 60 дней" : "Не настроено";
+    public string ScheduleStatus => FullDiagnosticsRunner.IsInstalled ? "Ночная диагностика: раз в 14 дней · полная с обслуживанием: раз в 60 дней" : "Не настроено";
     public string ApplicationUpdateStatus => applicationUpdateStatus;
     public bool CanCheckApplicationUpdates => !busy && !applicationUpdateCheckRunning && !applicationUpdateRunning;
     public bool CanInstallApplicationUpdate => !busy && !applicationUpdateRunning && !applicationUpdateCheckRunning;
@@ -544,8 +569,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public string Status => status;
     public string Cpu => Selected?.CpuLabel ?? "—";
     public Brush CpuStatusBrush => Selected is null ? MetricNeutralBrush :
-        (Selected.CpuTemperatureC ?? Selected.Full?.CpuTemperatureC) is >= 90 ? MetricCriticalBrush :
-        (Selected.CpuTemperatureC ?? Selected.Full?.CpuTemperatureC) is > 80 || Selected.Full?.ResourceSampling?.CpuHighSamples >= 5 ? MetricWarningBrush : MetricGoodBrush;
+        (Selected.CpuTemperatureC ?? Selected.Full?.CpuTemperatureC) is >= 85 ? MetricCriticalBrush :
+        (Selected.CpuTemperatureC ?? Selected.Full?.CpuTemperatureC) is >= 75 || Selected.Full?.ResourceSampling?.CpuHighSamples >= 5 ? MetricWarningBrush : MetricGoodBrush;
     public string CpuDetail => $"{Selected?.Full?.CpuName ?? LocalCpuName} · {FormatCpuTemperature(Selected?.CpuTemperatureC ?? Selected?.Full?.CpuTemperatureC)}";
     public string Gpu => Selected?.Full?.GpuName ?? "Нет данных";
     public string MemoryType => Selected?.Full?.MemoryType is { Length: > 0 } type ? type : "Тип DDR не определён";
@@ -563,15 +588,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             if (Selected is null) return MetricNeutralBrush;
             var drive = (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").TrimEnd('\\');
             var disk = Selected.Disks.FirstOrDefault(item => string.Equals(item.Name.TrimEnd('\\'), drive, StringComparison.OrdinalIgnoreCase));
-            var speedIssue = Selected.Full?.Benchmark.State == "Completed"
-                ? DiagnosticRules.GetUserIssues(Selected).FirstOrDefault(issue => issue.Title == "Системный диск читает данные медленно")
-                : null;
-            if (Selected.Full?.SmartDisks.Any(item => Regex.IsMatch(item.Status, "Caution|Bad|Тревог|Плох", RegexOptions.IgnoreCase)) == true ||
-                Selected.Full?.PhysicalDisks.Any(item => Regex.IsMatch(item.Health, "Warning|Unhealthy|Degraded|Pred Fail|Error|Тревог|Плох", RegexOptions.IgnoreCase)) == true ||
-                disk is { FreeBytes: < 5L * 1073741824 } || speedIssue?.Severity == "Critical") return MetricCriticalBrush;
-            if (disk is { FreeBytes: < 15L * 1073741824 } ||
-                speedIssue?.Severity == "Warning")
-                return MetricWarningBrush;
+            if (disk is { FreeBytes: < 5L * 1073741824 }) return MetricCriticalBrush;
+            if (disk is { TotalBytes: >= 50L * 1073741824, FreeBytes: < 15L * 1073741824 }) return MetricWarningBrush;
             return MetricGoodBrush;
         }
     }
@@ -747,6 +765,12 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                         return new UserIssue($"Критическое событие Windows: {item.Provider} #{item.Id}", message, "Critical");
                     }));
             }
+            if (unexpectedAdminAccounts.Count > 0)
+                issues.Add(new UserIssue("Проверьте состав локальных администраторов",
+                    string.Join(", ", unexpectedAdminAccounts) + ". Допустимые локальные учётные записи: Admin и it-seti.", "Warning"));
+            if (currentAccountUnexpectedAdministrator)
+                issues.Add(new UserIssue("Текущая учётная запись пользователя имеет права администратора",
+                    "Для обычной рабочей учётной записи рекомендуется убрать членство в группе Администраторы.", "Warning"));
             return issues.OrderByDescending(issue => issue.Priority).ToArray();
         }
     }
@@ -1030,7 +1054,13 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public Task RunFullAsync() => RunFullCoreAsync(false);
     public Task RunQuickFullAsync() => RunFullCoreAsync(false, true);
     public Task RunUserFullAsync() => RunFullCoreAsync(true);
-    public Task RunScheduledUserQuickAsync() => RunFullCoreAsync(true, true);
+    public Task RunScheduledUserQuickAsync() => RunFullCoreAsync(true);
+
+    public async Task<bool> RunScheduledRepairAsync()
+    {
+        await RunRepairAsync();
+        return repairResult?.Contains("| Завершено.", StringComparison.OrdinalIgnoreCase) == true;
+    }
 
     public async Task OpenLowSpaceScanAsync()
     {
@@ -1064,17 +1094,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         {
             if (!userMode && !quickMode)
             {
-                RecordProgress("Обслуживание", "Отключение автоматической установки обновлений Windows");
-                try
-                {
-                    windowsUpdatePolicyStatus = await new WindowsUpdatePolicyRunner().DisableAsync();
-                    RecordProgress("Обслуживание", windowsUpdatePolicyStatus);
-                }
-                catch (Exception ex)
-                {
-                    windowsUpdatePolicyStatus = "Не удалось отключить автообновления: " + ex.Message;
-                    RecordProgress("Обслуживание", windowsUpdatePolicyStatus);
-                }
+                windowsUpdatePolicyStatus = "Настройка автообновлений выполняется параллельно с диагностикой";
+                RecordProgress("Обслуживание", "Проверка политики автообновлений запущена параллельно с диагностикой");
                 Notify();
             }
             if (userMode)
@@ -1115,6 +1136,15 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                 : userMode ? fullRunner.RunUserAsync(progress) : fullRunner.RunAsync(progress));
             live = null;
             Selected = snapshot;
+            if (!userMode && !quickMode)
+            {
+                var updateResult = snapshot.Notes.FirstOrDefault(note => note.Contains("автообновлен", StringComparison.OrdinalIgnoreCase));
+                windowsUpdatePolicyStatus = updateResult
+                    ?? (snapshot.Full?.Elevated == true
+                        ? new WindowsUpdatePolicyRunner().ReadStatus()
+                        : "Не изменено: проверка выполнялась без административных прав.");
+                RecordProgress("Обслуживание", windowsUpdatePolicyStatus);
+            }
             await history.SaveAsync(snapshot);
             await ReloadAsync();
             LastFullSucceeded = true;

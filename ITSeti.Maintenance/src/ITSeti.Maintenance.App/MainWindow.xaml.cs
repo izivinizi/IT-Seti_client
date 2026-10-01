@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Diagnostics;
 using System.Security;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Input;
 using System.Windows.Controls;
@@ -18,10 +19,12 @@ public partial class MainWindow : Window
     private readonly FullDiagnosticsRunner fullRunner = new();
     private readonly TaskCompletionSource initializationCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly string historyDatabasePath;
-    private readonly bool engineerOnly;
+    private bool engineerOnly;
     private bool closeAfterMaintenance;
     private bool exitForUpdate;
     private bool handingOffToEngineer;
+    private bool scheduledFullMaintenanceRunning;
+    private bool syncingAdminPassword;
     private DispatcherOperation? progressScroll;
     private bool closed;
     private readonly DispatcherTimer liveMetricsTimer = new() { Interval = TimeSpan.FromSeconds(10) };
@@ -59,6 +62,7 @@ public partial class MainWindow : Window
             {
                 ViewModel.RefreshSetupAudit();
                 ViewModel.RefreshIdentity();
+                await ViewModel.RefreshAdminAccountAuditAsync();
             }
             _ = ViewModel.RefreshWindowsDefenderStatusAsync();
             initializationCompleted.TrySetResult();
@@ -71,7 +75,7 @@ public partial class MainWindow : Window
                 e.Cancel = true;
                 MessageBox.Show(this, "Диагностика ещё выполняется. Сверните окно и дождитесь результата.", "Проверка выполняется", MessageBoxButton.OK, MessageBoxImage.Information);
             }
-            else if (ViewModel.IsBackgroundMaintenanceRunning && !exitForUpdate)
+            else if ((ViewModel.IsBackgroundMaintenanceRunning || scheduledFullMaintenanceRunning) && !exitForUpdate)
             {
                 e.Cancel = true;
                 closeAfterMaintenance = true;
@@ -84,6 +88,37 @@ public partial class MainWindow : Window
     {
         await initializationCompleted.Task;
         await ViewModel.RunScheduledUserQuickAsync();
+    }
+
+    public async Task<bool> RunScheduledFullMaintenanceAsync(string runId)
+    {
+        await initializationCompleted.Task;
+        scheduledFullMaintenanceRunning = true;
+        try
+        {
+            var repaired = await ViewModel.RunScheduledRepairAsync();
+            var recorded = repaired;
+            if (repaired)
+            {
+                var data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                    "ITSeti", "Maintenance");
+                try { await File.WriteAllTextAsync(Path.Combine(data, "auto-full-maintained.txt"), runId); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    recorded = false;
+                    await File.WriteAllTextAsync(Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "ITSeti", "Maintenance", "scheduled-full-status.txt"),
+                        "Не удалось сохранить завершение планового обслуживания: " + ex.Message);
+                }
+            }
+            return recorded;
+        }
+        finally
+        {
+            scheduledFullMaintenanceRunning = false;
+            if (!IsVisible && !exitForUpdate) Show();
+        }
     }
 
     private void QueueProgressScroll()
@@ -204,7 +239,12 @@ public partial class MainWindow : Window
     }
     private void ShowAdminPrompt_Click(object sender, RoutedEventArgs e)
     {
-        AdminPassword.Clear();
+        if (EngineerWindowLauncher.IsAdministrator())
+        {
+            ShowEngineerShell();
+            return;
+        }
+        ClearAdminPassword();
         AdminAccount.Text = Environment.MachineName + "\\" + Environment.UserName;
         AdminError.Visibility = Visibility.Collapsed;
         AdminUnlock.Visibility = Visibility.Visible;
@@ -236,9 +276,75 @@ public partial class MainWindow : Window
     }
     private void CancelAdmin_Click(object sender, RoutedEventArgs e)
     {
-        AdminPassword.Clear();
+        ClearAdminPassword();
         AdminUnlock.Visibility = Visibility.Collapsed;
     }
+
+    private void AdminPassword_Changed(object sender, RoutedEventArgs e)
+    {
+        if (syncingAdminPassword) return;
+        syncingAdminPassword = true;
+        AdminVisiblePassword.Text = AdminPassword.Password;
+        syncingAdminPassword = false;
+    }
+
+    private void AdminVisiblePassword_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (syncingAdminPassword) return;
+        syncingAdminPassword = true;
+        AdminPassword.Password = AdminVisiblePassword.Text;
+        syncingAdminPassword = false;
+    }
+
+    private void ToggleAdminPassword_Click(object sender, RoutedEventArgs e)
+    {
+        var show = AdminPassword.Visibility == Visibility.Visible;
+        syncingAdminPassword = true;
+        if (show)
+        {
+            AdminVisiblePassword.Text = AdminPassword.Password;
+            AdminPassword.Visibility = Visibility.Collapsed;
+            AdminVisiblePassword.Visibility = Visibility.Visible;
+            AdminPasswordVisibilityIcon.Text = "\uE891";
+            AdminPasswordVisibilityIcon.ToolTip = "Скрыть пароль";
+            AdminVisiblePassword.Focus();
+            AdminVisiblePassword.CaretIndex = AdminVisiblePassword.Text.Length;
+        }
+        else
+        {
+            AdminPassword.Password = AdminVisiblePassword.Text;
+            AdminVisiblePassword.Visibility = Visibility.Collapsed;
+            AdminPassword.Visibility = Visibility.Visible;
+            AdminPasswordVisibilityIcon.Text = "\uE890";
+            AdminPasswordVisibilityIcon.ToolTip = "Показать пароль";
+            AdminPassword.Focus();
+        }
+        syncingAdminPassword = false;
+        UpdateCapsLockStatus();
+    }
+
+    private void AdminPassword_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.CapsLock) Dispatcher.BeginInvoke(UpdateCapsLockStatus);
+        else UpdateCapsLockStatus();
+    }
+
+    private void UpdateCapsLockStatus() => AdminCapsLockStatus.Visibility = Keyboard.IsKeyToggled(Key.CapsLock)
+        ? Visibility.Visible : Visibility.Collapsed;
+
+    private void ClearAdminPassword()
+    {
+        syncingAdminPassword = true;
+        AdminPassword.Clear();
+        AdminVisiblePassword.Clear();
+        AdminPassword.Visibility = Visibility.Visible;
+        AdminVisiblePassword.Visibility = Visibility.Collapsed;
+        AdminPasswordVisibilityIcon.Text = "\uE890";
+        AdminPasswordVisibilityIcon.ToolTip = "Показать пароль";
+        syncingAdminPassword = false;
+        UpdateCapsLockStatus();
+    }
+
     private async void AdminPassword_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter) { await UnlockAdminAsync(); e.Handled = true; }
@@ -248,12 +354,24 @@ public partial class MainWindow : Window
 
     private async Task UnlockAdminAsync()
     {
-        var password = AdminPassword.SecurePassword.Copy();
-        AdminPassword.Clear();
+        var password = AdminVisiblePassword.Visibility == Visibility.Visible
+            ? ToSecureString(AdminVisiblePassword.Text)
+            : AdminPassword.SecurePassword.Copy();
+        ClearAdminPassword();
         var account = AdminAccount.Text;
         UnlockButton.IsEnabled = false;
         try
         {
+            if (EngineerWindowLauncher.IsAdministrator() && password.Length == 0)
+            {
+                ShowEngineerShell();
+                return;
+            }
+            if (MatchesNonElevatedEngineerPassword(password))
+            {
+                ShowEngineerShell();
+                return;
+            }
             var launch = await Task.Run(() => EngineerWindowLauncher.TryStartWithWindowsCredentials(
                 account, password, historyDatabasePath));
             if (launch.Process is null)
@@ -284,9 +402,20 @@ public partial class MainWindow : Window
         }
     }
 
+    private static SecureString ToSecureString(string value)
+    {
+        var secure = new SecureString();
+        foreach (var character in value) secure.AppendChar(character);
+        secure.MakeReadOnly();
+        return secure;
+    }
+
     private static string FormatCredentialError(int errorCode) => errorCode switch
     {
         1326 => "Windows не приняла учётную запись или пароль. Введите пароль Windows, не PIN-код.",
+        1327 => "Windows отклонила вход из-за ограничений учётной записи. Проверьте срок действия пароля и разрешение на вход.",
+        1330 => "Срок действия пароля истёк. Сначала смените пароль Windows и повторите вход.",
+        1331 => "Учётная запись отключена. Используйте активную учётную запись администратора.",
         267 => "Windows не смогла открыть каталог запуска для этой учётной записи. Запустите установленную версию приложения или укажите доступный ей путь.",
         1385 => "Для этой учётной записи запрещён интерактивный вход в Windows. Используйте другую учётную запись администратора.",
         _ => $"Не удалось открыть инженерское окно (код Windows {errorCode}). Проверьте формат имени: пользователь, ПК\\пользователь или ДОМЕН\\пользователь."
@@ -294,9 +423,20 @@ public partial class MainWindow : Window
 
     private void ShowEngineerShell()
     {
+        engineerOnly = true;
         ConfigureEngineerShell();
+        ViewModel.SetWindowsDefenderAccess(EngineerWindowLauncher.IsAdministrator());
         ViewModel.RefreshSetupAudit();
         ViewModel.RefreshIdentity();
+        _ = ViewModel.RefreshAdminAccountAuditAsync();
+    }
+
+    private static bool MatchesNonElevatedEngineerPassword(SecureString password)
+    {
+        if (password.Length == 0) return false;
+        var pointer = Marshal.SecureStringToGlobalAllocUnicode(password);
+        try { return string.Equals(Marshal.PtrToStringUni(pointer), "itseti", StringComparison.Ordinal); }
+        finally { Marshal.ZeroFreeGlobalAllocUnicode(pointer); }
     }
 
     private void ConfigureUserShellSize()

@@ -70,11 +70,16 @@ try {
         if($pawnIoUninstall.DisplayVersion){
             [IO.File]::WriteAllText($pawnIoLog,('PawnIO уже установлен, версия '+$pawnIoUninstall.DisplayVersion+'; существующий драйвер оставлен без изменений.'),[Text.Encoding]::UTF8)
         } else {
-            $pawnIoProcess=Start-Process -FilePath $pawnIoInstaller -ArgumentList @('-install','-silent') -Wait -PassThru -WindowStyle Hidden
-            $installedVersion=(Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO' -ErrorAction SilentlyContinue).DisplayVersion
-            if($installedVersion){$pawnIoMessage='PawnIO '+$installedVersion+' установлен.'}
-            elseif($pawnIoProcess.ExitCode -eq 3010){$pawnIoMessage='PawnIO установлен; требуется перезагрузка Windows.'}
-            else{$pawnIoMessage='PawnIO не установлен (код '+$pawnIoProcess.ExitCode+'); температура CPU останется недоступна.'}
+            $pawnIoProcess=Start-Process -FilePath $pawnIoInstaller -ArgumentList @('-install','-silent') -PassThru -WindowStyle Hidden
+            if(!$pawnIoProcess.WaitForExit(60000)){
+                try {$pawnIoProcess.Kill()} catch {}
+                $pawnIoMessage='Установка PawnIO превысила 60 секунд и была остановлена; приложение установлено, но датчик температуры может быть недоступен.'
+            }else{
+                $installedVersion=(Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO' -ErrorAction SilentlyContinue).DisplayVersion
+                if($installedVersion){$pawnIoMessage='PawnIO '+$installedVersion+' установлен.'}
+                elseif($pawnIoProcess.ExitCode -eq 3010){$pawnIoMessage='PawnIO установлен; требуется перезагрузка Windows.'}
+                else{$pawnIoMessage='PawnIO не установлен (код '+$pawnIoProcess.ExitCode+'); температура CPU останется недоступна.'}
+            }
             [IO.File]::WriteAllText($pawnIoLog,$pawnIoMessage,[Text.Encoding]::UTF8)
         }
     }
@@ -101,13 +106,17 @@ $inventory=Join-Path $data 'inventory.txt'
 if(!(Test-Path -LiteralPath $inventory -PathType Leaf)){[IO.File]::WriteAllText($inventory,'',[Text.Encoding]::ASCII)}
 & icacls.exe $inventory /grant '*S-1-5-32-545:M' | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Could not configure inventory number access.'}
+$autoFullMaintained=Join-Path $data 'auto-full-maintained.txt'
+if(!(Test-Path -LiteralPath $autoFullMaintained -PathType Leaf)){[IO.File]::WriteAllText($autoFullMaintained,'',[Text.Encoding]::ASCII)}
+& icacls.exe $autoFullMaintained /grant '*S-1-5-32-545:M' | Out-Null
+if($LASTEXITCODE -ne 0){throw 'Could not configure scheduled maintenance status access.'}
 $installStage='Регистрация системных задач'
 $taskName='ITSeti-Maintenance-Full'
 $temperatureTaskName='ITSeti-Maintenance-Temperature'
 $worker=Join-Path $install 'Backend\InstalledCheck.ps1'
 try {
     $taskTrigger=New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(20)
-    $quickTrigger=New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(20)
+    $quickTrigger=New-ScheduledTaskTrigger -Daily -DaysInterval 14 -At ([DateTime]::Today.AddHours(3))
     $autoFullTrigger=New-ScheduledTaskTrigger -Daily -DaysInterval 60 -At ([DateTime]::Today.AddHours(4))
     $taskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 3) -MultipleInstances IgnoreNew
     $updateTaskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew

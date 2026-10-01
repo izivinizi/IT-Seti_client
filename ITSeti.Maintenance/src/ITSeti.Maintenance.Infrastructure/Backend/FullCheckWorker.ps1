@@ -10,11 +10,42 @@ $script:CompactOutput=$true
 $script:DiskTestPasses=2
 $script:QuietDiskTools=$true
 $script:ForbidInteractiveDiskTools=$true
-$script:SkipWindowsUpdateChange=[bool]($SkipDiskTests -or $SkipDiskBenchmark)
+$script:SkipWindowsUpdateChange=[bool]($SkipDiskTests -or $SkipDiskBenchmark -or $UserMode)
 $started=[DateTimeOffset]::Now.ToString('o')
 $id=[guid]::NewGuid().ToString()
 $logging=$false
+$script:WindowsUpdateProcess=$null
+$script:WindowsUpdateStartedAt=$null
+$script:DiskBenchmarkReadyFile=Join-Path $RunRoot 'benchmark-ready.signal'
 function Write-Stage([string]$Text){[IO.File]::WriteAllText((Join-Path $RunRoot 'stage.txt'),$Text,[Text.Encoding]::UTF8)}
+function Start-WindowsUpdatePolicyChange {
+    if($script:SkipWindowsUpdateChange -or !$script:Admin){return}
+    $path=Join-Path $RunRoot 'Set-WindowsAutomaticUpdates.ps1'
+    if(!(Test-Path -LiteralPath $path -PathType Leaf)){$script:Snapshot.Notes+=@('Настройка автообновлений пропущена: системный скрипт не найден.');return}
+    try {
+        $script:WindowsUpdateStartedAt=Get-Date
+        $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$path+'" -Action Disable'
+        $script:WindowsUpdateProcess=Start-Process -FilePath (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $arguments -WorkingDirectory $RunRoot -WindowStyle Hidden -PassThru -ErrorAction Stop
+    } catch {$script:Snapshot.Notes+=@('Не удалось запустить изменение политики автообновлений: '+$_.Exception.Message)}
+}
+function Complete-WindowsUpdatePolicyChange {
+    if(!$script:WindowsUpdateProcess){return}
+    try {
+        if(!$script:WindowsUpdateProcess.WaitForExit(30000)){
+            try {$script:WindowsUpdateProcess.Kill()} catch {}
+            $script:Snapshot.Notes+=@('Отключение автообновлений не завершилось за 30 секунд; проверьте права и состояние Windows Update.')
+            return
+        }
+        $statusPath=Join-Path $env:ProgramData 'ITSeti\Maintenance\WindowsUpdate\policy-status.json'
+        if(Test-Path -LiteralPath $statusPath -PathType Leaf){
+            $state=Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $updated=[DateTimeOffset]::MinValue
+            $fresh=[DateTimeOffset]::TryParse([string]$state.UpdatedAt,[ref]$updated) -and $updated.LocalDateTime -ge $script:WindowsUpdateStartedAt.AddSeconds(-2)
+            if($fresh -and $state.Action -eq 'Disable'){$script:Snapshot.Notes+=@([string]$state.Message);return}
+        }
+        $script:Snapshot.Notes+=@('Не получен свежий результат отключения автообновлений (код '+$script:WindowsUpdateProcess.ExitCode+').')
+    } catch {$script:Snapshot.Notes+=@('Не удалось прочитать результат настройки автообновлений: '+$_.Exception.Message)}
+}
 function Section([string]$Text){Write-Stage $Text}
 function Parse-Speed($Value) {
     $number=0.0
@@ -67,7 +98,7 @@ function Save-Result([string]$Name,[switch]$Pending) {
         Full=@{
             CpuName=[string]$s.CPU;GpuName=[string]$s.GPU;MemoryType=[string]$s.MemoryType;CpuTemperatureC=$(if($null -ne $s.CpuTemperatureC){[double]$s.CpuTemperatureC}else{$null});Elevated=[bool]$script:Admin
             PhysicalDisks=@(foreach($d in $s.Disks){@{Model=[string]$d.FriendlyName;MediaType=[string]$d.MediaType;Health=[string]$d.HealthStatus;PowerOnHours=$(if($null -ne $d.PowerOnHours){[long]$d.PowerOnHours}else{$null})}})
-            SmartDisks=@(foreach($d in $s.Smart){@{Model=[string]$d.Model;Status=[string]$d.Status;Letters=[string]$d.Letters;MediaType=[string]$d.MediaType;TransferMode=[string]$d.TransferMode;PowerOnHours=$(if($null -ne $d.PowerOnHours){[long]$d.PowerOnHours}else{$null})}})
+            SmartDisks=@(foreach($d in $s.Smart){@{Model=[string]$d.Model;Status=[string]$d.Status;Letters=[string]$d.Letters;MediaType=[string]$d.MediaType;TransferMode=[string]$d.TransferMode;PowerOnHours=$(if($null -ne $d.PowerOnHours){[long]$d.PowerOnHours}else{$null});SmartWarnings=[string]$d.SmartWarnings}})
             Processes=@(foreach($p in $s.Processes){@{Name=[string]$p.Name;Description=[string]$p.Description;Publisher=$(if($p.Signature -eq 'Valid'){$p.Signer}else{[string]$p.Company+' (из файла)'});Signature=[string]$p.Signature;Path=[string]$p.Path}})
             TopMemoryProcesses=@($script:TopMemoryProcesses)
             ResourceSampling=$script:ResourceSampling
@@ -98,6 +129,15 @@ try {
         try {$script:Sampler=Start-Process powershell.exe -WindowStyle Hidden -WorkingDirectory $RunRoot -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$sampler`" -RunRoot `"$RunRoot`"" -RedirectStandardError (Join-Path $RunRoot 'resource-sampler.err.txt') -PassThru -ErrorAction Stop}
         catch {$script:SamplerFailure=$_.Exception.Message}
     }
+    if($HeadlessDiskSpd -and !$SkipDiskTests -and !$script:DiskFailure) {
+        $diskWorker=Join-Path $RunRoot 'HeadlessDiskWorker.ps1'
+        try {
+            $diskArguments='-NoProfile -ExecutionPolicy Bypass -File "'+$diskWorker+'" -ScriptRoot "'+$RunRoot+'" -ToolsRoot "'+$ToolsRoot+'"'
+            if($SkipDiskBenchmark){$diskArguments+=' -SkipBenchmark'}
+            $script:DiskWorker=Start-Process powershell.exe -WindowStyle Hidden -WorkingDirectory $RunRoot -ArgumentList $diskArguments -PassThru -ErrorAction Stop
+            $script:DiskWorkerStarted=Get-Date
+        } catch {$script:DiskFailure='Запуск SMART/DiskSpd: '+$_.Exception.Message}
+    }
     function Show-InitialSection([int]$Number) {
         switch($Number){
             1 {
@@ -119,7 +159,7 @@ try {
     if(!$script:Snapshot.CpuTemperatureStatus) {$script:Snapshot.CpuTemperatureStatus=if($null -ne $script:Snapshot.CpuTemperatureC){'Температура получена из Windows/WMI'}else{'Источник температуры не вернул данных'}}
     if($script:SamplerFailure){$script:Snapshot.Notes+=@('Замер нагрузки: '+$script:SamplerFailure)}
     if($LimitedMode){$script:Snapshot.Notes+=@('Ограниченный режим: повышение прав недоступно. Часть процессов и событий может быть недоступна; SMART и тест скорости пропущены.')}
-    if($UserMode){$script:Snapshot.Notes+=@('Проверка выполнена от текущего пользователя; защищённые системные сведения могут быть недоступны.')}
+    if($UserMode -and !$script:Admin){$script:Snapshot.Notes+=@('Проверка выполнена от текущего пользователя; защищённые системные сведения могут быть недоступны.')}
     try {$script:TopMemoryProcesses=@(Get-TopMemoryProcesses)} catch {$script:Snapshot.Notes+=@('Топ процессов по ОЗУ: '+$_.Exception.Message)}
     Save-Result 'partial.json' -Pending
     if($script:Sampler) {
@@ -140,36 +180,20 @@ try {
             } catch {$script:Snapshot.Notes+=@('Замер нагрузки: '+$_.Exception.Message)}
         }
     }
-    if($HeadlessDiskSpd -and !$SkipDiskTests -and !$script:DiskFailure) {
-        $diskWorker=Join-Path $RunRoot 'HeadlessDiskWorker.ps1'
-        try {
-            $diskArguments="-NoProfile -ExecutionPolicy Bypass -File `"$diskWorker`" -ScriptRoot `"$RunRoot`" -ToolsRoot `"$ToolsRoot`""
-            if($SkipDiskBenchmark){$diskArguments+=' -SkipBenchmark'}
-            $script:DiskWorker=Start-Process powershell.exe -WindowStyle Hidden -WorkingDirectory $RunRoot -ArgumentList $diskArguments -PassThru -ErrorAction Stop
-            $script:DiskWorkerStarted=Get-Date
-        } catch {$script:DiskFailure='Запуск DiskSpd: '+$_.Exception.Message}
-    }
+    [IO.File]::WriteAllText($script:DiskBenchmarkReadyFile,'ready',[Text.Encoding]::ASCII)
     if($script:DiskWorker){
         try {Complete-DiskToolsBackground} catch {$script:DiskFailure=$_.Exception.Message}
     }
+    Complete-WindowsUpdatePolicyChange
     Save-Result 'result.json'
     Write-Stage 'Полная диагностика завершена'
-    if($StartRepair -and $script:Admin -and !$SkipDiskTests -and !$LimitedMode) {
-        $repair=Join-Path $RunRoot 'repair'
-        try {
-            New-Item -ItemType Directory -Path $repair -Force | Out-Null
-            foreach($file in @('Repair.ps1','RepairWorker.ps1')){Copy-Item -LiteralPath (Join-Path $RunRoot $file) -Destination $repair -Force}
-            $repairWorker=Join-Path $repair 'RepairWorker.ps1'
-            Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$repairWorker`" -JobRoot `"$repair`"" -ErrorAction Stop | Out-Null
-            [IO.File]::WriteAllText((Join-Path $repair 'started.txt'),[DateTimeOffset]::Now.ToString('o'),[Text.Encoding]::UTF8)
-        } catch {
-            [IO.File]::WriteAllText((Join-Path $repair 'status.txt'),('Запуск восстановления: '+$_.Exception.Message),[Text.Encoding]::UTF8)
-        }
-    }
 } catch {
     [IO.File]::WriteAllText((Join-Path $RunRoot 'error.txt'),$_.Exception.Message,[Text.Encoding]::UTF8)
     Write-Stage ('Ошибка: '+$_.Exception.Message)
 } finally {
+    if($script:DiskWorker -and !$script:DiskWorker.HasExited -and !(Test-Path -LiteralPath $script:DiskBenchmarkReadyFile)){
+        try {$script:DiskWorker.Kill()} catch {}
+    }
     if($script:Sampler) {
         try {$script:Sampler.Refresh();if(!$script:Sampler.HasExited){$script:Sampler.Kill();[void]$script:Sampler.WaitForExit(5000)}} catch {}
     }

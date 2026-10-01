@@ -45,9 +45,9 @@ public static class OrganizationSetupRunner
                 problems.Add($"{bundled.FileName}: неверный хеш или подпись установщика.");
             return problems;
         }
+        if (component is not null && !Packages.ContainsKey(component)) return ["Неизвестный компонент установки."];
         var bundledDirectory = OrganizationSoftwareAudit.FindBundledDirectory();
         if (string.IsNullOrWhiteSpace(bundledDirectory)) return ["Встроенный комплект ПО ИТ-Сети не найден."];
-        if (component is not null && !Packages.ContainsKey(component)) return ["Неизвестный компонент установки."];
         var selectedPackages = component is null ? Packages : Packages.Where(item => item.Key == component)
             .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
         foreach (var (key, package) in selectedPackages)
@@ -215,8 +215,6 @@ public static class OrganizationSetupRunner
                 {
                     UseShellExecute = false,
                     CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
                     ArgumentList = { "/Run", "/TN", InstallTask }
                 }
             };
@@ -225,11 +223,9 @@ public static class OrganizationSetupRunner
             {
                 throw new InvalidOperationException("Не удалось запустить установленную системную задачу.", ex);
             }
-            var output = task.StandardOutput.ReadToEndAsync();
-            var errors = task.StandardError.ReadToEndAsync();
             await task.WaitForExitAsync();
             if (task.ExitCode != 0)
-                throw new InvalidOperationException($"Не удалось запустить системную установку: {(await errors).Trim()} {(await output).Trim()}");
+                throw new InvalidOperationException($"Не удалось запустить системную установку (код {task.ExitCode}). Проверьте регистрацию задачи ITSeti-Maintenance-OrganizationSetup.");
 
             progress?.Report("Системная установка запущена. Проверяем подписанные пакеты…");
             var deadline = DateTime.UtcNow.AddMinutes(90);

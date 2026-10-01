@@ -70,13 +70,13 @@
        <TextBlock Text="{Binding UserDiskHealth}" Foreground="#354A5E" FontSize="16" Margin="0,0,0,20" TextWrapping="Wrap"/>
        <Border BorderBrush="#E6EDF2" BorderThickness="0,1,0,0" Padding="0,16,0,0">
         <StackPanel><TextBlock Text="{Binding UserIssueHeading}" FontSize="20" FontWeight="SemiBold" Foreground="#143C87"/><TextBlock Text="{Binding UserIssueDetail}" Foreground="#354A5E" FontSize="16" Margin="0,5,0,12"/>
+         <StackPanel Orientation="Horizontal" Margin="0,0,0,10" Visibility="{Binding HasLowDiskSpace, Converter={StaticResource BoolVisibility}}">
+          <Button Click="RunCleanup_Click" IsEnabled="{Binding CanRunCleanup}" Content="Очистить" Padding="9,6" Margin="0,0,8,0" ToolTip="Удалить временные файлы и очистить корзину"/>
+          <Button Click="OpenLowSpaceScan_Click" IsEnabled="{Binding CanRun}" Content="Что занимает место" Padding="9,6" ToolTip="Просканировать диск в TreeSize Free с административными правами"/>
+         </StackPanel>
          <ItemsControl ItemsSource="{Binding UserVisibleIssues}"><ItemsControl.ItemTemplate><DataTemplate><Border BorderBrush="#E6EDF2" BorderThickness="0,0,0,1" Padding="0,9"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="4"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Border Background="{Binding Accent}" CornerRadius="2"/><StackPanel Grid.Column="2"><TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold" Foreground="#203A50" TextWrapping="Wrap"/><TextBlock Text="{Binding Detail}" FontSize="16" Foreground="#30475A" TextWrapping="Wrap" Margin="0,4,0,0"/></StackPanel></Grid></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
          <Button x:Name="MoreIssuesButton" Content="{Binding MoreUserIssuesLabel}" Visibility="{Binding HasMoreUserIssues, Converter={StaticResource BoolVisibility}}" Click="ShowAllIssues_Click" HorizontalAlignment="Left" Background="Transparent" BorderThickness="0" Padding="0,8,0,0" Cursor="Hand"/>
          <TextBlock Text="{Binding UserCoverage}" Foreground="#354A5E" FontSize="16" TextWrapping="Wrap" Margin="0,12,0,0"/>
-         <StackPanel Orientation="Horizontal" Margin="0,12,0,0" Visibility="{Binding HasLowDiskSpace, Converter={StaticResource BoolVisibility}}">
-          <Button Click="RunCleanup_Click" IsEnabled="{Binding CanRunCleanup}" Content="Очистить" Padding="9,6" Margin="0,0,8,0" ToolTip="Удалить временные файлы и очистить корзину"/>
-          <Button Click="OpenLowSpaceScan_Click" IsEnabled="{Binding CanRun}" Content="{Binding LowSpaceActionLabel}" Padding="9,6" ToolTip="Просканировать выбранный диск в TreeSize Free с административными правами"/>
-         </StackPanel>
         </StackPanel>
        </Border>
       </StackPanel>
@@ -148,11 +148,12 @@
        </Border>
         <TextBlock Text="Системный диск" Style="{StaticResource SectionHeading}" Margin="0,0,0,6"/>
          <TextBlock Text="{Binding SystemDiskSummary}" Foreground="#30475A" TextWrapping="Wrap" Margin="0,0,0,4"/>
-         <TextBlock Text="{Binding SystemDiskSpeedSummary}" Foreground="{Binding DiskStatusBrush}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+         <TextBlock Text="{Binding SystemDiskSpeedSummary}" Foreground="{Binding BenchmarkReadBrush}" TextWrapping="Wrap" Margin="0,0,0,8"/>
        <Border BorderBrush="#DDE6EB" BorderThickness="0,1,0,0" Margin="0,20,0,0" Padding="0,16,0,0">
         <StackPanel>
          <TextBlock Text="Что требует внимания" Style="{StaticResource SectionHeading}"/>
          <TextBlock Text="{Binding OverviewStatus}" Foreground="#30475A" Margin="0,8,0,4"/>
+         <TextBlock Text="{Binding AdminAccountAuditStatus}" Foreground="#30475A" TextWrapping="Wrap" Margin="0,0,0,4"/>
          <ItemsControl ItemsSource="{Binding OverviewIssues}"><ItemsControl.ItemTemplate><DataTemplate>
           <Border BorderBrush="#E6EDF2" BorderThickness="0,0,0,1" Padding="0,10"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="4"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Border Background="{Binding Accent}" CornerRadius="2"/><StackPanel Grid.Column="2"><TextBlock Text="{Binding Title}" FontWeight="SemiBold" Foreground="#203A50" TextWrapping="Wrap"/><TextBlock Text="{Binding Detail}" Foreground="#30475A" TextWrapping="Wrap" Margin="0,4,0,0"/></StackPanel></Grid></Border>
          </DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
@@ -383,7 +384,13 @@
      <TextBlock Text="Учётная запись Windows" Foreground="#354A5E" Margin="0,0,0,5"/>
      <ComboBox x:Name="AdminAccount" IsEditable="True" StaysOpenOnEdit="True" IsTextSearchEnabled="False" Height="38" Padding="10,7" FontSize="15" ToolTip="Выберите учётную запись или введите имя, ПК\пользователь, ДОМЕН\пользователь либо user@domain"/>
      <TextBlock Text="Пароль" Foreground="#354A5E" Margin="0,12,0,5"/>
-     <PasswordBox x:Name="AdminPassword" Height="38" Padding="10,7" FontSize="16" KeyDown="AdminPassword_KeyDown"/>
+     <Grid Height="38">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
+      <PasswordBox x:Name="AdminPassword" Height="38" Padding="10,7" FontSize="16" KeyDown="AdminPassword_KeyDown" PasswordChanged="AdminPassword_Changed" PreviewKeyDown="AdminPassword_PreviewKeyDown"/>
+      <TextBox x:Name="AdminVisiblePassword" Grid.Column="0" Height="38" Padding="10,7" FontSize="16" Visibility="Collapsed" KeyDown="AdminPassword_KeyDown" TextChanged="AdminVisiblePassword_Changed" PreviewKeyDown="AdminPassword_PreviewKeyDown"/>
+      <Button Grid.Column="1" Click="ToggleAdminPassword_Click" Padding="4,2" Margin="3,0,0,0" ToolTip="Показать пароль"><TextBlock x:Name="AdminPasswordVisibilityIcon" Text="&#xE890;" FontFamily="Segoe MDL2 Assets"/></Button>
+     </Grid>
+     <TextBlock x:Name="AdminCapsLockStatus" Text="Caps Lock включён" Foreground="#B7791F" Margin="0,5,0,0" Visibility="Collapsed"/>
      <TextBlock x:Name="AdminError" Foreground="#C64D4D" Margin="0,8,0,0" Visibility="Collapsed" TextWrapping="Wrap"/>
      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,22,0,0">
       <Button Click="CancelAdmin_Click" Content="Отмена" Padding="14,8" Margin="0,0,8,0"/>

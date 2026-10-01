@@ -3,46 +3,90 @@ using System.Security.Principal;
 
 namespace ITSeti.Maintenance.App;
 
+internal sealed record AdminAccountAudit(string Status, IReadOnlyList<string> UnexpectedAccounts);
+
 internal static class WindowsAdminAccountDiscovery
 {
     private const int ErrorMoreData = 234;
 
-    public static IReadOnlyList<string> FindCandidates()
+    public static IReadOnlyList<string> FindCandidates() => ReadMembers()
+        .Members.Where(member => member.SidUsage == 1 && !string.IsNullOrWhiteSpace(member.Name))
+        .Select(member => member.Name)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(AccountPriority)
+        .ThenBy(name => name, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    public static AdminAccountAudit InspectAdministrators()
     {
-        if (!OperatingSystem.IsWindows()) return [];
+        var result = ReadMembers();
+        if (result.Status != 0)
+            return new($"Не удалось проверить состав локальной группы администраторов (код {result.Status}).", []);
+
+        var unexpected = result.Members
+            .Where(member => member.SidUsage is 1 or 2 && !IsDesignatedLocalAdmin(member.Name))
+            .Select(member => member.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return new(unexpected.Length == 0
+            ? "Локальная группа администраторов проверена; посторонних записей не найдено."
+            : "Обнаружены учётные записи или группы вне списка Admin / it-seti.", unexpected);
+    }
+
+    public static bool IsCurrentAccountUnexpectedAdministrator()
+    {
+        try
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            if (IsDesignatedLocalAdmin(identity.Name)) return false;
+            var administratorsSid = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+            var principal = new WindowsPrincipal(identity);
+            return principal.IsInRole(administratorsSid) || identity.Groups?.Contains(administratorsSid) == true;
+        }
+        catch { return false; }
+    }
+
+    private static bool IsDesignatedLocalAdmin(string account)
+    {
+        var separator = account.LastIndexOf('\\');
+        if (separator < 0 || !account[..separator].Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase)) return false;
+        var name = account[(separator + 1)..];
+        return name.Equals("Admin", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("it-seti", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static (int Status, List<Member> Members) ReadMembers()
+    {
+        var members = new List<Member>();
+        if (!OperatingSystem.IsWindows()) return (50, members);
         try
         {
             var group = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null)
                 .Translate(typeof(NTAccount)).Value.Split('\\').Last();
-            var localMachine = Environment.MachineName;
-            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var resume = 0;
-            int status;
+            var status = 0;
             do
             {
                 status = NetLocalGroupGetMembers(null, group, 2, out var buffer, -1,
                     out var entries, out _, ref resume);
                 try
                 {
-                    if (status != 0 && status != ErrorMoreData) break;
+                    if (status != 0 && status != ErrorMoreData) return (status, members);
                     var size = Marshal.SizeOf<LocalGroupMemberInfo2>();
                     for (var i = 0; i < entries; i++)
                     {
                         var item = Marshal.PtrToStructure<LocalGroupMemberInfo2>(buffer + i * size);
-                        if (item.SidUsage != 1) continue;
-                        var account = Marshal.PtrToStringUni(item.DomainAndName);
-                        if (account is not null && account.StartsWith(localMachine + "\\", StringComparison.OrdinalIgnoreCase))
-                            names.Add(account);
+                        var name = Marshal.PtrToStringUni(item.DomainAndName);
+                        if (!string.IsNullOrWhiteSpace(name)) members.Add(new(name, item.SidUsage));
                     }
                 }
                 finally { if (buffer != IntPtr.Zero) NetApiBufferFree(buffer); }
             } while (status == ErrorMoreData);
-            return names.OrderBy(AccountPriority).ThenBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
+            return (status, members);
         }
-        catch
-        {
-            return [];
-        }
+        catch { return (1, members); }
     }
 
     private static int AccountPriority(string account)
@@ -53,6 +97,8 @@ internal static class WindowsAdminAccountDiscovery
         if (name.Equals("user", StringComparison.OrdinalIgnoreCase)) return 2;
         return 3;
     }
+
+    private sealed record Member(string Name, int SidUsage);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct LocalGroupMemberInfo2

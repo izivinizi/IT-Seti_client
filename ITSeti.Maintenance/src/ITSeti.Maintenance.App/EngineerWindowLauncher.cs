@@ -133,7 +133,8 @@ internal static class EngineerWindowLauncher
             var domain = account[..slash].Trim();
             if (userName.Length == 0 || domain.Length == 0)
                 throw new ArgumentException("Введите учётную запись в формате ПК\\пользователь или ДОМЕН\\пользователь.", nameof(value));
-            if (domain == ".") domain = Environment.MachineName;
+            if (domain == "." || string.Equals(domain, Environment.MachineName, StringComparison.OrdinalIgnoreCase))
+                domain = Environment.MachineName;
             return [(userName, domain)];
         }
 

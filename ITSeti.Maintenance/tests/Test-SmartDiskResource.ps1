@@ -7,8 +7,10 @@ $errors = $null
 $summaryText = [IO.File]::ReadAllText($summaryPath, [Text.Encoding]::UTF8)
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($summaryText, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw "Summary.ps1 parse errors: $($errors -join '; ')" }
+$attributeFunction = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-SmartAttributeWarnings' }, $true)
 $function = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'ConvertFrom-CdiReport' }, $true)
-if (!$function) { throw 'ConvertFrom-CdiReport was not found.' }
+if (!$attributeFunction -or !$function) { throw 'SMART attribute parsing helpers were not found.' }
+. ([scriptblock]::Create($attributeFunction.Extent.Text))
 . ([scriptblock]::Create($function.Extent.Text))
 
 $hourReport = @'
@@ -22,6 +24,19 @@ Power On Hours : 60,001 hours
 '@
 $hourDisk = @(ConvertFrom-CdiReport $hourReport)
 if ($hourDisk.Count -ne 1 -or $hourDisk[0].PowerOnHours -ne 60001) { throw 'Power On Hours was not parsed as hours.' }
+
+$smartReport = @'
+Model : Test HDD
+Health Status : Caution
+Drive Letter : D:
+Rotation Rate : 7200 RPM
+  5 Reallocated Sectors Count 0x0033 100 100 010 Pre-fail Always - 2
+197 Current Pending Sector Count 0x0032 100 100 000 Old_age Always - 0
+'@
+$smartDisk = @(ConvertFrom-CdiReport $smartReport)
+if ($smartDisk.Count -ne 1 -or $smartDisk[0].SmartWarnings -ne 'переназначенные сектора: 2') {
+    throw "SMART detail must use the raw attribute value, not normalized VALUE/WORST columns: $($smartDisk[0].SmartWarnings)"
+}
 
 $localizedLabel = -join @([char]0x0427,[char]0x0430,[char]0x0441,[char]0x044B,' ',[char]0x0440,[char]0x0430,[char]0x0431,[char]0x043E,[char]0x0442,[char]0x044B)
 $localizedDays = -join @([char]0x0434,[char]0x043D,[char]0x0435,[char]0x0439)

@@ -126,7 +126,9 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
             try { return await AddCpuTemperatureAsync(await RunInstalledAsync(progress, installedTask)); }
             catch (InstalledTaskUnavailableException ex)
             {
-                progress.Report(new($"Задача Windows недоступна ({ex.Message}). Проверка от текущей учётной записи"));
+                progress.Report(new(ElevatedProcessLauncher.IsCurrentProcessElevated
+                    ? $"Задача Windows недоступна ({ex.Message}). Продолжаю проверку с правами администратора текущего окна."
+                    : $"Задача Windows недоступна ({ex.Message}). Продолжаю проверку с правами текущей учётной записи."));
             }
         }
         var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ITSeti", "Maintenance", "Runs", Guid.NewGuid().ToString("N"));
@@ -137,7 +139,7 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         var worker = Path.Combine(root, "FullCheckWorker.ps1");
         var info = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
         {
-            UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden,
+            UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden,
             WorkingDirectory = root
         };
         info.ArgumentList.Add("-NoProfile");
@@ -156,9 +158,14 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
             info.ArgumentList.Add("-SkipResourceSampling");
             info.ArgumentList.Add("-SkipDiskBenchmark");
         }
+        var currentElevated = ElevatedProcessLauncher.IsCurrentProcessElevated;
         progress.Report(new(userMode
-            ? "Проверка запущена с правами текущего пользователя; SMART может быть недоступен"
-            : "Проверка запущена без повышения прав; доступны только разрешённые текущей учётной записи данные"));
+            ? currentElevated
+                ? "Проверка запущена с правами администратора текущего окна; сбор выполняется без очистки"
+                : "Проверка запущена с правами текущего пользователя; SMART может быть недоступен"
+            : currentElevated
+                ? "Проверка запущена с правами администратора текущего окна"
+                : "Проверка запущена от текущей учётной записи; защищённые сведения могут быть недоступны"));
         var process = Process.Start(info) ?? throw new InvalidOperationException("Не удалось запустить проверку");
         using (process)
         {
@@ -288,7 +295,7 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         var standard = launch.StandardOutput.ReadToEndAsync();
         var errors = launch.StandardError.ReadToEndAsync();
         await launch.WaitForExitAsync();
-        if (launch.ExitCode != 0) throw new InstalledTaskUnavailableException($"Код {launch.ExitCode}: {(await errors).Trim()} {(await standard).Trim()}");
+        if (launch.ExitCode != 0) throw new InstalledTaskUnavailableException($"Код {launch.ExitCode}");
 
         var deadline = DateTime.UtcNow.AddSeconds(20);
         string? root = null;

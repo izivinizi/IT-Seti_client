@@ -37,7 +37,7 @@ internal sealed class ScheduledCheckPrompt : Window
         });
         content.Children.Add(new TextBlock
         {
-            Text = "Проверить состояние компьютера сейчас? Проверка не должна помешать вашей работе.",
+            Text = "Плановое восстановление Windows (DISM и SFC) может занять время. Работу можно продолжать; компьютер не будет перезагружен автоматически.",
             FontSize = 16,
             Foreground = new SolidColorBrush(Color.FromRgb(82, 106, 124)),
             TextWrapping = TextWrapping.Wrap,

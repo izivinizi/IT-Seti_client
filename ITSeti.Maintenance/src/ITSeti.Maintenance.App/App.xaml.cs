@@ -1,9 +1,7 @@
 using System.Windows;
 using System.ComponentModel;
-using System.IO;
 using System.Diagnostics;
-using System.Globalization;
-using System.Security.Principal;
+using System.IO;
 using System.Text.Json;
 using ITSeti.Maintenance.Core;
 using ITSeti.Maintenance.Infrastructure;
@@ -94,31 +92,37 @@ public partial class App : Application
             if (!mutex.WaitOne(0)) { Shutdown(); return; }
             try
             {
-                var reminderTask = e.Args.Contains("--reminder-task", StringComparer.OrdinalIgnoreCase);
-                if (reminderTask) DeleteScheduledReminder();
-                if (!IsScheduledCheckDue(data))
+                var pendingFull = GetPendingAutoFullMaintenance();
+                if (pendingFull is not null)
                 {
-                    Shutdown();
-                    return;
-                }
+                    var reminderPath = Path.Combine(data, "full-maintenance-remind-after.txt");
+                    try
+                    {
+                        if (DateTimeOffset.TryParse(await File.ReadAllTextAsync(reminderPath), out var remindAfter)
+                            && remindAfter > DateTimeOffset.UtcNow)
+                        {
+                            Shutdown();
+                            return;
+                        }
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
 
-                if (new ScheduledCheckPrompt().ShowDialog() == true)
-                {
-                    var snoozePath = Path.Combine(data, "scheduled-reminder-snooze.txt");
-                    try { File.Delete(snoozePath); } catch (IOException) { }
-                    var window = new MainWindow();
-                    MainWindow = window;
+                    if (new ScheduledCheckPrompt().ShowDialog() != true)
+                    {
+                        await File.WriteAllTextAsync(reminderPath, DateTimeOffset.UtcNow.AddDays(1).ToString("O"));
+                        Shutdown();
+                        return;
+                    }
+                    try { File.Delete(reminderPath); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+
+                    var maintenanceWindow = new MainWindow();
+                    MainWindow = maintenanceWindow;
                     ShutdownMode = ShutdownMode.OnMainWindowClose;
-                    window.Show();
-                    await window.RunScheduledQuickCheckAsync();
+                    maintenanceWindow.Show();
+                    await maintenanceWindow.RunScheduledFullMaintenanceAsync(pendingFull);
                     return;
                 }
-
-                var until = DateTimeOffset.UtcNow.AddDays(1);
-                await File.WriteAllTextAsync(Path.Combine(data, "scheduled-reminder-snooze.txt"), until.ToString("O"));
-                if (!ScheduleReminder(until))
-                    MessageBox.Show("Напоминание отложено на сутки. Если компьютер будет выключен в это время, оно появится при следующем входе в Windows.",
-                        "Плановая проверка", MessageBoxButton.OK, MessageBoxImage.Information);
                 Shutdown();
             }
             catch (Exception ex)
@@ -175,94 +179,17 @@ public partial class App : Application
         }
     }
 
-    private static bool IsScheduledCheckDue(string userData, string? systemDataOverride = null, DateTimeOffset? utcNow = null)
+    private static string? GetPendingAutoFullMaintenance(string? systemDataOverride = null)
     {
-        var systemData = systemDataOverride ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance");
-        var now = utcNow ?? DateTimeOffset.UtcNow;
-        var lastPath = Path.Combine(systemData, "last-quick-run.txt");
-        var lastRun = File.Exists(lastPath) && DateTimeOffset.TryParse(File.ReadAllText(lastPath), CultureInfo.InvariantCulture,
-            DateTimeStyles.None, out var recordedRun) ? recordedRun : DateTimeOffset.MinValue;
-        var runsRoot = Path.Combine(systemData, "Runs") + Path.DirectorySeparatorChar;
-        foreach (var pointer in new[] { "latest-full.txt", "latest-auto-full.txt" })
-        {
-            var pointerPath = Path.Combine(systemData, pointer);
-            if (!File.Exists(pointerPath)) continue;
-            try
-            {
-                var run = Path.GetFullPath(File.ReadAllText(pointerPath).Trim());
-                if (!run.StartsWith(runsRoot, StringComparison.OrdinalIgnoreCase)) continue;
-                var result = Path.Combine(run, "result.json");
-                if (File.Exists(result))
-                {
-                    var completed = new DateTimeOffset(File.GetLastWriteTimeUtc(result), TimeSpan.Zero);
-                    if (completed > lastRun) lastRun = completed;
-                }
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
-        }
-        if (now - lastRun < TimeSpan.FromDays(14))
-            return false;
-
-        var snoozePath = Path.Combine(userData, "scheduled-reminder-snooze.txt");
-        return !File.Exists(snoozePath) || !DateTimeOffset.TryParse(File.ReadAllText(snoozePath), CultureInfo.InvariantCulture,
-            DateTimeStyles.None, out var snoozedUntil) || now >= snoozedUntil;
+        var data = systemDataOverride ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance");
+        var pending = Path.Combine(data, "pending-auto-full-maintenance.txt");
+        if (!File.Exists(pending)) return null;
+        var runId = File.ReadAllText(pending).Trim();
+        if (!Guid.TryParseExact(runId, "N", out _)) return null;
+        var completed = Path.Combine(data, "auto-full-maintained.txt");
+        if (File.Exists(completed) && string.Equals(File.ReadAllText(completed).Trim(), runId, StringComparison.OrdinalIgnoreCase))
+            return null;
+        return File.Exists(Path.Combine(data, "Runs", runId, "result.json")) ? runId : null;
     }
 
-    private static string ReminderTaskName
-    {
-        get
-        {
-            using var identity = WindowsIdentity.GetCurrent();
-            var sid = identity.User?.Value?.Replace("-", "", StringComparison.Ordinal) ?? Environment.UserName;
-            return "ITSeti-Maintenance-Reminder-" + sid;
-        }
-    }
-
-    private static bool ScheduleReminder(DateTimeOffset due)
-    {
-        var executable = Environment.ProcessPath;
-        if (string.IsNullOrWhiteSpace(executable)) return false;
-        try
-        {
-            using var process = Process.Start(new ProcessStartInfo("schtasks.exe")
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                ArgumentList =
-                {
-                    "/Create", "/TN", ReminderTaskName, "/SC", "ONCE",
-                    "/SD", due.LocalDateTime.ToString("d", CultureInfo.CurrentCulture),
-                    "/ST", due.LocalDateTime.ToString("HH:mm", CultureInfo.InvariantCulture),
-                    "/TR", $"\"{executable}\" --scheduled-quick --reminder-task", "/F", "/IT"
-                }
-            });
-            if (process is null || !process.WaitForExit(10000))
-            {
-                try { process?.Kill(); } catch (InvalidOperationException) { }
-                return false;
-            }
-            return process.ExitCode == 0;
-        }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
-    }
-
-    private static void DeleteScheduledReminder()
-    {
-        try
-        {
-            using var process = Process.Start(new ProcessStartInfo("schtasks.exe")
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                ArgumentList = { "/Delete", "/TN", ReminderTaskName, "/F" }
-            });
-            if (process is not null && !process.WaitForExit(5000)) process.Kill();
-        }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException) { }
-    }
 }

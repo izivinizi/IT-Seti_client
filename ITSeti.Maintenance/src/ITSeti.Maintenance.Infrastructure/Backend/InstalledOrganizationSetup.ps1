@@ -85,15 +85,6 @@ try {
         Move-Item -LiteralPath $temporary -Destination $result -Force
         return
     }
-    if(!$source -or !(Test-Path -LiteralPath (Join-Path $source 'system\packages\AnyDesk-installer.exe') -PathType Leaf)){
-        throw 'Встроенный комплект ПО ИТ-Сети не найден в папке приложения.'
-    }
-    Remove-Item -LiteralPath $request.FullName -Force
-    $sourcePackages=Join-Path $source 'system\packages'
-    $stagedRoot=Join-Path $run 'ITSETI-Setup'
-    $stagedSystem=Join-Path $stagedRoot 'system'
-    $stagedPackages=Join-Path $stagedSystem 'packages'
-    New-Item -ItemType Directory -Path $stagedPackages -Force | Out-Null
     $packageMap=@{
         AnyDesk='AnyDesk-installer.exe'
         RMS='Host-IT-SETI.RMS.7.7.3.0v3.msi'
@@ -101,11 +92,29 @@ try {
         Panel='DesktopInfo3230.exe'
     }
     $packages=if($component){@($packageMap[$component])}else{@($packageMap.Values)}
+    if(!$source -or !(Test-Path -LiteralPath $source -PathType Container)){
+        throw 'Встроенный каталог ПО ИТ-Сети не найден в папке приложения.'
+    }
+    $sourcePackages=Join-Path $source 'system\packages'
+    foreach($name in $packages){
+        if(!(Test-Path -LiteralPath (Join-Path $sourcePackages $name) -PathType Leaf)){throw "Не найден выбранный пакет: $name"}
+    }
+    $panelFiles=@('DesktopInfo.ini','update-support-ids.ps1','start-panel.vbs')
+    if(!$component -or $component -eq 'Panel'){
+        foreach($name in $panelFiles){
+            if(!(Test-Path -LiteralPath (Join-Path $source ('system\panel\'+$name)) -PathType Leaf)){throw "Не найден файл панели: $name"}
+        }
+    }
+    Remove-Item -LiteralPath $request.FullName -Force
+    $stagedRoot=Join-Path $run 'ITSETI-Setup'
+    $stagedSystem=Join-Path $stagedRoot 'system'
+    $stagedPackages=Join-Path $stagedSystem 'packages'
+    New-Item -ItemType Directory -Path $stagedPackages -Force | Out-Null
     foreach($name in $packages){Copy-Item -LiteralPath (Join-Path $sourcePackages $name) -Destination (Join-Path $stagedPackages $name) -Force}
     if(!$component -or $component -eq 'Panel'){
         $stagedPanel=Join-Path $stagedSystem 'panel'
         New-Item -ItemType Directory -Path $stagedPanel -Force | Out-Null
-        foreach($name in @('DesktopInfo.ini','update-support-ids.ps1','start-panel.vbs')){
+        foreach($name in $panelFiles){
             Copy-Item -LiteralPath (Join-Path $source ('system\panel\'+$name)) -Destination (Join-Path $stagedPanel $name) -Force
         }
     }

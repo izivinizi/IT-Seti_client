@@ -13,7 +13,12 @@ try {
     $cpuHigh=0;$memoryHigh=0;$lowAvailable=0;$pagingHigh=0
     $readTicks=0.0;$writeTicks=0.0;$readOps=0.0;$writeOps=0.0
     $previousDisk=$null;$diskFrequency=0.0
+    $sampleClock=[Diagnostics.Stopwatch]::StartNew()
     for($index=0;$index -lt $sampleCount;$index++) {
+        if($index -gt 0) {
+            $waitMilliseconds=($index*$Interval*1000)-[int]$sampleClock.ElapsedMilliseconds
+            if($waitMilliseconds -gt 0){Start-Sleep -Milliseconds $waitMilliseconds}
+        }
         $memory=Get-WmiObject Win32_PerfFormattedData_PerfOS_Memory -ErrorAction Stop
         $disk=Get-WmiObject Win32_PerfRawData_PerfDisk_LogicalDisk -Filter "Name='$env:SystemDrive'" -ErrorAction SilentlyContinue
         $cpuPercent=[double](Get-CpuLoadPercent)
@@ -57,7 +62,6 @@ try {
         $progressPath=Join-Path $RunRoot 'resource-sample-progress.json'
         $progressResult | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $pending -Encoding UTF8
         Move-Item -LiteralPath $pending -Destination $progressPath -Force
-        if($index -lt $sampleCount-1){Start-Sleep -Seconds $Interval}
     }
     $result=@{
         Samples=$sampleCount;CpuHighSamples=$cpuHigh;MemoryHighSamples=$memoryHigh

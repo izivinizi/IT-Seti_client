@@ -65,7 +65,10 @@ public sealed record DiagnosticSnapshot(
 }
 
 public sealed record PhysicalDiskDetails(string Model, string MediaType, string Health, long? PowerOnHours = null);
-public sealed record SmartDiskDetails(string Model, string Status, string Letters, string MediaType, string TransferMode, long? PowerOnHours = null);
+public sealed record SmartDiskDetails(string Model, string Status, string Letters, string MediaType, string TransferMode, long? PowerOnHours = null)
+{
+    public string SmartWarnings { get; init; } = "";
+}
 public static class DiskLifetime
 {
     public const long WarningThresholdHours = 60_000;

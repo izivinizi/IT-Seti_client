@@ -183,11 +183,18 @@ if($bootstrap -match 'LoadUserProfile' -or !$bootstrap.Contains('NativeErrorCode
 if($install -notmatch 'ITSeti-Maintenance-Quick' -or $install -notmatch 'CurrentVersion\\Run') {throw 'Quick-check startup is missing.'}
 $entry=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCheck.ps1'),[Text.Encoding]::UTF8)
 if(!$install.Contains('ITSeti-Maintenance-QuickFull') -or !$install.Contains('-Quick')) {throw 'Installed quick full-check task is missing.'}
-if($install -match 'DaysInterval 14' -or !$install.Contains('ITSeti-Maintenance-AutoFullRepair') -or $install -notmatch 'DaysInterval 60') {throw 'The 14-day check must be prompted; the 60-day full repair schedule must remain.'}
+if($install -notmatch 'DaysInterval 14' -or !$install.Contains('ITSeti-Maintenance-AutoFullRepair') -or $install -notmatch 'DaysInterval 60') {throw 'The 14-day night check and 60-day full maintenance schedule must remain.'}
 $appSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\App.xaml.cs'),[Text.Encoding]::UTF8)
 $promptSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\ScheduledCheckPrompt.cs'),[Text.Encoding]::UTF8)
-if(!$appSource.Contains('last-quick-run.txt') -or !$appSource.Contains('TimeSpan.FromDays(14)') -or
-   !$promptSource.Contains('DialogResult = false') -or !$appSource.Contains('AddDays(1)') -or !$appSource.Contains('ScheduleReminder')) {throw 'The prompted 14-day check or one-day reminder is incomplete.'}
+$scheduledQuickStart=$appSource.IndexOf('if (e.Args.Contains("--scheduled-quick"',[StringComparison]::Ordinal)
+$scheduledQuickEnd=$appSource.IndexOf('if (MainWindow is null)',[Math]::Max(0,$scheduledQuickStart),[StringComparison]::Ordinal)
+$scheduledQuickBlock=if($scheduledQuickStart -ge 0 -and $scheduledQuickEnd -gt $scheduledQuickStart){$appSource.Substring($scheduledQuickStart,$scheduledQuickEnd-$scheduledQuickStart)}else{''}
+if(!$scheduledQuickBlock.Contains('GetPendingAutoFullMaintenance') -or
+   !$scheduledQuickBlock.Contains('new ScheduledCheckPrompt().ShowDialog()') -or
+   !$scheduledQuickBlock.Contains('full-maintenance-remind-after.txt') -or
+   $entry.Contains('ScheduledCheckPrompt') -or !$promptSource.Contains('DISM и SFC')) {
+    throw 'Only pending 60-day full maintenance may show a prompt; the 14-day SYSTEM quick check must stay unattended.'
+}
 if(!$install.Contains('ITSeti-Maintenance-DisableUpdates') -or !$install.Contains('ITSeti-Maintenance-RestoreUpdates')) {throw 'Windows Update policy tasks are missing.'}
 $updater=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Update-Application.ps1'
 $updaterTokens=$null;$updaterErrors=$null
@@ -226,10 +233,20 @@ $updateTokens=$null;$updateErrors=$null
 if($updateErrors){throw 'Windows Update policy worker has PowerShell syntax errors.'}
 $updateSource=[IO.File]::ReadAllText($updatePolicy,[Text.Encoding]::UTF8)
 if($updateSource -notmatch 'original-policy\.json' -or $updateSource -notmatch 'ChangedExternally' -or $updateSource -notmatch 'NoAutoUpdate') {throw 'Windows Update policy worker must preserve and protect the existing setting.'}
-if(!$entry.Contains('[switch]$Quick') -or !$entry.Contains('SkipResourceSampling:$Quick') -or !$entry.Contains('SkipDiskBenchmark:$Quick')) {throw 'Quick check must retain SMART while skipping long measurements.'}
-if($viewModel -notmatch 'RunUserQuickAsync\(progress\)' -or $diskTools -notmatch 'RunUserQuickAsync' -or
+if(!$entry.Contains('[switch]$Quick') -or $entry.Contains('-SkipResourceSampling:$Quick') -or $entry.Contains('-SkipDiskBenchmark:$Quick') -or
+   !$entry.Contains('-UserMode:$Quick') -or
+   !$entry.Contains('last-quick-run.txt') -or !$entry.Contains('TimeSpan]::FromDays(14)') -or
    !$entry.Contains('latest-quick.txt') -or !$entry.Contains('latest-full.txt')) {
-    throw 'Scheduled user quick check must reach the quick SYSTEM task without long measurements or shared-report races.'
+    throw 'The 14-day SYSTEM check must use full diagnostics and skip runs after a recent full check.'
+}
+ $scheduledStart=$window.IndexOf('public async Task<bool> RunScheduledFullMaintenanceAsync',[StringComparison]::Ordinal)
+ $scheduledEnd=$window.IndexOf('private void QueueProgressScroll',[StringComparison]::Ordinal)
+ $scheduledBody=if($scheduledStart -ge 0 -and $scheduledEnd -gt $scheduledStart){$window.Substring($scheduledStart,$scheduledEnd-$scheduledStart)}else{''}
+if($entry.Contains('-StartRepair:$StartRepair') -or !$entry.Contains('pending-auto-full-maintenance.txt') -or
+   !$appSource.Contains('GetPendingAutoFullMaintenance') -or !$scheduledBody.Contains('RunScheduledRepairAsync') -or
+   $scheduledBody.Contains('RunScheduledCleanupAsync') -or $scheduledBody.Contains('InstallAvailableUpdateAfterFullCheckAsync') -or
+   !$install.Contains('auto-full-maintained.txt')) {
+    throw 'The 60-day planned full check must defer DISM/SFC until login without ordinary cleanup or application updates.'
 }
 $accountScript=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Create-LocalAdmin.ps1'
 $accountTokens=$null;$accountErrors=$null

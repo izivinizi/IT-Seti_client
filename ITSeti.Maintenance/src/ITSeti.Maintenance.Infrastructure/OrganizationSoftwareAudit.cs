@@ -16,17 +16,7 @@ public static class OrganizationSoftwareAudit
     public static string? FindBundledDirectory()
     {
         var bundled = Path.Combine(AppContext.BaseDirectory, "Setup", "ITSETI-Setup");
-        var requiredFiles = new[]
-        {
-            "system\\packages\\AnyDesk-installer.exe",
-            "system\\packages\\Host-IT-SETI.RMS.7.7.3.0v3.msi",
-            "system\\packages\\OCS-Agent-Installerv4.exe",
-            "system\\packages\\DesktopInfo3230.exe",
-            "system\\panel\\DesktopInfo.ini",
-            "system\\panel\\update-support-ids.ps1",
-            "system\\panel\\start-panel.vbs"
-        };
-        return requiredFiles.All(file => File.Exists(Path.Combine(bundled, file))) ? bundled : null;
+        return Directory.Exists(bundled) ? bundled : null;
     }
 
     public static IReadOnlyList<OrganizationComponent> Inspect(string? bundledDirectory)

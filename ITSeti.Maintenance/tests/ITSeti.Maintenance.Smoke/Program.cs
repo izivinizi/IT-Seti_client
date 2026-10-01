@@ -29,6 +29,14 @@ internal static class Program
             AssertUpdateStatusVersionFiltering();
             return 0;
         }
+        if (args.Contains("--scheduled-policy-contract"))
+        {
+            var scheduledRoot = Path.Combine(Path.GetTempPath(), "ITSeti-scheduled-contract-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(scheduledRoot);
+            AssertScheduledFullMaintenancePolicy(scheduledRoot);
+            Console.WriteLine("PASS: scheduled checks and deferred full maintenance.");
+            return 0;
+        }
         if (args.Contains("--progress-regression") || args.Contains("--installed-user-check"))
             return CheckProgressRegression(args.Contains("--installed-user-check"));
         if (args.Contains("--organization-setup-contract")) return CheckBundledOrganizationSetup().GetAwaiter().GetResult();
@@ -42,7 +50,7 @@ internal static class Program
         AssertCleanupSummaryFormatting();
         var output = Path.GetFullPath(Path.Combine("artifacts", "smoke-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")));
         Directory.CreateDirectory(output);
-        AssertScheduledCheckPolicy(output);
+        AssertScheduledFullMaintenancePolicy(output);
         var temperatureCachePath = Path.Combine(output, "temperature-cache.json");
         File.WriteAllText(temperatureCachePath, JsonSerializer.Serialize(new CpuTemperatureReading(62, "smoke", DateTimeOffset.UtcNow)));
         if (CpuTemperatureCache.ReadFresh(temperatureCachePath)?.TemperatureC != 62)
@@ -164,12 +172,12 @@ internal static class Program
                 using (var rmsKey = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\TektonIT\RMS Host\Host\Parameters"))
                     if (rmsKey?.GetValue("InternetId") is byte[] && new MachineIdentityStore().Read().RmsId is null)
                         throw new Exception("Installed RMS Internet ID was not detected");
-                var oldBoot = first with { LastBootAt = first.StartedAt - TimeSpan.FromDays(7) };
+                var oldBoot = first with { LastBootAt = first.StartedAt - TimeSpan.FromDays(9) };
                 var rebootIssue = DiagnosticRules.GetUserIssues(oldBoot).FirstOrDefault(i => i.Title.Contains("перезагружали"));
-                if (rebootIssue is null || !rebootIssue.Detail.Contains("Сохраните открытые документы"))
+                if (rebootIssue is null || !rebootIssue.Detail.Contains("9 дней назад") || !rebootIssue.Detail.Contains("Сохраните открытые документы"))
                     throw new Exception("Old-boot warning is missing");
-                if (DiagnosticRules.GetUserIssues(first with { LastBootAt = first.StartedAt - TimeSpan.FromDays(6) })
-                    .Any(i => i.Title.Contains("перезагружали"))) throw new Exception("Six-day reboot boundary is wrong");
+                if (DiagnosticRules.GetUserIssues(first with { LastBootAt = first.StartedAt - TimeSpan.FromDays(8) })
+                    .Any(i => i.Title.Contains("перезагружали"))) throw new Exception("Eight-day reboot boundary is wrong");
                 var hasQuickDiskHealth = first.QuickDisks is { Count: > 0 };
                 if (hasQuickDiskHealth
                     ? !window.ViewModel.UserDiskHealth.Contains("по данным Windows") || !window.ViewModel.Coverage.Contains("полной диагностике")
@@ -763,19 +771,21 @@ internal static class Program
         if (!DiagnosticRules.GetUserIssues(cpu).Any(i => i.Title.Contains("Процессор"))) throw new Exception("Sustained CPU pressure missing");
         if (DiagnosticRules.GetUserIssues(cpu with { Full = full }).Any(i => i.Title.Contains("Процессор")))
             throw new Exception("One CPU sample flagged as sustained pressure");
-        var warmCpu = snapshot with { Full = full with { CpuTemperatureC = 80.1 } };
+        var warmCpu = snapshot with { Full = full with { CpuTemperatureC = 75.1 } };
         if (!DiagnosticRules.GetUserIssues(warmCpu).Any(issue => issue.Severity == "Warning" && issue.Title.Contains("температура"))
-            || DiagnosticRules.GetUserIssues(snapshot with { Full = full with { CpuTemperatureC = 80 } }).Any(issue => issue.Title.Contains("температура")))
+            || DiagnosticRules.GetUserIssues(snapshot with { Full = full with { CpuTemperatureC = 74.9 } }).Any(issue => issue.Title.Contains("температура")))
             throw new Exception("CPU temperature warning threshold failed");
-        var criticalCpu = snapshot with { Full = full with { CpuTemperatureC = 90 } };
+        var criticalCpu = snapshot with { Full = full with { CpuTemperatureC = 85 } };
         if (!DiagnosticRules.GetUserIssues(criticalCpu).Any(issue => issue.Severity == "Critical" && issue.Title.Contains("температура"))
-            || DiagnosticRules.GetUserIssues(snapshot with { Full = full with { CpuTemperatureC = 89.9 } }).Any(issue => issue.Severity == "Critical"))
+            || DiagnosticRules.GetUserIssues(snapshot with { Full = full with { CpuTemperatureC = 84.9 } }).Any(issue => issue.Severity == "Critical"))
             throw new Exception("CPU temperature critical threshold failed");
-        if (!DiagnosticRules.GetUserIssues(snapshot with { Full = null, CpuTemperatureC = 90 })
+        if (!DiagnosticRules.GetUserIssues(snapshot with { Full = null, CpuTemperatureC = 85 })
             .Any(issue => issue.Severity == "Critical" && issue.Title.Contains("температура")))
             throw new Exception("CPU temperature from the independent sensor reader was ignored");
         var lowSpace = snapshot with { Disks = [new DiskSnapshot("C:\\", 100L * 1073741824, 14L * 1073741824)] };
         if (!DiagnosticRules.GetUserIssues(lowSpace).Any(i => i.Title.Contains("места") && i.Severity == "Warning")) throw new Exception("15 GB space warning missing");
+        if (DiagnosticRules.GetUserIssues(lowSpace with { Disks = [new DiskSnapshot("C:\\", 49L * 1073741824, 1L * 1073741824)] })
+            .Any(i => i.Title.Contains("места"))) throw new Exception("Partitions smaller than 50 GB must not trigger low-space warnings");
         lowSpace = lowSpace with { Disks = [new DiskSnapshot("C:\\", 100L * 1073741824, 4L * 1073741824)] };
         if (!DiagnosticRules.GetUserIssues(lowSpace).Any(i => i.Title.Contains("места") && i.Severity == "Critical")) throw new Exception("5 GB space critical missing");
         if (!DiagnosticRules.GetUserIssues(snapshot with { Full = full with { Benchmark = benchmark with { Read = 179 } } })
@@ -783,8 +793,8 @@ internal static class Program
         if (!DiagnosticRules.GetUserIssues(snapshot with { Full = full with { Benchmark = benchmark with { MediaType = "HDD", Read = 79 } } })
             .Any(i => i.Title.Contains("медленно") && i.Severity == "Critical")) throw new Exception("HDD critical speed missing");
         var sata = new SmartDiskDetails("SSD", "Good", "C:", "SSD", "SATA/300 | SATA/600");
-        if (!DiagnosticRules.GetUserIssues(snapshot with { Full = full with { SmartDisks = [sata] } })
-            .Any(i => i.Title.Contains("подключён") && i.Severity == "Warning")) throw new Exception("SATA link warning missing");
+        if (DiagnosticRules.GetUserIssues(snapshot with { Full = full with { SmartDisks = [sata] } })
+            .Any(i => i.Title.Contains("подключён") && i.Severity == "Warning")) throw new Exception("SATA link limit must not be shown to users");
         var hddLatency = snapshot with { Full = full with { Benchmark = benchmark with { MediaType = "HDD", Read = 120 },
             ResourceSampling = pressure with { MemoryHighSamples = 0, DiskReadLatencyMs = 120, DiskReadOperations = 120 } } };
         if (!DiagnosticRules.GetUserIssues(hddLatency).Any(i => i.Title.Contains("долго отвечает") && i.Severity == "Warning"))
@@ -797,31 +807,23 @@ internal static class Program
             throw new Exception("Incomplete disk test presented as cause of slowness");
     }
 
-    private static void AssertScheduledCheckPolicy(string output)
+    private static void AssertScheduledFullMaintenancePolicy(string output)
     {
-        var root = Path.Combine(output, "scheduled-policy");
-        var systemData = Path.Combine(root, "system");
-        var userData = Path.Combine(root, "user");
-        var run = Path.Combine(systemData, "Runs", Guid.NewGuid().ToString("N"));
+        var systemData = Path.Combine(output, "scheduled-full-maintenance");
+        var runId = Guid.NewGuid().ToString("N");
+        var run = Path.Combine(systemData, "Runs", runId);
         Directory.CreateDirectory(run);
-        Directory.CreateDirectory(userData);
-        var now = DateTimeOffset.UtcNow;
-        var result = Path.Combine(run, "result.json");
-        File.WriteAllText(result, "{}");
-        File.WriteAllText(Path.Combine(systemData, "latest-full.txt"), run);
-        File.WriteAllText(Path.Combine(systemData, "last-quick-run.txt"), now.AddDays(-30).ToString("O"));
-        var method = typeof(ITSeti.Maintenance.App.App).GetMethod("IsScheduledCheckDue",
+        File.WriteAllText(Path.Combine(run, "result.json"), "{}");
+        File.WriteAllText(Path.Combine(systemData, "pending-auto-full-maintenance.txt"), runId);
+        var method = typeof(ITSeti.Maintenance.App.App).GetMethod("GetPendingAutoFullMaintenance",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
-            ?? throw new Exception("Scheduled check policy was not found");
-        bool IsDue() => (bool)(method.Invoke(null, [userData, systemData, now])
-            ?? throw new Exception("Scheduled check policy returned no result"));
-
-        File.SetLastWriteTimeUtc(result, now.UtcDateTime.AddHours(-1));
-        if (IsDue()) throw new Exception("A completed full check must suppress the quick check reminder");
-        File.SetLastWriteTimeUtc(result, now.UtcDateTime.AddDays(-15));
-        if (!IsDue()) throw new Exception("The quick check reminder did not become due after 14 days");
-        File.WriteAllText(Path.Combine(userData, "scheduled-reminder-snooze.txt"), now.AddDays(1).ToString("O"));
-        if (IsDue()) throw new Exception("A snoozed quick check reminder appeared early");
+            ?? throw new Exception("Scheduled full maintenance policy was not found");
+        string? Pending() => (string?)method.Invoke(null, [systemData]);
+        if (Pending() != runId) throw new Exception("A completed night check did not request user-session maintenance");
+        File.WriteAllText(Path.Combine(systemData, "auto-full-maintained.txt"), runId);
+        if (Pending() is not null) throw new Exception("Completed maintenance was requested again");
+        File.WriteAllText(Path.Combine(systemData, "pending-auto-full-maintenance.txt"), "..\\invalid");
+        if (Pending() is not null) throw new Exception("An invalid scheduled run identifier was accepted");
     }
 
     private static async Task AssertCleanupContract(string output)
@@ -853,8 +855,9 @@ internal static class Program
         var installedCheck = await File.ReadAllTextAsync(Path.Combine(backend, "InstalledCheck.ps1"));
         if (!fullWorker.Contains("SkipDiskBenchmark", StringComparison.Ordinal) ||
             !diskWorker.Contains("SkipBenchmark", StringComparison.Ordinal) ||
-            !installedCheck.Contains("-SkipDiskBenchmark:$Quick", StringComparison.Ordinal))
-            throw new Exception("Quick full check does not skip the sampler and disk benchmark while retaining SMART");
+            installedCheck.Contains("-SkipDiskBenchmark:$Quick", StringComparison.Ordinal) ||
+            installedCheck.Contains("-SkipResourceSampling:$Quick", StringComparison.Ordinal))
+            throw new Exception("Scheduled quick check must include the complete user diagnostic route");
         await AssertUserCleanupWorker(output, backend, "fallback", "TEST OK");
         var cleanupWorker = await File.ReadAllTextAsync(Path.Combine(backend, "UserCleanupWorker.ps1"));
         if (cleanupWorker.Contains("/sageset:", StringComparison.OrdinalIgnoreCase))

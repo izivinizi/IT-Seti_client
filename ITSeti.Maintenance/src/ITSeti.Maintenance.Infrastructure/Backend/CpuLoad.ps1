@@ -19,7 +19,7 @@ function Get-CpuTimeSample {
     if(![ITSetiCpuTimes]::GetSystemTimes([ref]$idle,[ref]$kernel,[ref]$user)){throw 'Windows CPU counters unavailable.'}
     return [pscustomobject]@{Idle=$idle.Value;Kernel=$kernel.Value;User=$user.Value}
 }
-function Get-CpuLoadPercent([int]$Milliseconds=200) {
+function Get-CpuLoadPercent([int]$Milliseconds=500) {
     try {
         $first=Get-CpuTimeSample
         Start-Sleep -Milliseconds $Milliseconds

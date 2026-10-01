@@ -66,6 +66,32 @@ function Update-MaintenanceHistory {
         Move-Item -LiteralPath $temporary -Destination (Join-Path $ScriptRoot 'history.xml') -Force -ErrorAction Stop
     } catch {Write-Host ('История не сохранена: '+$_.Exception.Message) -ForegroundColor Yellow}
 }
+function Set-DesignatedAdminPasswordPolicy($Snapshot) {
+    if(!$script:Admin -or $script:SkipWindowsUpdateChange){return}
+    foreach($name in @('Admin','it-seti')) {
+        try {
+            $user=[ADSI]('WinNT://'+$env:COMPUTERNAME+'/'+$name+',user')
+            $null=$user.Name.Value
+            $flags=[int]$user.UserFlags.Value
+            $neverExpires=65536
+            if(($flags -band $neverExpires) -eq 0) {
+                $user.Put('UserFlags',($flags -bor $neverExpires))
+                $user.SetInfo()
+                $user=[ADSI]('WinNT://'+$env:COMPUTERNAME+'/'+$name+',user')
+                if(([int]$user.UserFlags.Value -band $neverExpires) -eq 0){throw 'Windows не подтвердила настройку бессрочного пароля.'}
+                $Snapshot.Notes+=('Для локальной учётной записи '+$name+' включён бессрочный пароль.')
+            } else {
+                $Snapshot.Notes+=('Пароль локальной учётной записи '+$name+' уже бессрочный.')
+            }
+        } catch {
+            if($_.Exception.Message -match 'specified account does not exist|учётная запись не найдена|не удается найти') {
+                $Snapshot.Notes+=('Локальная учётная запись '+$name+' отсутствует; политика пароля не менялась.')
+            } else {
+                $Snapshot.Notes+=('Не удалось проверить срок пароля '+$name+': '+$_.Exception.Message)
+            }
+        }
+    }
+}
 function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
     $scanTimer=[Diagnostics.Stopwatch]::StartNew()
     Write-Host 'Проверка: оборудование, нагрузка, процессы и журналы...' -ForegroundColor Cyan
@@ -74,6 +100,8 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
     $script:PreserveDiskSnapshot=$false
     $script:Snapshot = @{Notes=$previousNotes; Processes=@(); Events=@(); Volumes=@(); Disks=@(); Smart=$previousSmart; CPU='нет данных'; GPU='нет данных'; CpuTemperatureC=$null; CpuTemperatureStatus=$null; MemoryType='нет данных'; TotalRAM=$null; FreeRAM=$null; Load=$null; LastBootAt=$null; EventLimited=$false; EventUnavailable=0; ProcessUnavailable=0}
     $s=$script:Snapshot
+    if(Get-Command Start-WindowsUpdatePolicyChange -ErrorAction SilentlyContinue){Start-WindowsUpdatePolicyChange}
+    Set-DesignatedAdminPasswordPolicy $s
     $script:WindowsUpdateStatus=$null
     if($script:PendingDiskTest){$s.Notes += 'Нагрузка CPU/ОЗУ измерена во время дискового теста, не в простое.'}
     $s.PublisherSkipped=0; $s.PublisherMetadataSkipped=0
@@ -95,10 +123,6 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
         $buildText=[string]$(if($windowsKey.CurrentBuildNumber){$windowsKey.CurrentBuildNumber}else{$windowsKey.CurrentBuild})
         $buildNumber=0
         if([int]::TryParse($buildText,[ref]$buildNumber)){$s.WindowsBuild=$buildNumber}
-        if($script:Admin -and !$script:SkipWindowsUpdateChange -and (Test-Path -LiteralPath (Join-Path $ScriptRoot 'Set-WindowsAutomaticUpdates.ps1'))) {
-            try {$script:WindowsUpdateStatus=& (Join-Path $ScriptRoot 'Set-WindowsAutomaticUpdates.ps1') -Action Disable | Select-Object -Last 1}
-            catch {$script:WindowsUpdateStatus='не удалось отключить автообновления: '+$_.Exception.Message}
-        }
         try {$s.LastBootAt=([DateTimeOffset]([Management.ManagementDateTimeConverter]::ToDateTime($os.LastBootUpTime))).ToString('o')} catch {$s.Notes+=('Время последней загрузки: '+$_.Exception.Message)}
         $s.TotalRAM=[double]$os.TotalVisibleMemorySize/1MB
         $loads=@(); $free=@()
@@ -322,7 +346,7 @@ function Get-CriticalFindings {
         if($used -ge 80){'ОЗУ занята на {0:N1}% (порог 80%).' -f $used}
     }
     foreach($v in $s.Volumes) {
-        if($v.Size -gt 0) {
+        if($v.Size -ge 50GB) {
             $used=100*(1-$v.FreeSpace/$v.Size)
             if($used -ge 80){'Диск {0} занят на {1:N1}% (порог 80%).' -f $v.DeviceID,$used}
         }
@@ -338,8 +362,8 @@ function Get-CriticalFindings {
         Get-DiskLinkWarning $d
     }
     if($null -ne $s.CpuTemperatureC) {
-        if($s.CpuTemperatureC -ge 90){'CPU: критически высокая температура {0:N0} °C (порог 90 °C).' -f $s.CpuTemperatureC}
-        elseif($s.CpuTemperatureC -gt 80){'CPU: температура {0:N0} °C выше 80 °C.' -f $s.CpuTemperatureC}
+        if($s.CpuTemperatureC -ge 85){'CPU: критически высокая температура {0:N0} °C (порог 85 °C).' -f $s.CpuTemperatureC}
+        elseif($s.CpuTemperatureC -ge 75){'CPU: температура {0:N0} °C достигла порога 75 °C.' -f $s.CpuTemperatureC}
     }
     if($script:DiskResult -and @('SSD','HDD') -contains $script:DiskResult.MediaType) {
         $warningLimit=if($script:DiskResult.MediaType -eq 'HDD'){100}elseif($script:DiskResult.IsNvme){900}else{210}
@@ -392,6 +416,39 @@ function Get-DiskLinkWarning($Disk) {
     }
     if($low){'Ограничение интерфейса {0}: работает {1}, диск поддерживает {2}. Проверьте порт/слот, контроллер и подключение; возможности ПК не подтверждены.' -f $Disk.Model,$current,$supported}
 }
+function Get-SmartAttributeWarnings([string]$Block) {
+    $attributes=@(
+        @{Pattern='Reallocated Sectors? Count|Переназначенн(ые|ых) сектора';Label='переназначенные сектора'},
+        @{Pattern='Current Pending Sector Count|Нестабильн(ые|ых) сектора';Label='нестабильные сектора'},
+        @{Pattern='Uncorrectable Sector Count|Reported Uncorrectable Errors|Неисправим(ые|ых) ошибки';Label='неисправимые ошибки'},
+        @{Pattern='Reallocation Event Count|События переназначения';Label='события переназначения'},
+        @{Pattern='Media and Data Integrity Errors';Label='ошибки целостности данных'}
+    )
+    $warnings=@()
+    foreach($line in ($Block -split '\r?\n')) {
+        foreach($attribute in $attributes) {
+            $match=[regex]::Match($line,$attribute.Pattern,[Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            if(!$match.Success){continue}
+            $raw=''
+            $colon=$line.IndexOf(':')
+            if($colon -ge 0 -and $colon -gt $match.Index){$raw=$line.Substring($colon+1).Trim()}
+            else {
+                $rawMatch=[regex]::Match($line,'\s+-\s+(?<raw>[^\r\n]+?)\s*$')
+                if($rawMatch.Success){$raw=$rawMatch.Groups['raw'].Value.Trim()}
+            }
+            $rawToken=[regex]::Match($raw,'^(?:0x)?[0-9a-f]+',[Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            if(!$rawToken.Success){continue}
+            $number=$rawToken.Value
+            if($number.StartsWith('0x',[StringComparison]::OrdinalIgnoreCase)){$number=$number.Substring(2)}
+            try {
+                $base=if($rawToken.Value.StartsWith('0x',[StringComparison]::OrdinalIgnoreCase) -or $number -match '[a-f]'){16}else{10}
+                $count=[Convert]::ToUInt64($number,$base)
+            } catch {$count=0}
+            if($count -gt 0){$warnings+=($attribute.Label+': '+$count)}
+        }
+    }
+    return @($warnings | Select-Object -Unique) -join ', '
+}
 function ConvertFrom-CdiReport([string]$Text) {
     foreach($block in ([regex]::Split($Text,'(?m)(?=^\s*Model\s*:)'))) {
         $model=[regex]::Match($block,'(?m)^\s*Model\s*:\s*(.+)$')
@@ -415,7 +472,7 @@ function ConvertFrom-CdiReport([string]$Text) {
         $type='Unknown'
         if($rotation -match 'SSD|Solid State' -or $interface -match 'NVM Express|NVMe'){$type='SSD'}
         elseif($rotation -match '\d+\s*RPM'){$type='HDD'}
-        New-Object PSObject -Property @{Model=$model.Groups[1].Value.Trim();Status=$health.Groups[1].Value.Trim();Letters=$letters;MediaType=$type;TransferMode=$transfer;PowerOnHours=$powerOnHours}
+        New-Object PSObject -Property @{Model=$model.Groups[1].Value.Trim();Status=$health.Groups[1].Value.Trim();Letters=$letters;MediaType=$type;TransferMode=$transfer;PowerOnHours=$powerOnHours;SmartWarnings=(Get-SmartAttributeWarnings $block)}
     }
 }
 function Show-ServiceSummary {
