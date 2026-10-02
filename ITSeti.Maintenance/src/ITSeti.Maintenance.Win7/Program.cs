@@ -15,6 +15,11 @@ namespace ITSeti.Maintenance.Win7
                 try { return SmartTaskRunner.RunWorker(); }
                 catch { return 1; }
             }
+            if (args.Length == 1 && args[0] == "--collect-benchmark")
+            {
+                try { return BenchmarkTaskRunner.RunWorker(); }
+                catch { return 1; }
+            }
             if (args.Length == 1 && (args[0] == "--register-smart-task" || args[0] == "--unregister-smart-task"))
             {
                 try
@@ -46,7 +51,10 @@ namespace ITSeti.Maintenance.Win7
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
+            var engineer = args.Length == 1 && args[0] == "--engineer" &&
+                new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent())
+                    .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+            Application.Run(new MainForm(engineer));
             return 0;
         }
     }

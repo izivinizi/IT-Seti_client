@@ -29,20 +29,66 @@ namespace ITSeti.Maintenance.Win7
         public string Message { get; set; }
     }
 
+    public sealed class LegacySmartDisk
+    {
+        public string Model { get; set; }
+        public string Health { get; set; }
+        public string Letters { get; set; }
+        public string MediaType { get; set; }
+        public string TransferMode { get; set; }
+        public long? PowerOnHours { get; set; }
+    }
+
+    public sealed class LegacyNetworkAdapter
+    {
+        public string Name { get; set; }
+        public string Kind { get; set; }
+        public string Status { get; set; }
+        public string Speed { get; set; }
+        public string Addresses { get; set; }
+    }
+
+    public sealed class LegacyProcess
+    {
+        public string Name { get; set; }
+        public long MemoryBytes { get; set; }
+        public string Path { get; set; }
+    }
+
+    public sealed class LegacyBenchmark
+    {
+        public double? ReadMbps { get; set; }
+        public double? WriteMbps { get; set; }
+        public string State { get; set; }
+        public string Error { get; set; }
+    }
+
     public sealed class LegacySnapshot
     {
+        public string Kind { get; set; }
         public string ComputerName { get; set; }
         public string OsName { get; set; }
         public string OsVersion { get; set; }
+        public string CpuName { get; set; }
+        public string GpuName { get; set; }
+        public string MemoryType { get; set; }
         public string SerialNumber { get; set; }
+        public string InventoryNumber { get; set; }
+        public string RmsId { get; set; }
+        public string AnyDeskId { get; set; }
         public string CheckedAt { get; set; }
         public string LastBootAt { get; set; }
         public double? CpuPercent { get; set; }
+        public double? CpuTemperatureC { get; set; }
         public double? TotalMemoryGb { get; set; }
         public double? FreeMemoryGb { get; set; }
         public string SmartSummary { get; set; }
         public List<LegacyDisk> Disks { get; set; } = new List<LegacyDisk>();
+        public List<LegacySmartDisk> SmartDisks { get; set; } = new List<LegacySmartDisk>();
+        public List<LegacyNetworkAdapter> Network { get; set; } = new List<LegacyNetworkAdapter>();
+        public List<LegacyProcess> Processes { get; set; } = new List<LegacyProcess>();
         public List<LegacyEvent> Events { get; set; } = new List<LegacyEvent>();
+        public LegacyBenchmark Benchmark { get; set; }
         public List<string> Findings { get; set; } = new List<string>();
         public List<string> Unavailable { get; set; } = new List<string>();
 
@@ -55,10 +101,14 @@ namespace ITSeti.Maintenance.Win7
                 "ИТ-Сети | Диагностика Windows 7 (beta)",
                 "Компьютер: " + ComputerName,
                 "Проверено: " + CheckedAt,
+                "Тип: " + (Kind ?? "Быстрая"),
                 "Система: " + OsName + " (" + OsVersion + ")",
                 "Серийный номер: " + (string.IsNullOrWhiteSpace(SerialNumber) ? "не получен" : SerialNumber),
+                "Инв. №: " + (InventoryNumber ?? "не указан") + " | RMS: " + (RmsId ?? "не найден") + " | AnyDesk: " + (AnyDeskId ?? "не найден"),
                 "Последний запуск: " + (LastBootAt ?? "нет данных"),
-                "CPU: " + (CpuPercent.HasValue ? CpuPercent.Value.ToString("N0") + "%" : "нет данных"),
+                "CPU: " + (CpuName ?? "не определён") + " · " + (CpuPercent.HasValue ? CpuPercent.Value.ToString("N0") + "%" : "нет данных") +
+                    " · " + (CpuTemperatureC.HasValue ? CpuTemperatureC.Value.ToString("N0") + " °C" : "температура недоступна"),
+                "GPU: " + (GpuName ?? "не определена") + " | Память: " + (MemoryType ?? "тип не определён"),
                 "ОЗУ: " + (TotalMemoryGb.HasValue ? string.Format("{0:N1} ГБ, свободно {1:N1} ГБ", TotalMemoryGb, FreeMemoryGb) : "нет данных"),
                 "SMART: " + (SmartSummary ?? "нет данных"),
                 "",
@@ -67,6 +117,15 @@ namespace ITSeti.Maintenance.Win7
             foreach (var disk in Disks)
                 lines.Add(string.Format("  {0}: свободно {1:N1} из {2:N1} ГБ{3}", disk.Name,
                     disk.FreeBytes / 1073741824.0, disk.TotalBytes / 1073741824.0, disk.IsSystem ? " (системный)" : ""));
+            foreach (var disk in SmartDisks)
+                lines.Add("  " + disk.Model + ": " + disk.Health + " · " + disk.MediaType + " · " + disk.TransferMode +
+                    (disk.PowerOnHours.HasValue ? " · " + disk.PowerOnHours.Value.ToString("N0") + " ч" : ""));
+            if (Benchmark != null)
+                lines.Add("Тест диска: " + (Benchmark.State == "Completed"
+                    ? string.Format("чтение {0:N1}, запись {1:N1} МБ/с", Benchmark.ReadMbps, Benchmark.WriteMbps)
+                    : Benchmark.Error ?? Benchmark.State));
+            lines.Add("Сеть: " + (Network.Count == 0 ? "нет активных адаптеров" : string.Join("; ", Network.Select(x => x.Name + " " + x.Addresses))));
+            lines.Add("Процессы: " + Processes.Count);
             lines.Add("");
             lines.Add("Требует внимания:");
             lines.AddRange(Findings.Count == 0 ? new[] { "  По доступным данным замечаний нет." } : Findings.Select(x => "  - " + x));
@@ -83,18 +142,22 @@ namespace ITSeti.Maintenance.Win7
 
     public static class LegacyDiagnostics
     {
-        public static LegacySnapshot Collect()
+        public static LegacySnapshot Collect(bool full = false)
         {
             var snapshot = new LegacySnapshot
             {
                 ComputerName = Environment.MachineName,
+                Kind = full ? "Полная" : "Быстрая",
                 CheckedAt = DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss")
             };
             CollectSystem(snapshot);
             CollectCpu(snapshot);
             CollectDisks(snapshot);
+            LegacyExtras.Collect(snapshot);
             SmartTaskRunner.CollectInto(snapshot);
             CollectEvents(snapshot);
+            if (full) BenchmarkTaskRunner.CollectInto(snapshot);
+            else snapshot.Benchmark = new LegacyBenchmark { State = "Skipped", Error = "Быстрая проверка: тест скорости не запускался." };
             return snapshot;
         }
 
@@ -242,9 +305,22 @@ namespace ITSeti.Maintenance.Win7
                     if (!model.Success || !health.Success) continue;
                     var state = health.Groups[1].Value.Trim();
                     var disk = model.Groups[1].Value.Trim();
+                    var letters = Regex.Match(block, @"(?m)^\s*Drive Letter\s*:\s*(.*)$").Groups[1].Value.Trim();
+                    var transfer = Regex.Match(block, @"(?m)^\s*Transfer Mode\s*:\s*(.*)$").Groups[1].Value.Trim();
+                    var rotation = Regex.Match(block, @"(?m)^\s*Rotation Rate\s*:\s*(.*)$").Groups[1].Value.Trim();
+                    var interfaceName = Regex.Match(block, @"(?m)^\s*Interface\s*:\s*(.*)$").Groups[1].Value.Trim();
+                    var hoursText = Regex.Match(block, @"(?im)^\s*Power On Hours?\s*:\s*([\d\s,.]+)").Groups[1].Value;
+                    long hours;
+                    var powerOnHours = long.TryParse(Regex.Replace(hoursText, @"\D", ""), out hours) ? (long?)hours : null;
+                    var mediaType = Regex.IsMatch(rotation + interfaceName, "SSD|Solid State|NVMe|NVM Express", RegexOptions.IgnoreCase)
+                        ? "SSD" : Regex.IsMatch(rotation, "RPM", RegexOptions.IgnoreCase) ? "HDD" : "Не определён";
+                    result.SmartDisks.Add(new LegacySmartDisk { Model = disk, Health = state, Letters = letters,
+                        MediaType = mediaType, TransferMode = transfer, PowerOnHours = powerOnHours });
                     disks.Add(disk + ": " + state);
                     if (Regex.IsMatch(state, "Caution|Bad|Тревога|Плохо", RegexOptions.IgnoreCase))
                         result.Findings.Add("SMART: " + disk + " — " + state + ".");
+                    if (powerOnHours > 60000)
+                        result.Findings.Add("Наработка диска " + disk + " превысила 60 000 ч.");
                 }
                 if (disks.Count == 0) throw new InvalidDataException("Формат отчёта SMART не распознан.");
                 result.SmartSummary = string.Join("; ", disks);

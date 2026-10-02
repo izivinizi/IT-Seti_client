@@ -12,6 +12,7 @@ namespace ITSeti.Maintenance.Win7
     internal sealed class SmartTaskResult
     {
         public string SmartSummary { get; set; }
+        public List<LegacySmartDisk> SmartDisks { get; set; }
         public List<string> Findings { get; set; }
         public List<string> Unavailable { get; set; }
     }
@@ -33,6 +34,7 @@ namespace ITSeti.Maintenance.Win7
             var result = new SmartTaskResult
             {
                 SmartSummary = snapshot.SmartSummary,
+                SmartDisks = snapshot.SmartDisks,
                 Findings = snapshot.Findings,
                 Unavailable = snapshot.Unavailable
             };
@@ -82,6 +84,7 @@ namespace ITSeti.Maintenance.Win7
                             result = new JavaScriptSerializer().Deserialize<SmartTaskResult>(reader.ReadToEnd());
                         if (result == null) throw new InvalidDataException("Задача SMART вернула пустой отчёт.");
                         snapshot.SmartSummary = result.SmartSummary;
+                        if (result.SmartDisks != null) snapshot.SmartDisks.AddRange(result.SmartDisks);
                         if (result.Findings != null) snapshot.Findings.AddRange(result.Findings);
                         if (result.Unavailable != null) snapshot.Unavailable.AddRange(result.Unavailable);
                         return;

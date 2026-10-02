@@ -3,7 +3,7 @@
 [Setup]
 AppId={{9C83D41A-9753-4E64-8EC8-A9A324BD7D52}
 AppName=ИТ-Сети Обслуживание ПК (Windows 7 beta)
-AppVersion=0.2.0
+AppVersion=0.3.0
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance Win7
 DisableDirPage=yes
@@ -27,6 +27,7 @@ Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
 [Files]
 Source: "{#PackageRoot}\App\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PackageRoot}\Tools\CrystalDiskInfo\*"; DestDir: "{app}\Tools\CrystalDiskInfo"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PackageRoot}\Tools\DiskSpd\*"; DestDir: "{app}\Tools\DiskSpd"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\ИТ-Сети Обслуживание ПК (Windows 7)"; Filename: "{app}\ITSeti.Maintenance.Win7.exe"

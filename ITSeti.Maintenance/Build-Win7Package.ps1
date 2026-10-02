@@ -5,10 +5,15 @@ $package=Join-Path $OutputRoot 'Package'
 $app=Join-Path $package 'App'
 $tools=Join-Path $package 'Tools\CrystalDiskInfo'
 $source=Join-Path $PSScriptRoot 'Tools\CrystalDiskInfo9_6_3_Portable'
+$diskSpdSource=Join-Path $PSScriptRoot 'Tools\CrystalDiskMark9\CdmResource\DiskSpd'
+$diskSpdTarget=Join-Path $package 'Tools\DiskSpd'
 $compiler=Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'
 if(!(Test-Path -LiteralPath $compiler -PathType Leaf)){throw 'Inno Setup 6 compiler not found.'}
 foreach($name in @('DiskInfo32.exe','DiskInfo64.exe','ReadMe.txt')){
     if(!(Test-Path -LiteralPath (Join-Path $source $name) -PathType Leaf)){throw "Missing CrystalDiskInfo file: $name"}
+}
+foreach($name in @('DiskSpd32L.exe','DiskSpd64L.exe')){
+    if(!(Test-Path -LiteralPath (Join-Path $diskSpdSource $name) -PathType Leaf)){throw "Missing Win7 DiskSpd file: $name"}
 }
 $workspace=[IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\')
 $packagePath=[IO.Path]::GetFullPath($package)
@@ -23,6 +28,10 @@ New-Item -ItemType Directory -Path $tools -Force | Out-Null
 Get-ChildItem -LiteralPath $source -Force |
     Where-Object {$_.Name -notin @('Smart','DiskInfo.ini','DiskInfo.txt')} |
     Copy-Item -Destination $tools -Recurse -Force
+New-Item -ItemType Directory -Path $diskSpdTarget -Force | Out-Null
+foreach($name in @('DiskSpd32L.exe','DiskSpd64L.exe')){
+    Copy-Item -LiteralPath (Join-Path $diskSpdSource $name) -Destination (Join-Path $diskSpdTarget $name) -Force
+}
 & $compiler (Join-Path $PSScriptRoot 'Installer-Win7.iss')
 if($LASTEXITCODE -ne 0){throw 'Win7 installer compilation failed.'}
 $installer=Join-Path $OutputRoot 'ITSeti-Maintenance-Win7-Setup.exe'
