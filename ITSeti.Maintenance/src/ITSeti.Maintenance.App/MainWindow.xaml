@@ -248,7 +248,7 @@
        <StackPanel Margin="0,14,0,0">
        <TextBlock Text="Установка программ" Style="{StaticResource SectionHeading}" Margin="0,0,0,8"/>
        <WrapPanel>
-         <Button x:Name="InstallSetupButton" Click="InstallSetup_Click" IsEnabled="{Binding CanInstallSetup}" Padding="12,8" Margin="0,0,8,8" Background="#326EFF" Foreground="White" BorderThickness="0" Cursor="Hand" Content="Установить всё" ToolTip="AnyDesk, RMS, OCS, панель ИТ-Сети, WinRAR и Яндекс Браузер"/>
+         <Button x:Name="InstallSetupButton" Click="InstallSetup_Click" IsEnabled="{Binding CanInstallSetup}" Padding="12,8" Margin="0,0,8,8" Background="#326EFF" Foreground="White" BorderThickness="0" Cursor="Hand" Content="Установить всё" ToolTip="AnyDesk, RMS, OCS и панель ИТ-Сети"/>
          <Button x:Name="CreateAdminAccountButton" Click="CreateAdminAccount_Click" Padding="12,8" Margin="0,0,8,8" Cursor="Hand" Content="Создать учётку администратора" ToolTip="Admin, а если она уже есть — it-seti"/>
        </WrapPanel>
        <TextBlock Text="{Binding SoftwareActionStatus}" Foreground="#354A5E" TextWrapping="Wrap" Margin="0,3,0,8"/>

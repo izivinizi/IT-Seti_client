@@ -25,7 +25,7 @@ public static class OrganizationSetupRunner
     };
     private static readonly IReadOnlyDictionary<string, string> PanelFileHashes = new Dictionary<string, string>(StringComparer.Ordinal)
     {
-        ["DesktopInfo.ini"] = "C5BEEA181AB32B4677C7478D6B2B0026969881DE11E7167077085D5A07A85D23",
+        ["DesktopInfo.ini"] = "8DC7F238E102200846E193B61A3EF53B592B0396190562E823F571BD0F94EEF8",
         ["update-support-ids.ps1"] = "61492DCC75D988778E12925C8CB0F4867C15BEC8B022E6EEA31C9B5BBE7C8617",
         ["start-panel.vbs"] = "BBB7894DFEF424A161BCEE4C058AFA64B7C949B5C0074DC937CE56476932C8B5"
     };
@@ -67,8 +67,9 @@ public static class OrganizationSetupRunner
             {
                 var path = Path.Combine(bundledDirectory, "system", "panel", name);
                 if (!File.Exists(path)) { problems.Add($"Нет файла панели {name}."); continue; }
-                using var stream = File.OpenRead(path);
-                var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream));
+                var bytes = await File.ReadAllBytesAsync(path);
+                var normalized = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(bytes).Replace("\r\n", "\n"));
+                var hash = Convert.ToHexString(SHA256.HashData(normalized));
                 if (!hash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
                     problems.Add($"Файл панели {name} изменён после проверки.");
             }

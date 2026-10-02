@@ -31,8 +31,8 @@ internal static class WindowsAdminAccountDiscovery
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         return new(unexpected.Length == 0
-            ? "Локальная группа администраторов проверена; посторонних записей не найдено."
-            : "Обнаружены учётные записи или группы вне списка Admin / it-seti.", unexpected);
+            ? "Локальные администраторы: без замечаний."
+            : "Посторонние администраторы: " + string.Join(", ", unexpected), unexpected);
     }
 
     public static bool IsCurrentAccountUnexpectedAdministrator()
@@ -54,7 +54,8 @@ internal static class WindowsAdminAccountDiscovery
         if (separator < 0 || !account[..separator].Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase)) return false;
         var name = account[(separator + 1)..];
         return name.Equals("Admin", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("it-seti", StringComparison.OrdinalIgnoreCase);
+            || name.Equals("it-seti", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Administrator", StringComparison.OrdinalIgnoreCase);
     }
 
     private static (int Status, List<Member> Members) ReadMembers()
@@ -93,9 +94,10 @@ internal static class WindowsAdminAccountDiscovery
     {
         var name = account[(account.LastIndexOf('\\') + 1)..];
         if (name.Equals("Admin", StringComparison.OrdinalIgnoreCase)) return 0;
-        if (name.Equals("it-seti", StringComparison.OrdinalIgnoreCase)) return 1;
-        if (name.Equals("user", StringComparison.OrdinalIgnoreCase)) return 2;
-        return 3;
+        if (name.Equals("Administrator", StringComparison.OrdinalIgnoreCase)) return 1;
+        if (name.Equals("it-seti", StringComparison.OrdinalIgnoreCase)) return 2;
+        if (name.Equals("user", StringComparison.OrdinalIgnoreCase)) return 3;
+        return 4;
     }
 
     private sealed record Member(string Name, int SidUsage);

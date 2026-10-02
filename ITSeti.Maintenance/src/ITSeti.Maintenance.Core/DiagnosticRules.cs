@@ -50,9 +50,9 @@ public static class DiagnosticRules
         var issues = new List<UserIssue>();
         var full = snapshot.Full;
         if (full is not null) issues.AddRange(GetKernelPowerBugcheckIssues(full.Events));
-        if (snapshot.LastBootAt is { } boot && snapshot.StartedAt - boot > TimeSpan.FromDays(8))
-            issues.Add(new("Компьютер давно не перезагружали",
-                $"Последняя перезагрузка была {(int)(snapshot.StartedAt - boot).TotalDays} дней назад. Сохраните открытые документы и перезагрузите компьютер, когда закончите работу.", "Warning"));
+        if (snapshot.ActiveUptimeHours is >= 60)
+            issues.Add(new("Компьютер долго работает без перезагрузки",
+                $"После последнего запуска компьютер проработал {snapshot.ActiveUptimeHours:N0} ч (сон и гибернация не учитываются). Сохраните открытые документы и перезагрузите компьютер, когда закончите работу.", "Warning"));
         if (snapshot.WindowsBuild is int windowsBuild && windowsBuild < 17763)
             issues.Add(new("Версия Windows устарела", $"Установлена {FormatWindows(snapshot)}. Это ниже Windows 10 версии 1809 (сборка 17763); система давно не получает актуальную поддержку и обновления безопасности.", "Warning"));
         var sample = full?.ResourceSampling is { Samples: >= 6, Error: "" } complete ? complete : null;
@@ -131,8 +131,8 @@ public static class DiagnosticRules
     public static IReadOnlyList<string> GetFindings(DiagnosticSnapshot snapshot)
     {
         var findings = new List<string>();
-        if (snapshot.LastBootAt is { } boot && snapshot.StartedAt - boot > TimeSpan.FromDays(8))
-            findings.Add($"Windows не перезагружалась {(int)(snapshot.StartedAt - boot).TotalDays} дней. Перед перезагрузкой сохраните открытые документы.");
+        if (snapshot.ActiveUptimeHours is >= 60)
+            findings.Add($"Наработка после последнего запуска: {snapshot.ActiveUptimeHours:N0} ч (порог 60 ч, без сна и гибернации).");
         if (snapshot.WindowsBuild is int windowsBuild && windowsBuild < 17763)
             findings.Add($"Windows ниже версии 1809: {FormatWindows(snapshot)}.");
         var sample = snapshot.Full?.ResourceSampling is { Samples: >= 6, Error: "" } complete ? complete : null;

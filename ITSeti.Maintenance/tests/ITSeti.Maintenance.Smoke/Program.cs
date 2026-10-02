@@ -172,12 +172,12 @@ internal static class Program
                 using (var rmsKey = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\TektonIT\RMS Host\Host\Parameters"))
                     if (rmsKey?.GetValue("InternetId") is byte[] && new MachineIdentityStore().Read().RmsId is null)
                         throw new Exception("Installed RMS Internet ID was not detected");
-                var oldBoot = first with { LastBootAt = first.StartedAt - TimeSpan.FromDays(9) };
-                var rebootIssue = DiagnosticRules.GetUserIssues(oldBoot).FirstOrDefault(i => i.Title.Contains("перезагружали"));
-                if (rebootIssue is null || !rebootIssue.Detail.Contains("9 дней назад") || !rebootIssue.Detail.Contains("Сохраните открытые документы"))
-                    throw new Exception("Old-boot warning is missing");
-                if (DiagnosticRules.GetUserIssues(first with { LastBootAt = first.StartedAt - TimeSpan.FromDays(8) })
-                    .Any(i => i.Title.Contains("перезагружали"))) throw new Exception("Eight-day reboot boundary is wrong");
+                var longRunning = first with { ActiveUptimeHours = 61 };
+                var rebootIssue = DiagnosticRules.GetUserIssues(longRunning).FirstOrDefault(i => i.Title.Contains("перезагрузки"));
+                if (rebootIssue is null || !rebootIssue.Detail.Contains("61 ч") || !rebootIssue.Detail.Contains("Сохраните открытые документы"))
+                    throw new Exception("60-hour uptime warning is missing");
+                if (DiagnosticRules.GetUserIssues(first with { ActiveUptimeHours = 59 })
+                    .Any(i => i.Title.Contains("перезагрузки"))) throw new Exception("60-hour uptime boundary is wrong");
                 var hasQuickDiskHealth = first.QuickDisks is { Count: > 0 };
                 if (hasQuickDiskHealth
                     ? !window.ViewModel.UserDiskHealth.Contains("по данным Windows") || !window.ViewModel.Coverage.Contains("полной диагностике")
