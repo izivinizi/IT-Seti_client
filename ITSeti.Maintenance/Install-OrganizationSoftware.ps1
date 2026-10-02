@@ -12,7 +12,7 @@ $packages = @{
     Panel = @{ File = 'DesktopInfo3230.exe'; Hash = 'BE653BF81088855640BD7F2D42D682BCB2731C71F390A83928D68AB6E707021C' }
 }
 $panelHashes = @{
-    'DesktopInfo.ini' = 'C5BEEA181AB32B4677C7478D6B2B0026969881DE11E7167077085D5A07A85D23'
+    'DesktopInfo.ini' = '8DC7F238E102200846E193B61A3EF53B592B0396190562E823F571BD0F94EEF8'
     'update-support-ids.ps1' = '61492DCC75D988778E12925C8CB0F4867C15BEC8B022E6EEA31C9B5BBE7C8617'
     'start-panel.vbs' = 'BBB7894DFEF424A161BCEE4C058AFA64B7C949B5C0074DC937CE56476932C8B5'
 }
@@ -31,21 +31,18 @@ function Write-InstallLog([string]$Message) {
     Add-Content -LiteralPath (Join-Path $directory 'install.log') -Value ('{0:yyyy-MM-dd HH:mm:ss}  {1}' -f (Get-Date), $Message) -Encoding UTF8
 }
 
-function Find-SetupSource {
+function Find-SetupSource([string[]]$RequiredFiles) {
     $candidates = New-Object Collections.Generic.List[string]
     if ($InstallerDirectory) {
         $candidates.Add((Join-Path $InstallerDirectory 'ITSETI-Setup'))
         $candidates.Add((Join-Path $InstallerDirectory 'Setup\ITSETI-Setup'))
         $candidates.Add($InstallerDirectory)
     }
-    $required = @($packages.Values | ForEach-Object { $_.File })
-    return @($candidates | Select-Object -Unique | Where-Object {
-        $root = Join-Path $_ 'system\packages'
-        (Test-Path -LiteralPath (Join-Path $root $required[0]) -PathType Leaf) -and
-        (Test-Path -LiteralPath (Join-Path $root $required[1]) -PathType Leaf) -and
-        (Test-Path -LiteralPath (Join-Path $root $required[2]) -PathType Leaf) -and
-        (Test-Path -LiteralPath (Join-Path $root $required[3]) -PathType Leaf)
-    } | Select-Object -First 1)
+    foreach ($candidate in @($candidates | Select-Object -Unique)) {
+        $root = Join-Path $candidate 'system\packages'
+        $missing = @($RequiredFiles | Where-Object { !(Test-Path -LiteralPath (Join-Path $root $_) -PathType Leaf) })
+        if ($missing.Count -eq 0) { return $candidate }
+    }
 }
 
 function Test-PinnedFile([string]$Path, [string]$ExpectedHash) {
@@ -57,10 +54,18 @@ function Test-PanelFiles([string]$Root) {
     foreach ($name in $panelHashes.Keys) {
         $path = Join-Path $Root ('system\panel\' + $name)
         if (!(Test-Path -LiteralPath $path -PathType Leaf) -or
-            (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $panelHashes[$name]) {
+            (Get-PanelFileHash $path) -ne $panelHashes[$name]) {
             throw "Panel file failed verification: $name"
         }
     }
+}
+
+function Get-PanelFileHash([string]$Path) {
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $normalized = [Text.Encoding]::UTF8.GetBytes(([Text.Encoding]::UTF8.GetString($bytes)).Replace([Environment]::NewLine, [string][char]10))
+    $hash = [Security.Cryptography.SHA256]::Create()
+    try { return [BitConverter]::ToString($hash.ComputeHash($normalized)).Replace('-', '') }
+    finally { $hash.Dispose() }
 }
 
 function Invoke-Installer([string]$File, [string[]]$Arguments, [int]$TimeoutSeconds = 900) {
@@ -181,11 +186,11 @@ function Install-Component([string]$Name, [string]$Root) {
 }
 
 try {
-    $source = Find-SetupSource
-    if (!$source.Count) { Save-Result 'Встроенный комплект ПО ИТ-Сети не найден.'; exit 2 }
+    $selected = if ($Component) { @($Component) } else { @('AnyDesk', 'RMS', 'OCS', 'Panel') }
+    $source = Find-SetupSource -RequiredFiles @($selected | ForEach-Object { $packages[$_].File })
+    if (!$source) { Save-Result 'Встроенный комплект ПО ИТ-Сети не найден.'; exit 2 }
     $source = [IO.Path]::GetFullPath([string]$source)
 
-    $selected = if ($Component) { @($Component) } else { @('AnyDesk', 'RMS', 'OCS', 'Panel') }
     foreach ($name in $selected) {
         $package = $packages[$name]
         $path = Join-Path $source ('system\packages\' + $package.File)

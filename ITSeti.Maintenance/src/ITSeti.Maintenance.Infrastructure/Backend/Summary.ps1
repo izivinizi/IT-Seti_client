@@ -98,7 +98,7 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
     $previousSmart=@(); $previousNotes=@()
     if($script:PreserveDiskSnapshot){$previousSmart=@($script:Snapshot.Smart | Where-Object {$_});$previousNotes=@($script:Snapshot.Notes | Where-Object {$_})}
     $script:PreserveDiskSnapshot=$false
-    $script:Snapshot = @{Notes=$previousNotes; Processes=@(); Events=@(); Volumes=@(); Disks=@(); Smart=$previousSmart; CPU='нет данных'; GPU='нет данных'; CpuTemperatureC=$null; CpuTemperatureStatus=$null; MemoryType='нет данных'; TotalRAM=$null; FreeRAM=$null; Load=$null; LastBootAt=$null; EventLimited=$false; EventUnavailable=0; ProcessUnavailable=0}
+    $script:Snapshot = @{Notes=$previousNotes; Processes=@(); Events=@(); Volumes=@(); Disks=@(); Smart=$previousSmart; CPU='нет данных'; GPU='нет данных'; CpuTemperatureC=$null; CpuTemperatureStatus=$null; MemoryType='нет данных'; TotalRAM=$null; FreeRAM=$null; Load=$null; LastBootAt=$null; ActiveUptimeHours=$null; EventLimited=$false; EventUnavailable=0; ProcessUnavailable=0}
     $s=$script:Snapshot
     if(Get-Command Start-WindowsUpdatePolicyChange -ErrorAction SilentlyContinue){Start-WindowsUpdatePolicyChange}
     Set-DesignatedAdminPasswordPolicy $s
@@ -124,6 +124,7 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
         $buildNumber=0
         if([int]::TryParse($buildText,[ref]$buildNumber)){$s.WindowsBuild=$buildNumber}
         try {$s.LastBootAt=([DateTimeOffset]([Management.ManagementDateTimeConverter]::ToDateTime($os.LastBootUpTime))).ToString('o')} catch {$s.Notes+=('Время последней загрузки: '+$_.Exception.Message)}
+        $s.ActiveUptimeHours=Get-ActiveUptimeHours
         $s.TotalRAM=[double]$os.TotalVisibleMemorySize/1MB
         $loads=@(); $free=@()
         for($i=0;$i -lt $Samples;$i++) {

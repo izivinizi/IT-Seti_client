@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -17,12 +18,20 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
     private static Task<DiagnosticSnapshot> CaptureAsync(bool includeDiskHealth, bool readTemperature, CancellationToken cancellationToken) => Task.Run(async () =>
     {
         var started = DateTimeOffset.Now;
-        var before = ReadCpu();
+        (ulong Idle, ulong Kernel, ulong User)? before = null;
+        try { before = ReadCpu(); } catch (Win32Exception) { }
         await Task.Delay(1500, cancellationToken);
-        var after = ReadCpu();
-        var total = (after.Kernel - before.Kernel) + (after.User - before.User);
-        if (total == 0) throw new InvalidOperationException("Не удалось получить замер CPU. Повторите проверку.");
-        var cpu = Math.Clamp(100.0 * (total - (after.Idle - before.Idle)) / total, 0, 100);
+        (ulong Idle, ulong Kernel, ulong User)? after = null;
+        try { after = ReadCpu(); } catch (Win32Exception) { }
+        double? nativeCpu = null;
+        if (before is { } first && after is { } second &&
+            second.Idle >= first.Idle && second.Kernel >= first.Kernel && second.User >= first.User)
+        {
+            var total = (second.Kernel - first.Kernel) + (second.User - first.User);
+            if (total > 0) nativeCpu = Math.Clamp(100.0 * (total - Math.Min(total, second.Idle - first.Idle)) / total, 0, 100);
+        }
+        var cpu = nativeCpu is > 0.5 and < 99.5
+            ? nativeCpu.Value : await ReadCpuFallbackAsync(cancellationToken) ?? nativeCpu ?? -1;
         var memory = new MemoryStatus { Length = (uint)Marshal.SizeOf<MemoryStatus>() };
         if (!GlobalMemoryStatusEx(ref memory)) throw new Win32Exception(Marshal.GetLastWin32Error());
         var disks = new List<DiskSnapshot>();
@@ -49,7 +58,8 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
             memory.TotalPhysical, memory.AvailablePhysical, disks, notes, QuickDisks: physicalDisks,
             LastBootAt: DateTimeOffset.Now - TimeSpan.FromMilliseconds(Environment.TickCount64),
             WindowsEdition: windows.Edition, WindowsRelease: windows.Release, WindowsBuild: windows.Build,
-            CpuTemperatureC: temperature.TemperatureC, CpuTemperatureStatus: temperature.Status);
+            CpuTemperatureC: temperature.TemperatureC, CpuTemperatureStatus: temperature.Status,
+            ActiveUptimeHours: ReadActiveUptimeHours());
     }, cancellationToken);
 
     private static (string? Edition, string? Release, int? Build) ReadWindowsDetails()
@@ -109,6 +119,78 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
         return (idle.Value, kernel.Value, user.Value);
     }
 
+    private static double? ReadActiveUptimeHours()
+    {
+        return QueryUnbiasedInterruptTime(out var ticks) ? ticks / 36_000_000_000.0 : null;
+    }
+
+    private static async Task<double?> ReadCpuFallbackAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+            using var process = new Process { StartInfo = new ProcessStartInfo(powershell)
+            {
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true,
+                ArgumentList = { "-NoProfile", "-Command",
+                    "([double](Get-WmiObject Win32_PerfFormattedData_PerfOS_Processor -Filter \"Name='_Total'\" -ErrorAction Stop).PercentProcessorTime).ToString([Globalization.CultureInfo]::InvariantCulture)" }
+            } };
+            if (!process.Start()) return await ReadProcessCpuAsync(cancellationToken);
+            var output = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
+            try { await process.WaitForExitAsync(timeout.Token); }
+            catch (OperationCanceledException)
+            {
+                try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+                if (cancellationToken.IsCancellationRequested) throw;
+                return await ReadProcessCpuAsync(cancellationToken);
+            }
+            double? wmi = process.ExitCode == 0 && double.TryParse((await output).Trim(),
+                NumberStyles.Float, CultureInfo.InvariantCulture, out var value) && value is >= 0 and <= 100
+                ? value : null;
+            return wmi is > 0.5 and < 99.5 ? wmi : await ReadProcessCpuAsync(cancellationToken) ?? wmi;
+        }
+        catch (Exception ex) when (ex is Win32Exception or IOException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            return await ReadProcessCpuAsync(cancellationToken);
+        }
+    }
+
+    private static async Task<double?> ReadProcessCpuAsync(CancellationToken cancellationToken)
+    {
+        static Dictionary<int, TimeSpan> Sample()
+        {
+            var times = new Dictionary<int, TimeSpan>();
+            foreach (var process in Process.GetProcesses())
+            {
+                using (process)
+                {
+                    try { if (process.Id != 0) times[process.Id] = process.TotalProcessorTime; }
+                    catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or UnauthorizedAccessException) { }
+                }
+            }
+            return times;
+        }
+        try
+        {
+            var before = Sample();
+            var watch = Stopwatch.StartNew();
+            await Task.Delay(750, cancellationToken);
+            var after = Sample();
+            watch.Stop();
+            if (before.Count == 0 || after.Count == 0) return null;
+            var seconds = after.Where(item => before.ContainsKey(item.Key))
+                .Sum(item => Math.Max(0, (item.Value - before[item.Key]).TotalSeconds));
+            return Math.Clamp(seconds / (watch.Elapsed.TotalSeconds * Environment.ProcessorCount) * 100, 0, 100);
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct NativeFileTime
     {
@@ -128,6 +210,10 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetSystemTimes(out NativeFileTime idle, out NativeFileTime kernel, out NativeFileTime user);
+
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryUnbiasedInterruptTime(out ulong unbiasedTime);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

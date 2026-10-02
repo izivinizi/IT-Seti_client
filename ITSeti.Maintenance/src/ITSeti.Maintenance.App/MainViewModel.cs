@@ -191,8 +191,9 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         ? "IP: " + string.Join(", ", identity.IpAddresses.Take(3)) + (identity.IpAddresses.Count > 3 ? $" (+{identity.IpAddresses.Count - 3})" : "")
         : "IP: нет подключения";
     public string UserIpTooltip => identity.IpAddresses.Count > 0 ? string.Join(Environment.NewLine, identity.IpAddresses) : "IP-адреса не обнаружены";
-    public string UserUptimeLabel => UserSnapshot?.LastBootAt is { } boot
-        ? $"Последний запуск Windows: {boot.LocalDateTime:dd.MM.yyyy HH:mm}" : "";
+    public string UserUptimeLabel => UserSnapshot?.ActiveUptimeHours is { } hours
+        ? $"Наработка после запуска: {hours:N0} ч"
+        : UserSnapshot?.LastBootAt is { } boot ? $"Последний запуск Windows: {boot.LocalDateTime:dd.MM.yyyy HH:mm}" : "";
     public void RefreshIdentity()
     {
         identity = identityStore.Read();
@@ -767,7 +768,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             }
             if (unexpectedAdminAccounts.Count > 0)
                 issues.Add(new UserIssue("Проверьте состав локальных администраторов",
-                    string.Join(", ", unexpectedAdminAccounts) + ". Допустимые локальные учётные записи: Admin и it-seti.", "Warning"));
+                    string.Join(", ", unexpectedAdminAccounts) + ".", "Warning"));
             if (currentAccountUnexpectedAdministrator)
                 issues.Add(new UserIssue("Текущая учётная запись пользователя имеет права администратора",
                     "Для обычной рабочей учётной записи рекомендуется убрать членство в группе Администраторы.", "Warning"));

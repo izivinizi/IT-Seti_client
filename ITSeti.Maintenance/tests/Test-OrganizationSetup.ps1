@@ -17,6 +17,14 @@ try {
     if($rejection -notmatch 'verification failed' -or !($names | Where-Object { $rejection -match [regex]::Escape($_) })){
         throw 'A tampered package was not rejected before installation.'
     }
+    $singleRoot=Join-Path $testRoot 'single'
+    $singlePackages=Join-Path $singleRoot 'ITSETI-Setup\system\packages'
+    New-Item -ItemType Directory -Path $singlePackages -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $singlePackages $names[1]),'unsigned test fixture')
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $rootPath 'Install-OrganizationSoftware.ps1') -InstallerDirectory $singleRoot -ResultFile $result -PreflightOnly -Component RMS
+    if($LASTEXITCODE -ne 2 -or (Get-Content -LiteralPath $result -Raw) -notmatch 'signature/hash verification failed'){
+        throw 'A single staged component must reach hash verification without the other packages.'
+    }
     $iss=[IO.File]::ReadAllText((Join-Path $rootPath 'Installer.iss'))
     if(([regex]::Matches($iss,'Name: "\{autodesktop\}')).Count -ne 1){throw 'Installer creates more than one desktop shortcut.'}
     if($iss -notmatch 'SoftwareCheck := TNewCheckBox.Create' -or

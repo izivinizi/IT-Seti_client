@@ -177,7 +177,7 @@ if($updateRunner -match 'Verb\s*=\s*"runas"' -or !$updateRunner.Contains('ITSeti
     throw 'Software installation and application updates must use installed SYSTEM tasks without UAC prompts.'
 }
 $installerDefinition=[IO.File]::ReadAllText((Join-Path $Root 'Installer.iss'),[Text.Encoding]::UTF8)
-if($installerDefinition -notmatch '(?m)^PrivilegesRequired=admin$') {throw 'Setup must require administrator rights.'}
+if($installerDefinition -notmatch '(?m)^PrivilegesRequired=admin\r?$') {throw 'Setup must require administrator rights.'}
 $bootstrap=[IO.File]::ReadAllText((Join-Path $Root 'Install-ITSeti.ps1'),[Text.Encoding]::UTF8)
 if($bootstrap -match 'LoadUserProfile' -or !$bootstrap.Contains('NativeErrorCode') -or !$bootstrap.Contains("Get-Service -Name 'seclogon'") -or !$bootstrap.Contains('Start-AdministratorHelper -PowerShell $powershell') -or !$bootstrap.Contains('[Diagnostics.Process]::Start($start)') -or !$bootstrap.Contains('Start-Process -FilePath $setup -Verb RunAs')) {throw 'Credential bootstrap must launch as the selected administrator and fall back to the Windows UAC prompt.'}
 if($install -notmatch 'ITSeti-Maintenance-Quick' -or $install -notmatch 'CurrentVersion\\Run') {throw 'Quick-check startup is missing.'}

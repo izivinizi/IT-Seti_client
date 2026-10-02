@@ -1,6 +1,6 @@
 $ErrorActionPreference='Stop'
 $OutputRoot=Join-Path $PSScriptRoot 'dist\Win7'
-$project=Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.Win7\ITSeti.Maintenance.Win7.csproj'
+$project=Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.Win7.Port\ITSeti.Maintenance.Win7.Port.csproj'
 $package=Join-Path $OutputRoot 'Package'
 $app=Join-Path $package 'App'
 $tools=Join-Path $package 'Tools\CrystalDiskInfo'
@@ -55,3 +55,18 @@ $installer=Join-Path $OutputRoot 'ITSeti-Maintenance-Win7-Setup.exe'
 if(!(Test-Path -LiteralPath $installer -PathType Leaf)){throw 'Installer output missing.'}
 Write-Host ('Win7 installer: '+$installer)
 Write-Host ('SHA256: '+(Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash)
+$projectXml=New-Object System.Xml.XmlDocument
+$projectXml.Load($project)
+$version=([string]$projectXml.SelectSingleNode('/Project/PropertyGroup/Version').InnerText) -replace '-beta$',''
+if($version -notmatch '^\d+\.\d+\.\d+$'){throw "Invalid Win7 application version: $version"}
+$tag="v$version-win7-beta"
+$manifest=[ordered]@{
+    version=$version
+    tag=$tag
+    assetName='ITSeti-Maintenance-Win7-Setup.exe'
+    size=(Get-Item -LiteralPath $installer).Length
+    digest='sha256:'+((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant())
+    downloadUrl="https://github.com/izivinizi/IT-Seti_client/releases/download/$tag/ITSeti-Maintenance-Win7-Setup.exe"
+}
+[IO.File]::WriteAllText((Join-Path (Split-Path $PSScriptRoot -Parent) 'release-win7.json'),
+    ($manifest | ConvertTo-Json),[Text.UTF8Encoding]::new($false))

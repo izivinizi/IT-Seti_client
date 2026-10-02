@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Management;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -78,7 +79,9 @@ namespace ITSeti.Maintenance.Win7
         public string AnyDeskId { get; set; }
         public string CheckedAt { get; set; }
         public string LastBootAt { get; set; }
+        public double? ActiveUptimeHours { get; set; }
         public double? CpuPercent { get; set; }
+        public string CpuSource { get; set; }
         public double? CpuTemperatureC { get; set; }
         public double? TotalMemoryGb { get; set; }
         public double? FreeMemoryGb { get; set; }
@@ -106,8 +109,9 @@ namespace ITSeti.Maintenance.Win7
                 "Серийный номер: " + (string.IsNullOrWhiteSpace(SerialNumber) ? "не получен" : SerialNumber),
                 "Инв. №: " + (InventoryNumber ?? "не указан") + " | RMS: " + (RmsId ?? "не найден") + " | AnyDesk: " + (AnyDeskId ?? "не найден"),
                 "Последний запуск: " + (LastBootAt ?? "нет данных"),
-                "CPU: " + (CpuName ?? "не определён") + " · " + (CpuPercent.HasValue ? CpuPercent.Value.ToString("N0") + "%" : "нет данных") +
-                    " · " + (CpuTemperatureC.HasValue ? CpuTemperatureC.Value.ToString("N0") + " °C" : "температура недоступна"),
+                "Наработка после запуска: " + (ActiveUptimeHours.HasValue ? ActiveUptimeHours.Value.ToString("N0") + " ч" : "нет данных"),
+                "CPU: " + (CpuName ?? "не определён") + " · " + (CpuPercent.HasValue && CpuPercent.Value > 0 ? (CpuPercent.Value < 1 ? "<1%" : CpuPercent.Value.ToString("N0") + "%") : "нет данных") +
+                    " · источник: " + (CpuSource ?? "старый отчёт") + " · " + (CpuTemperatureC.HasValue ? CpuTemperatureC.Value.ToString("N0") + " °C" : "температура недоступна"),
                 "GPU: " + (GpuName ?? "не определена") + " | Память: " + (MemoryType ?? "тип не определён"),
                 "ОЗУ: " + (TotalMemoryGb.HasValue ? string.Format("{0:N1} ГБ, свободно {1:N1} ГБ", TotalMemoryGb, FreeMemoryGb) : "нет данных"),
                 "SMART: " + (SmartSummary ?? "нет данных"),
@@ -142,6 +146,10 @@ namespace ITSeti.Maintenance.Win7
 
     public static class LegacyDiagnostics
     {
+        [DllImport("kernel32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool QueryUnbiasedInterruptTime(out ulong ticks);
+
         public static LegacySnapshot Collect(bool full = false)
         {
             var snapshot = new LegacySnapshot
@@ -163,6 +171,14 @@ namespace ITSeti.Maintenance.Win7
 
         private static void CollectSystem(LegacySnapshot result)
         {
+            ulong activeTicks;
+            if (QueryUnbiasedInterruptTime(out activeTicks))
+            {
+                result.ActiveUptimeHours = activeTicks / 36000000000.0;
+                if (result.ActiveUptimeHours >= 60)
+                    result.Findings.Add("Компьютер проработал " + result.ActiveUptimeHours.Value.ToString("N0") +
+                        " ч без перезагрузки (без сна и гибернации). Сохраните документы и перезагрузите его.");
+            }
             try
             {
                 using (var query = new ManagementObjectSearcher("root\\cimv2", "SELECT Caption,Version,ServicePackMajorVersion,LastBootUpTime,TotalVisibleMemorySize,FreePhysicalMemory FROM Win32_OperatingSystem"))
@@ -203,42 +219,13 @@ namespace ITSeti.Maintenance.Win7
 
         private static void CollectCpu(LegacySnapshot result)
         {
-            try
-            {
-                var samples = new List<double>();
-                for (var i = 0; i < 3; i++)
-                {
-                    try
-                    {
-                        using (var query = new ManagementObjectSearcher("root\\cimv2", "SELECT PercentProcessorTime FROM Win32_PerfFormattedData_PerfOS_Processor WHERE Name='_Total'"))
-                        using (var values = query.Get())
-                        {
-                            var cpu = values.Cast<ManagementObject>().FirstOrDefault();
-                            double value;
-                            if (cpu != null && double.TryParse(Convert.ToString(cpu["PercentProcessorTime"]), out value) && value >= 0 && value <= 100)
-                                samples.Add(value);
-                        }
-                    }
-                    catch (ManagementException) { break; }
-                    if (i < 2) Thread.Sleep(600);
-                }
-                if (samples.Count == 0)
-                {
-                    using (var query = new ManagementObjectSearcher("root\\cimv2", "SELECT LoadPercentage FROM Win32_Processor"))
-                    using (var values = query.Get())
-                        foreach (ManagementObject processor in values)
-                        {
-                            double value;
-                            if (double.TryParse(Convert.ToString(processor["LoadPercentage"]), out value) && value >= 0 && value <= 100)
-                                samples.Add(value);
-                        }
-                }
-                if (samples.Count == 0) throw new InvalidOperationException("Счётчики CPU не вернули значение.");
-                samples.Sort();
-                result.CpuPercent = samples[samples.Count / 2];
-                if (result.CpuPercent >= 85) result.Findings.Add("Высокая загрузка процессора; повторите замер при обычной работе.");
-            }
-            catch (Exception ex) { result.Unavailable.Add("Загрузка CPU: " + ex.Message); }
+            string source;
+            result.CpuPercent = CpuLoadSampler.Read(out source);
+            result.CpuSource = source;
+            if (!result.CpuPercent.HasValue)
+                result.Unavailable.Add("Загрузка CPU: счётчики Windows и замер процессов не дали достоверного значения.");
+            else if (result.CpuPercent >= 85)
+                result.Findings.Add("Высокая загрузка процессора; повторите замер при обычной работе.");
         }
 
         private static void CollectDisks(LegacySnapshot result)

@@ -1,5 +1,7 @@
 using System;
+using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 
@@ -25,6 +27,14 @@ namespace ITSeti.Maintenance.Win7
             acl.AddAccessRule(new FileSystemAccessRule(admins, FileSystemRights.FullControl, children, PropagationFlags.None, AccessControlType.Allow));
             acl.AddAccessRule(new FileSystemAccessRule(users, FileSystemRights.ReadAndExecute, children, PropagationFlags.None, AccessControlType.Allow));
             new DirectoryInfo(folder).SetAccessControl(acl);
+            var inventoryDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "ITSeti", "Maintenance");
+            Directory.CreateDirectory(inventoryDirectory);
+            var inventory = Path.Combine(inventoryDirectory, "inventory.txt");
+            if (!File.Exists(inventory)) File.WriteAllText(inventory, "");
+            var inventoryAcl = new FileInfo(inventory).GetAccessControl();
+            inventoryAcl.AddAccessRule(new FileSystemAccessRule(users, FileSystemRights.Modify, AccessControlType.Allow));
+            new FileInfo(inventory).SetAccessControl(inventoryAcl);
             var oldReport = Path.Combine(folder, "smart.json");
             if (File.Exists(oldReport)) File.Delete(oldReport);
             var oldBenchmark = Path.Combine(folder, "benchmark.json");
@@ -35,9 +45,10 @@ namespace ITSeti.Maintenance.Win7
             dynamic root = service.GetFolder("\\");
             RegisterTask(service, root, SmartTaskRunner.TaskName, "--collect-smart", "PT1M", "Сбор SMART");
             RegisterTask(service, root, BenchmarkTaskRunner.TaskName, "--collect-benchmark", "PT5M", "Тест системного диска DiskSpd");
+            RegisterTask(service, root, ScheduledCheckRunner.TaskName, "--scheduled-check", "PT15M", "Плановая проверка раз в 14 дней", 14);
         }
 
-        private static void RegisterTask(dynamic service, dynamic root, string name, string arguments, string timeLimit, string description)
+        private static void RegisterTask(dynamic service, dynamic root, string name, string arguments, string timeLimit, string description, int intervalDays = 0)
         {
             dynamic task = service.NewTask(0);
             task.RegistrationInfo.Description = "ИТ-Сети Windows 7: " + description;
@@ -48,15 +59,32 @@ namespace ITSeti.Maintenance.Win7
             task.Settings.MultipleInstances = 2;
             task.Settings.DisallowStartIfOnBatteries = false;
             task.Settings.StopIfGoingOnBatteries = false;
+            if (intervalDays > 0)
+            {
+                task.Settings.StartWhenAvailable = true;
+                var start = DateTime.Today.AddDays(1).AddHours(3).ToString("yyyy-MM-ddTHH:mm:ss");
+                try
+                {
+                    dynamic existing = root.GetTask(name);
+                    var previous = Convert.ToString(existing.Definition.Triggers.Item(1).StartBoundary);
+                    if (!string.IsNullOrWhiteSpace(previous)) start = previous;
+                }
+                catch (COMException ex) when ((uint)ex.HResult == 0x80070002) { }
+                dynamic trigger = task.Triggers.Create(2);
+                trigger.StartBoundary = start;
+                trigger.DaysInterval = intervalDays;
+            }
             task.Principal.UserId = "SYSTEM";
             task.Principal.LogonType = 5;
             task.Principal.RunLevel = 1;
             dynamic action = task.Actions.Create(0);
-            action.Path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ITSeti.Maintenance.Win7.exe");
+            action.Path = Process.GetCurrentProcess().MainModule.FileName;
             action.Arguments = arguments;
             action.WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
             dynamic registered = root.RegisterTaskDefinition(name, task, 6, "SYSTEM", null, 5, null);
-            registered.SetSecurityDescriptor("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;AU)", 0);
+            registered.SetSecurityDescriptor(intervalDays > 0
+                ? "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GR;;;AU)"
+                : "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;AU)", 0);
         }
 
         public static void Unregister()
@@ -69,6 +97,8 @@ namespace ITSeti.Maintenance.Win7
             catch (System.Runtime.InteropServices.COMException ex) when ((uint)ex.HResult == 0x80070002) { }
             try { root.DeleteTask(BenchmarkTaskRunner.TaskName, 0); }
             catch (System.Runtime.InteropServices.COMException ex) when ((uint)ex.HResult == 0x80070002) { }
+            try { root.DeleteTask(ScheduledCheckRunner.TaskName, 0); }
+            catch (System.Runtime.InteropServices.COMException ex) when ((uint)ex.HResult == 0x80070002) { }
         }
 
         private static void RequireElevatedInstall()
@@ -76,7 +106,7 @@ namespace ITSeti.Maintenance.Win7
             using (var identity = WindowsIdentity.GetCurrent())
             {
                 if (!new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))
-                    throw new UnauthorizedAccessException("Установка задачи SMART требует запустить установщик от администратора.");
+                    throw new UnauthorizedAccessException("Установка задач обслуживания требует запустить установщик от администратора.");
             }
             var current = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar);
             var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);

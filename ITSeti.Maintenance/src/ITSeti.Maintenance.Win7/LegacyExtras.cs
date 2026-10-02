@@ -46,11 +46,11 @@ namespace ITSeti.Maintenance.Win7
             catch (Exception ex) { snapshot.Unavailable.Add("Видеокарта: " + ex.Message); }
             try
             {
-                using (var search = new ManagementObjectSearcher("root\\cimv2", "SELECT SMBIOSMemoryType FROM Win32_PhysicalMemory"))
+                using (var search = new ManagementObjectSearcher("root\\cimv2", "SELECT MemoryType FROM Win32_PhysicalMemory"))
                 using (var values = search.Get())
                 {
                     var kinds = values.Cast<ManagementObject>()
-                        .Select(x => Convert.ToInt32(x["SMBIOSMemoryType"] ?? 0))
+                        .Select(x => Convert.ToInt32(x["MemoryType"] ?? 0))
                         .Where(x => x != 0).Distinct().ToArray();
                     snapshot.MemoryType = string.Join(", ", kinds.Select(x => x == 20 ? "DDR" : x == 21 ? "DDR2" : x == 24 ? "DDR3" : x == 26 ? "DDR4" : x == 34 ? "DDR5" : "тип " + x));
                 }
@@ -84,21 +84,21 @@ namespace ITSeti.Maintenance.Win7
 
         private static void CollectIdentity(LegacySnapshot snapshot)
         {
-            var inventory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            var localInventory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "ITSeti", "MaintenanceWin7", "inventory.txt");
             var sharedInventory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                 "ITSeti", "Maintenance", "inventory.txt");
-            try
+            foreach (var inventory in new[] { sharedInventory, localInventory })
             {
-                if (!File.Exists(inventory)) inventory = sharedInventory;
-                if (File.Exists(inventory))
+                try
                 {
+                    if (!File.Exists(inventory)) continue;
                     var value = File.ReadAllText(inventory).Trim();
-                    if (Regex.IsMatch(value, @"^\d{4}$")) snapshot.InventoryNumber = value;
+                    if (Regex.IsMatch(value, @"^\d{4}$")) { snapshot.InventoryNumber = value; break; }
                 }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
             }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
 
             foreach (var path in new[] { @"SOFTWARE\TektonIT\RMS Host\Host\Parameters", @"SOFTWARE\WOW6432Node\TektonIT\RMS Host\Host\Parameters" })
             {

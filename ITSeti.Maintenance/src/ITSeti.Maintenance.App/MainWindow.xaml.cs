@@ -691,17 +691,12 @@ public partial class MainWindow : Window
         try
         {
             var problems = (await OrganizationSetupRunner.CheckAsync(component)).ToList();
-            if (component is null)
-            {
-                foreach (var bundled in new[] { "WinRAR", "Yandex" })
-                    problems.AddRange(await OrganizationSetupRunner.CheckAsync(bundled));
-            }
             if (problems.Count > 0)
             {
                 MessageBox.Show(this, string.Join(Environment.NewLine, problems), "Установка остановлена проверкой комплекта", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            var confirmation = component is null ? "Установить AnyDesk, RMS, OCS, панель ИТ-Сети, WinRAR и Яндекс Браузер?" : $"Установить компонент {component}?";
+            var confirmation = component is null ? "Установить AnyDesk, RMS, OCS и панель ИТ-Сети?" : $"Установить компонент {component}?";
             if (MessageBox.Show(this, confirmation, "Установка ПО", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
 
             ViewModel.SetSetupStatus(component is null ? "Установка комплекта выполняется…" : $"Установка {component} выполняется…");
@@ -719,18 +714,6 @@ public partial class MainWindow : Window
             if (component is null)
             {
                 foreach (var key in new[] { "AnyDesk", "RMS", "OCS", "Panel" }) ViewModel.SetSetupComponentStatus(key, "Установлено");
-                foreach (var key in new[] { "WinRAR", "Yandex" })
-                {
-                    if (ViewModel.SetupComponents.FirstOrDefault(row => row.InstallKey == key)?.State == "Установлено")
-                    {
-                        ViewModel.SetSetupComponentStatus(key, "Уже установлено");
-                        continue;
-                    }
-                    ViewModel.SetSetupComponentStatus(key, "Установка…");
-                    await OrganizationSetupRunner.RunBundledComponentAsync(key, new Progress<string>(message => ViewModel.SetSetupComponentStatus(key, message)));
-                    ViewModel.RefreshSetupAudit();
-                    ViewModel.SetSetupComponentStatus(key, "Установлено");
-                }
             }
             var message = exitCode == 0 ? "Установка завершена. Проверьте состояние компонентов." : $"Установщик вернул код {exitCode}. Проверьте C:\\ProgramData\\ITSETI\\install.log.";
             ViewModel.SetSetupStatus(message);

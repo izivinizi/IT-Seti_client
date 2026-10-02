@@ -20,6 +20,11 @@ namespace ITSeti.Maintenance.Win7
                 try { return BenchmarkTaskRunner.RunWorker(); }
                 catch { return 1; }
             }
+            if (args.Length == 1 && args[0] == "--scheduled-check")
+            {
+                try { return ScheduledCheckRunner.RunWorker(); }
+                catch { return 1; }
+            }
             if (args.Length == 1 && (args[0] == "--register-smart-task" || args[0] == "--unregister-smart-task"))
             {
                 try
