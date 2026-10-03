@@ -1,4 +1,5 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿param([string]$ResultFile)
+$ErrorActionPreference = 'Stop'
 $data = Join-Path $env:ProgramData 'ITSeti\Maintenance\Repairs'
 $root = Join-Path $data ([guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -12,4 +13,11 @@ try {
     [IO.File]::WriteAllText((Join-Path $root 'status.txt'), ('Ошибка: ' + $_.Exception.Message), [Text.Encoding]::UTF8)
 } finally {
     [IO.File]::WriteAllText((Join-Path $root 'finished.txt'), [DateTimeOffset]::Now.ToString('o'), [Text.Encoding]::UTF8)
+    if($ResultFile) {
+        $statusPath=Join-Path $root 'status.txt'
+        $status=if(Test-Path -LiteralPath $statusPath -PathType Leaf){[IO.File]::ReadAllText($statusPath,[Text.Encoding]::UTF8)}else{'No repair status was written.'}
+        $success=$status -match '\|\s*Завершено\.'
+        $report=@{Success=[bool]$success;Status=$status.Trim();RepairRoot=$root} | ConvertTo-Json -Compress
+        [IO.File]::WriteAllText($ResultFile,$report,[Text.Encoding]::UTF8)
+    }
 }

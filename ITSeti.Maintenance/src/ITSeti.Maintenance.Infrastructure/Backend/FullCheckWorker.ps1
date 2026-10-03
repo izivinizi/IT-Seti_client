@@ -18,6 +18,18 @@ $script:WindowsUpdateProcess=$null
 $script:WindowsUpdateStartedAt=$null
 $script:DiskBenchmarkReadyFile=Join-Path $RunRoot 'benchmark-ready.signal'
 function Write-Stage([string]$Text){[IO.File]::WriteAllText((Join-Path $RunRoot 'stage.txt'),$Text,[Text.Encoding]::UTF8)}
+function Assert-CheckNotCancelled {
+    $request=Join-Path $RunRoot 'cancel-request.txt'
+    if(!(Test-Path -LiteralPath $request -PathType Leaf)){return}
+    $value=[IO.File]::ReadAllText($request).Trim()
+    if($value -eq 'cancel'){throw 'Проверка остановлена пользователем.'}
+    if($value -match '^owner:(\d+):(\d+)$'){
+        $owner=Get-Process -Id ([int]$Matches[1]) -ErrorAction SilentlyContinue
+        if(!$owner -or $owner.StartTime.ToUniversalTime().Ticks -ne [long]$Matches[2]){
+            throw 'Проверка остановлена пользователем.'
+        }
+    }
+}
 function Start-WindowsUpdatePolicyChange {
     if($script:SkipWindowsUpdateChange -or !$script:Admin){return}
     $path=Join-Path $RunRoot 'Set-WindowsAutomaticUpdates.ps1'
@@ -114,6 +126,7 @@ function Save-Result([string]$Name,[switch]$Pending) {
 try {
     Start-Transcript -Path (Join-Path $RunRoot 'full-check.log') -Force | Out-Null
     $logging=$true
+    Assert-CheckNotCancelled
     foreach($file in @('Summary.ps1','DiskTools.ps1','Runtime.ps1')){. ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $RunRoot $file),[Text.Encoding]::UTF8)))}
     if(!(Enter-MaintenanceRun -AllowBackgroundMaintenance)){throw 'Повторная диагностика уже выполняется.'}
     Write-Stage 'Подготовка локальных дисковых утилит'
@@ -149,6 +162,7 @@ try {
     }
     Write-Stage 'Замер CPU, ОЗУ и оборудования до дискового теста'
     Get-ServiceSnapshot -Live -StartDiskTest:(!$HeadlessDiskSpd -and !$SkipDiskTests -and !$script:DiskFailure)
+    Assert-CheckNotCancelled
     if($CpuTemperatureFile -and (Test-Path -LiteralPath $CpuTemperatureFile)) {
         try {
             $sensor=Get-Content -LiteralPath $CpuTemperatureFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -164,7 +178,9 @@ try {
     Save-Result 'partial.json' -Pending
     if($script:Sampler) {
         Write-Stage 'Подтверждение нагрузки CPU/ОЗУ и задержки диска за 30 секунд'
-        if(!$script:Sampler.WaitForExit(45000)){
+        $samplerDeadline=[DateTime]::UtcNow.AddSeconds(45)
+        while(!$script:Sampler.WaitForExit(500) -and [DateTime]::UtcNow -lt $samplerDeadline){Assert-CheckNotCancelled}
+        if(!$script:Sampler.HasExited){
             try {$script:Sampler.Kill();[void]$script:Sampler.WaitForExit(5000)} catch {}
             $script:Snapshot.Notes+=@('Замер нагрузки не завершился за 45 секунд; зависший процесс остановлен.')
         }
@@ -181,22 +197,30 @@ try {
         }
     }
     [IO.File]::WriteAllText($script:DiskBenchmarkReadyFile,'ready',[Text.Encoding]::ASCII)
+    Assert-CheckNotCancelled
     if($script:DiskWorker){
         try {Complete-DiskToolsBackground} catch {$script:DiskFailure=$_.Exception.Message}
     }
     Complete-WindowsUpdatePolicyChange
+    Assert-CheckNotCancelled
     Save-Result 'result.json'
     Write-Stage 'Полная диагностика завершена'
 } catch {
-    [IO.File]::WriteAllText((Join-Path $RunRoot 'error.txt'),$_.Exception.Message,[Text.Encoding]::UTF8)
-    Write-Stage ('Ошибка: '+$_.Exception.Message)
+    if($_.Exception.Message -eq 'Проверка остановлена пользователем.'){
+        $script:CheckCancelled=$true
+        Write-Stage 'Проверка остановлена'
+    } else {
+        [IO.File]::WriteAllText((Join-Path $RunRoot 'error.txt'),$_.Exception.Message,[Text.Encoding]::UTF8)
+        Write-Stage ('Ошибка: '+$_.Exception.Message)
+    }
 } finally {
-    if($script:DiskWorker -and !$script:DiskWorker.HasExited -and !(Test-Path -LiteralPath $script:DiskBenchmarkReadyFile)){
-        try {$script:DiskWorker.Kill()} catch {}
+    if($script:DiskWorker -and !$script:DiskWorker.HasExited){
+        try {if(!$script:DiskWorker.WaitForExit(3000)){$script:DiskWorker.Kill()}} catch {}
     }
     if($script:Sampler) {
         try {$script:Sampler.Refresh();if(!$script:Sampler.HasExited){$script:Sampler.Kill();[void]$script:Sampler.WaitForExit(5000)}} catch {}
     }
-    if(Get-Command Exit-MaintenanceRun -ErrorAction SilentlyContinue){Exit-MaintenanceRun}
-    if($logging){Stop-Transcript | Out-Null}
+    if(Get-Command Exit-MaintenanceRun -ErrorAction SilentlyContinue){try {Exit-MaintenanceRun} catch {}}
+    if($logging){try {Stop-Transcript | Out-Null} catch {}}
+    if($script:CheckCancelled){[IO.File]::WriteAllText((Join-Path $RunRoot 'cancelled.txt'),'cancelled',[Text.Encoding]::ASCII)}
 }

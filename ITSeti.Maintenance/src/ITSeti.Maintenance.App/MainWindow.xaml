@@ -47,6 +47,9 @@
      <Button Style="{StaticResource UserPrimaryButton}" Height="74" Click="RunUserFull_Click" IsEnabled="{Binding CanRunFull}" ToolTip="Проверить оборудование, диски, процессы и события">
       <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE9D9;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="White" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Выполнить проверку" FontSize="16" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center" TextWrapping="Wrap"/></Grid>
      </Button>
+     <Button Style="{StaticResource UserSecondaryButton}" Height="60" Margin="0,10,0,0" Click="StopFullCheck_Click" IsEnabled="{Binding CanStopFullCheck}" Visibility="{Binding IsFullCheckRunning, Converter={StaticResource BoolVisibility}}" ToolTip="Остановить текущую проверку">
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><TextBlock Text="&#xE71A;" FontFamily="Segoe MDL2 Assets" Margin="0,1,8,0"/><TextBlock Text="Остановить проверку" FontWeight="SemiBold"/></StackPanel>
+     </Button>
       <Button Style="{StaticResource UserSecondaryButton}" Height="88" Margin="0,10,0,0" Click="RunCleanup_Click" IsEnabled="{Binding CanRunCleanup}" ToolTip="Корзина, временные файлы и кэш пользователя; системно: обновления Windows, оптимизация доставки и пакеты драйверов">
       <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><StackPanel Grid.Column="1" VerticalAlignment="Center"><TextBlock Text="Выполнить очистку" FontSize="16" FontWeight="SemiBold" Foreground="#14419E"/><TextBlock Text="Корзина · временные файлы" FontSize="14" Foreground="#354F68" Margin="0,5,0,0"/></StackPanel></Grid>
      </Button>
@@ -115,6 +118,9 @@
        </Button>
        <Button Click="RunFull_Click" IsEnabled="{Binding CanRunFull}" Height="38" Padding="14,7" Background="#326EFF" Foreground="White" BorderThickness="0" Cursor="Hand" ToolTip="{Binding FullRunHint}">
        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets" Foreground="White" Margin="0,2,8,0"/><TextBlock Text="Полная проверка" Foreground="White" FontWeight="SemiBold"/></StackPanel>
+      </Button>
+      <Button Click="StopFullCheck_Click" IsEnabled="{Binding CanStopFullCheck}" Visibility="{Binding IsFullCheckRunning, Converter={StaticResource BoolVisibility}}" Height="38" Padding="12,7" Margin="8,0,0,0" Cursor="Hand" ToolTip="Остановить текущую проверку">
+       <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE71A;" FontFamily="Segoe MDL2 Assets" Margin="0,1,7,0"/><TextBlock Text="Остановить" FontWeight="SemiBold"/></StackPanel>
       </Button>
      </StackPanel>
     </Grid>

@@ -30,14 +30,14 @@ internal sealed class ScheduledCheckPrompt : Window
         });
         content.Children.Add(new TextBlock
         {
-            Text = "Плановая проверка",
+            Text = "Ночная проверка не завершилась",
             FontSize = 21,
             FontWeight = FontWeights.SemiBold,
             Foreground = new SolidColorBrush(Color.FromRgb(20, 60, 135))
         });
         content.Children.Add(new TextBlock
         {
-            Text = "Плановое восстановление Windows (DISM и SFC) может занять время. Работу можно продолжать; компьютер не будет перезагружен автоматически.",
+            Text = "Полная проверка или восстановление Windows завершились с ошибкой. Повторить проверку в фоне сейчас? Работу можно продолжать; компьютер не будет перезагружен автоматически.",
             FontSize = 16,
             Foreground = new SolidColorBrush(Color.FromRgb(82, 106, 124)),
             TextWrapping = TextWrapping.Wrap,
@@ -47,7 +47,7 @@ internal sealed class ScheduledCheckPrompt : Window
         var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         var run = new Button
         {
-            Content = "Выполнить сейчас",
+            Content = "Повторить сейчас",
             IsDefault = true,
             Padding = new Thickness(13, 9, 13, 9),
             Background = new SolidColorBrush(Color.FromRgb(50, 110, 255)),

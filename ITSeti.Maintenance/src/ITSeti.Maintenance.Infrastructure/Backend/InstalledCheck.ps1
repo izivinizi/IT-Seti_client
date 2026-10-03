@@ -1,22 +1,31 @@
-﻿param([switch]$StartRepair,[switch]$Quick)
+﻿param([switch]$StartRepair,[switch]$Quick,[switch]$ScheduledQuick)
 $ErrorActionPreference='Stop'
 $base=Join-Path $env:ProgramData 'ITSeti\Maintenance'
 $runs=Join-Path $base 'Runs'
 $tools=Join-Path (Split-Path $PSScriptRoot -Parent) 'Tools'
+. (Join-Path $PSScriptRoot 'ScheduledFull.ps1')
+if($StartRepair -and !(Test-ScheduledFullDue $base)){exit 0}
 $run=Join-Path $runs ([guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $run -Force | Out-Null
 trap {
     [IO.File]::WriteAllText((Join-Path $run 'error.txt'), $_.Exception.ToString(), [Text.Encoding]::UTF8)
+    if($StartRepair){[IO.File]::WriteAllText((Join-Path $base 'pending-auto-full-maintenance.txt'),(Split-Path $run -Leaf),[Text.Encoding]::ASCII)}
     exit 1
 }
+$cancelRequest=Join-Path $run 'cancel-request.txt'
+[IO.File]::WriteAllText($cancelRequest,'',[Text.Encoding]::ASCII)
+if(!$StartRepair -and !$ScheduledQuick){
+    & icacls.exe $cancelRequest /grant '*S-1-5-32-545:M' | Out-Null
+    if($LASTEXITCODE -ne 0){throw 'Could not allow the current user to stop the check.'}
+}
 $latestName=if($Quick){'latest-quick.txt'}elseif($StartRepair){'latest-auto-full.txt'}else{'latest-full.txt'}
-if($Quick){
+if($ScheduledQuick){
     $lastRunFile=Join-Path $base 'last-quick-run.txt'
     $lastRun=[DateTimeOffset]::MinValue
     if((Test-Path -LiteralPath $lastRunFile -PathType Leaf) -and
        [DateTimeOffset]::TryParse([IO.File]::ReadAllText($lastRunFile),[ref]$lastRun) -and
        [DateTimeOffset]::UtcNow-$lastRun.ToUniversalTime() -lt [TimeSpan]::FromDays(14)){
-        Remove-Item -LiteralPath $run -Force
+        Remove-Item -LiteralPath $run -Recurse -Force
         exit 0
     }
 }
@@ -88,12 +97,27 @@ foreach($file in @('FullCheckWorker.ps1','HeadlessDiskWorker.ps1','ResourceSampl
 $env:ITSETI_CPU_TEMPERATURE_FILE=$cpuTemperatureFile
 & ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $run 'FullCheckWorker.ps1'),[Text.Encoding]::UTF8))) -RunRoot $run -ToolsRoot $tools -HeadlessDiskSpd -TrustedTools -UserMode:$Quick
 Remove-Item Env:ITSETI_CPU_TEMPERATURE_FILE -ErrorAction SilentlyContinue
+if((Test-Path -LiteralPath $cancelRequest) -and [IO.File]::ReadAllText($cancelRequest).Trim() -eq 'cancel'){
+    [IO.File]::WriteAllText((Join-Path $run 'cancelled.txt'),'cancelled',[Text.Encoding]::ASCII)
+    exit 0
+}
 if(Test-Path -LiteralPath (Join-Path $run 'result.json')){
     [IO.File]::WriteAllText((Join-Path $base 'last-quick-run.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII)
     if($StartRepair){
-        $pending=Join-Path $base 'pending-auto-full-maintenance.txt'
-        $temporary=$pending+'.pending'
-        [IO.File]::WriteAllText($temporary,(Split-Path $run -Leaf),[Text.Encoding]::ASCII)
-        Move-Item -LiteralPath $temporary -Destination $pending -Force
+        [IO.File]::WriteAllText((Join-Path $run 'stage.txt'),'Плановое восстановление Windows',[Text.Encoding]::UTF8)
+        Complete-ScheduledFullCheck $base $run (Join-Path $source 'InstalledRepair.ps1')
+        [IO.File]::WriteAllText((Join-Path $run 'stage.txt'),'Плановое восстановление завершено',[Text.Encoding]::UTF8)
+        Remove-Item -LiteralPath (Join-Path $base 'pending-auto-full-maintenance.txt') -Force -ErrorAction SilentlyContinue
     }
+    elseif(!$Quick){
+        Set-ScheduledFullBaseline $base ([DateTimeOffset]::UtcNow)
+        Remove-Item -LiteralPath (Join-Path $base 'pending-auto-full-maintenance.txt') -Force -ErrorAction SilentlyContinue
+    }
+    $scheduler=Join-Path $env:WINDIR 'System32\schtasks.exe'
+    & $scheduler /Run /TN 'ITSeti-Maintenance-Update' | Out-Null
+    if($LASTEXITCODE -ne 0){[IO.File]::WriteAllText((Join-Path $run 'update-error.txt'),('Update task could not start: '+$LASTEXITCODE),[Text.Encoding]::ASCII)}
+} elseif($StartRepair) {
+    throw 'Scheduled full diagnostic did not produce a result.'
 }
+if(Test-Path -LiteralPath (Join-Path $run 'cancelled.txt')){exit 0}
+[IO.File]::WriteAllText((Join-Path $run 'completed.txt'),'completed',[Text.Encoding]::ASCII)

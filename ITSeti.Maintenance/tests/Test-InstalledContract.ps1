@@ -180,10 +180,10 @@ $installerDefinition=[IO.File]::ReadAllText((Join-Path $Root 'Installer.iss'),[T
 if($installerDefinition -notmatch '(?m)^PrivilegesRequired=admin\r?$') {throw 'Setup must require administrator rights.'}
 $bootstrap=[IO.File]::ReadAllText((Join-Path $Root 'Install-ITSeti.ps1'),[Text.Encoding]::UTF8)
 if($bootstrap -match 'LoadUserProfile' -or !$bootstrap.Contains('NativeErrorCode') -or !$bootstrap.Contains("Get-Service -Name 'seclogon'") -or !$bootstrap.Contains('Start-AdministratorHelper -PowerShell $powershell') -or !$bootstrap.Contains('[Diagnostics.Process]::Start($start)') -or !$bootstrap.Contains('Start-Process -FilePath $setup -Verb RunAs')) {throw 'Credential bootstrap must launch as the selected administrator and fall back to the Windows UAC prompt.'}
-if($install -notmatch 'ITSeti-Maintenance-Quick' -or $install -notmatch 'CurrentVersion\\Run') {throw 'Quick-check startup is missing.'}
+if($install -notmatch 'ITSeti-Maintenance-Status' -or $install -notmatch 'CurrentVersion\\Run') {throw 'Failed-night-check status startup is missing.'}
 $entry=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCheck.ps1'),[Text.Encoding]::UTF8)
 if(!$install.Contains('ITSeti-Maintenance-QuickFull') -or !$install.Contains('-Quick')) {throw 'Installed quick full-check task is missing.'}
-if($install -notmatch 'DaysInterval 14' -or !$install.Contains('ITSeti-Maintenance-AutoFullRepair') -or $install -notmatch 'DaysInterval 60') {throw 'The 14-day night check and 60-day full maintenance schedule must remain.'}
+if($install -notmatch 'DaysInterval 14' -or !$install.Contains('ITSeti-Maintenance-AutoFullRepair') -or !$install.Contains('Initialize-ScheduledFullBaseline') -or !$install.Contains('$autoFullSettings')) {throw 'The 14-day check and gated 60-day full maintenance schedule must remain.'}
 $appSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\App.xaml.cs'),[Text.Encoding]::UTF8)
 $promptSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\ScheduledCheckPrompt.cs'),[Text.Encoding]::UTF8)
 $scheduledQuickStart=$appSource.IndexOf('if (e.Args.Contains("--scheduled-quick"',[StringComparison]::Ordinal)
@@ -192,8 +192,9 @@ $scheduledQuickBlock=if($scheduledQuickStart -ge 0 -and $scheduledQuickEnd -gt $
 if(!$scheduledQuickBlock.Contains('GetPendingAutoFullMaintenance') -or
    !$scheduledQuickBlock.Contains('new ScheduledCheckPrompt().ShowDialog()') -or
    !$scheduledQuickBlock.Contains('full-maintenance-remind-after.txt') -or
-   $entry.Contains('ScheduledCheckPrompt') -or !$promptSource.Contains('DISM и SFC')) {
-    throw 'Only pending 60-day full maintenance may show a prompt; the 14-day SYSTEM quick check must stay unattended.'
+   !$appSource.Contains('Runs", runId, "error.txt"') -or
+   $entry.Contains('ScheduledCheckPrompt') -or !$promptSource.Contains('Повторить проверку')) {
+    throw 'Only a failed night full check may prompt the user; completed and quick checks stay unattended.'
 }
 if(!$install.Contains('ITSeti-Maintenance-DisableUpdates') -or !$install.Contains('ITSeti-Maintenance-RestoreUpdates')) {throw 'Windows Update policy tasks are missing.'}
 $updater=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Update-Application.ps1'
@@ -212,8 +213,9 @@ if(!$install.Contains('ITSeti-Maintenance-Update') -or !$install.Contains('Updat
    !$updaterSource.Contains('downloadUrl') -or $updaterSource -match 'api\.github\.com|runas') {
     throw 'Application update task must be fixed, SYSTEM-only, and validate release SHA-256.'
 }
-if($updaterSource.IndexOf('HttpWebRequest') -gt $updaterSource.IndexOf('$deadline = [DateTime]::UtcNow.AddMinutes(4)')) {
-    throw 'The package must download and pass validation before the user app waits to close.'
+if($updaterSource.IndexOf('HttpWebRequest') -gt $updaterSource.IndexOf("Set-UpdateStatus 'Пакет загружен и проверен. Готов к установке.'") -or
+   !$updaterSource.Contains('Ожидает закрытия приложения.')) {
+    throw 'The package must download and pass validation before deferred installation.'
 }
 $releaseClient=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\GitHubReleaseClient.cs') -Raw
 $releaseRunner=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\ApplicationUpdateRunner.cs') -Raw
@@ -239,14 +241,15 @@ if(!$entry.Contains('[switch]$Quick') -or $entry.Contains('-SkipResourceSampling
    !$entry.Contains('latest-quick.txt') -or !$entry.Contains('latest-full.txt')) {
     throw 'The 14-day SYSTEM check must use full diagnostics and skip runs after a recent full check.'
 }
- $scheduledStart=$window.IndexOf('public async Task<bool> RunScheduledFullMaintenanceAsync',[StringComparison]::Ordinal)
- $scheduledEnd=$window.IndexOf('private void QueueProgressScroll',[StringComparison]::Ordinal)
- $scheduledBody=if($scheduledStart -ge 0 -and $scheduledEnd -gt $scheduledStart){$window.Substring($scheduledStart,$scheduledEnd-$scheduledStart)}else{''}
-if($entry.Contains('-StartRepair:$StartRepair') -or !$entry.Contains('pending-auto-full-maintenance.txt') -or
-   !$appSource.Contains('GetPendingAutoFullMaintenance') -or !$scheduledBody.Contains('RunScheduledRepairAsync') -or
-   $scheduledBody.Contains('RunScheduledCleanupAsync') -or $scheduledBody.Contains('InstallAvailableUpdateAfterFullCheckAsync') -or
-   !$install.Contains('auto-full-maintained.txt')) {
-    throw 'The 60-day planned full check must defer DISM/SFC until login without ordinary cleanup or application updates.'
+if(!$entry.Contains('Test-ScheduledFullDue') -or !$entry.Contains('Complete-ScheduledFullCheck') -or
+   !$entry.Contains('ITSeti-Maintenance-Update') -or !$entry.Contains('cancel-request.txt') -or
+   $window.Contains('RunScheduledFullMaintenanceAsync') -or
+   $window.Contains('InstallAvailableUpdateAfterFullCheckAsync')) {
+    throw 'The full check must repair and request the app update unattended; user checks must be cancellable.'
+}
+if(!$entry.Contains('[switch]$ScheduledQuick') -or !$entry.Contains('if($ScheduledQuick)') -or
+   $install -notmatch 'ITSeti-Maintenance-AutoQuick' -or $install -notmatch '\-ScheduledQuick') {
+    throw 'The scheduled 14-day quick check must not suppress an on-demand quick check.'
 }
 $accountScript=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Create-LocalAdmin.ps1'
 $accountTokens=$null;$accountErrors=$null

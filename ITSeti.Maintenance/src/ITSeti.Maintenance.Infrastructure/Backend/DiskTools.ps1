@@ -48,7 +48,11 @@ function Complete-DiskToolsBackground {
     if(!$script:DiskWorker.HasExited){Write-Host 'Основная проверка готова. Ожидается результат дискового теста...' -ForegroundColor DarkGray}
     $timeout=300; if($script:DiskTestPasses -eq 2){$timeout=480}
     $remaining=[math]::Max(0,$timeout-((Get-Date)-$script:DiskWorkerStarted).TotalSeconds)
-    if(!$script:DiskWorker.WaitForExit([int]($remaining*1000))){throw 'Дисковые утилиты ещё работают. Очистка не запущена; подробности в disk-worker.log. Тест не прерван.'}
+    $deadline=[DateTime]::UtcNow.AddSeconds($remaining)
+    while(!$script:DiskWorker.WaitForExit(500) -and [DateTime]::UtcNow -lt $deadline){
+        if(Get-Command Assert-CheckNotCancelled -ErrorAction SilentlyContinue){Assert-CheckNotCancelled}
+    }
+    if(!$script:DiskWorker.HasExited){throw 'Дисковые утилиты ещё работают. Очистка не запущена; подробности в disk-worker.log. Тест не прерван.'}
     $file=Join-Path $ScriptRoot 'disk-result.xml'
     if(!(Test-Path -LiteralPath $file)){throw ('Процесс дисковых утилит завершился без результата, код '+$script:DiskWorker.ExitCode+'. Подробности: disk-worker.log.')}
     $data=Import-Clixml -LiteralPath $file

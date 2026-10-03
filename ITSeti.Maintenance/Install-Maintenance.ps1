@@ -106,10 +106,8 @@ $inventory=Join-Path $data 'inventory.txt'
 if(!(Test-Path -LiteralPath $inventory -PathType Leaf)){[IO.File]::WriteAllText($inventory,'',[Text.Encoding]::ASCII)}
 & icacls.exe $inventory /grant '*S-1-5-32-545:M' | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Could not configure inventory number access.'}
-$autoFullMaintained=Join-Path $data 'auto-full-maintained.txt'
-if(!(Test-Path -LiteralPath $autoFullMaintained -PathType Leaf)){[IO.File]::WriteAllText($autoFullMaintained,'',[Text.Encoding]::ASCII)}
-& icacls.exe $autoFullMaintained /grant '*S-1-5-32-545:M' | Out-Null
-if($LASTEXITCODE -ne 0){throw 'Could not configure scheduled maintenance status access.'}
+. (Join-Path $install 'Backend\ScheduledFull.ps1')
+[void](Initialize-ScheduledFullBaseline $data)
 $installStage='Регистрация системных задач'
 $taskName='ITSeti-Maintenance-Full'
 $temperatureTaskName='ITSeti-Maintenance-Temperature'
@@ -117,8 +115,9 @@ $worker=Join-Path $install 'Backend\InstalledCheck.ps1'
 try {
     $taskTrigger=New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(20)
     $quickTrigger=New-ScheduledTaskTrigger -Daily -DaysInterval 14 -At ([DateTime]::Today.AddHours(3))
-    $autoFullTrigger=New-ScheduledTaskTrigger -Daily -DaysInterval 60 -At ([DateTime]::Today.AddHours(4))
+    $autoFullTrigger=New-ScheduledTaskTrigger -Daily -At ([DateTime]::Today.AddHours(4))
     $taskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 3) -MultipleInstances IgnoreNew
+    $autoFullSettings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 6) -MultipleInstances IgnoreNew
     $updateTaskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew
     $temperatureTaskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew
     $taskPrincipal=New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
@@ -126,7 +125,7 @@ try {
     if(!(Test-Path -LiteralPath $powershell -PathType Leaf)){throw "PowerShell не найден: $powershell"}
     $scheduler=New-Object -ComObject Schedule.Service
     $scheduler.Connect()
-    foreach($name in @($taskName,'ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair','ITSeti-Maintenance-Cleanup','ITSeti-Maintenance-OrganizationSetup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates','ITSeti-Maintenance-Update',$temperatureTaskName)){
+    foreach($name in @($taskName,'ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoQuick','ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair','ITSeti-Maintenance-Cleanup','ITSeti-Maintenance-OrganizationSetup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates','ITSeti-Maintenance-Update',$temperatureTaskName)){
         $installStage="Регистрация задачи $name"
         $isTemperatureTask=$name -eq $temperatureTaskName
         if($isTemperatureTask){
@@ -134,15 +133,16 @@ try {
         }else{
             $script=if($name -eq 'ITSeti-Maintenance-Repair'){Join-Path $install 'Backend\InstalledRepair.ps1'}elseif($name -eq 'ITSeti-Maintenance-Cleanup'){Join-Path $install 'Backend\InstalledCleanup.ps1'}elseif($name -eq 'ITSeti-Maintenance-OrganizationSetup'){Join-Path $install 'Backend\InstalledOrganizationSetup.ps1'}elseif($name -eq 'ITSeti-Maintenance-Update'){Join-Path $install 'Backend\Update-Application.ps1'}elseif($name -match 'Updates$'){Join-Path $install 'Backend\Set-WindowsAutomaticUpdates.ps1'}else{$worker}
             $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$script+'"'
-            if($name -eq 'ITSeti-Maintenance-QuickFull'){$arguments+=' -Quick'}
+            if($name -in @('ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoQuick')){$arguments+=' -Quick'}
+            if($name -eq 'ITSeti-Maintenance-AutoQuick'){$arguments+=' -ScheduledQuick'}
             if($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$arguments+=' -StartRepair'}
             if($name -eq 'ITSeti-Maintenance-DisableUpdates'){$arguments+=' -Action Disable'}
             if($name -eq 'ITSeti-Maintenance-RestoreUpdates'){$arguments+=' -Action Restore'}
             if(!(Test-Path -LiteralPath $script -PathType Leaf)){throw "Task script is missing: $script"}
             $taskAction=New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $install
         }
-        $trigger=if($name -eq 'ITSeti-Maintenance-QuickFull'){$quickTrigger}elseif($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$autoFullTrigger}else{$taskTrigger}
-        $settings=if($name -eq 'ITSeti-Maintenance-Update'){$updateTaskSettings}elseif($isTemperatureTask){$temperatureTaskSettings}else{$taskSettings}
+        $trigger=if($name -eq 'ITSeti-Maintenance-AutoQuick'){$quickTrigger}elseif($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$autoFullTrigger}else{$taskTrigger}
+        $settings=if($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$autoFullSettings}elseif($name -eq 'ITSeti-Maintenance-Update'){$updateTaskSettings}elseif($isTemperatureTask){$temperatureTaskSettings}else{$taskSettings}
         try {
             $lastTaskError=$null
             for($attempt=1;$attempt -le 3;$attempt++){
@@ -181,7 +181,8 @@ $installStage='Завершение установки'
 $legacyTask=Get-ScheduledTask -TaskName 'ITSeti-Maintenance-FullRepair' -ErrorAction SilentlyContinue
 if($legacyTask){Unregister-ScheduledTask -TaskName 'ITSeti-Maintenance-FullRepair' -Confirm:$false}
 $runKey='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
-New-ItemProperty -Path $runKey -Name 'ITSeti-Maintenance-Quick' -Value ('"'+(Join-Path $install 'ITSeti.Maintenance.exe')+'" --scheduled-quick') -PropertyType String -Force | Out-Null
+Remove-ItemProperty -Path $runKey -Name 'ITSeti-Maintenance-Quick' -ErrorAction SilentlyContinue
+New-ItemProperty -Path $runKey -Name 'ITSeti-Maintenance-Status' -Value ('"'+(Join-Path $install 'ITSeti.Maintenance.exe')+'" --scheduled-quick') -PropertyType String -Force | Out-Null
 $legacyShortcuts=@((Join-Path $env:PUBLIC 'Desktop\ITSeti Maintenance.lnk'),(Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\ITSeti Maintenance.lnk'))
 if($PreinstalledApp){
     foreach($path in $legacyShortcuts){Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue}
