@@ -8,6 +8,18 @@ $target=Join-Path $ScriptRoot 'diskspd-test.dat'
 function Write-DiskProgress([string]$Message) {
     [IO.File]::AppendAllText((Join-Path $ScriptRoot 'disk-progress.log'),($Message+[Environment]::NewLine),(New-Object Text.UTF8Encoding($false)))
 }
+function Assert-DiskCheckNotCancelled {
+    $request=Join-Path $ScriptRoot 'cancel-request.txt'
+    if(!(Test-Path -LiteralPath $request -PathType Leaf)){return}
+    $value=[IO.File]::ReadAllText($request).Trim()
+    if($value -eq 'cancel'){throw 'Проверка остановлена пользователем.'}
+    if($value -match '^owner:(\d+):(\d+)$'){
+        $owner=Get-Process -Id ([int]$Matches[1]) -ErrorAction SilentlyContinue
+        if(!$owner -or $owner.StartTime.ToUniversalTime().Ticks -ne [long]$Matches[2]){
+            throw 'Проверка остановлена пользователем.'
+        }
+    }
+}
 function Read-Speed([string]$Path,[string]$Metric) {
     $output=[IO.File]::ReadAllText($Path,[Text.Encoding]::UTF8)
     $end=$output.LastIndexOf('</Results>',[StringComparison]::Ordinal)
@@ -47,7 +59,14 @@ function Invoke-DiskSpd([string]$Exe,[string]$Mode,[int]$Pass) {
     # Retain the native handle before waiting: Windows PowerShell's Start-Process
     # can otherwise lose ExitCode when the child exits and its handle is released.
     $handle=$process.Handle
-    if(!$process.WaitForExit(90000)) {
+    $deadline=[DateTime]::UtcNow.AddSeconds(90)
+    try {
+        while(!$process.WaitForExit(500) -and [DateTime]::UtcNow -lt $deadline){Assert-DiskCheckNotCancelled}
+    } catch {
+        try {$process.Refresh();if(!$process.HasExited){$process.Kill()}} catch {}
+        throw
+    }
+    if(!$process.HasExited) {
         $process.Refresh()
         if(!$process.HasExited){Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue}
         throw "DiskSpd $Mode pass $Pass timed out."
@@ -64,6 +83,7 @@ function Invoke-DiskSpd([string]$Exe,[string]$Mode,[int]$Pass) {
 }
 try {
     Start-Transcript -Path (Join-Path $ScriptRoot 'disk-worker.log') -Force | Out-Null
+    Assert-DiskCheckNotCancelled
     . ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $ScriptRoot 'Summary.ps1'),[Text.Encoding]::UTF8)))
     Write-DiskProgress 'CrystalDiskInfo: SMART export started'
     $info=Join-Path $ToolsRoot 'CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe'
@@ -73,7 +93,14 @@ try {
         $started=Get-Date
         try {$export=Start-Process -FilePath $info -WorkingDirectory (Split-Path $info) -ArgumentList '/CopyExit' -WindowStyle Hidden -PassThru -ErrorAction Stop}
         catch {throw "Не удалось запустить CrystalDiskInfo ($info): $($_.Exception.Message). Проверьте права файла и журнал антивируса."}
-        if(!$export.WaitForExit(30000)){throw 'SMART export timed out.'}
+        $exportDeadline=[DateTime]::UtcNow.AddSeconds(30)
+        try {
+            while(!$export.WaitForExit(500) -and [DateTime]::UtcNow -lt $exportDeadline){Assert-DiskCheckNotCancelled}
+        } catch {
+            try {$export.Refresh();if(!$export.HasExited){$export.Kill()}} catch {}
+            throw
+        }
+        if(!$export.HasExited){try {$export.Kill()} catch {};throw 'SMART export timed out.'}
         if(!(Test-Path -LiteralPath $report) -or (Get-Item -LiteralPath $report).LastWriteTime -lt $started.AddSeconds(-2)){throw 'Fresh SMART report not found.'}
         $script:Snapshot.Smart=@(ConvertFrom-CdiReport ([IO.File]::ReadAllText($report)))
         if(!$script:Snapshot.Smart.Count){throw 'SMART report could not be parsed.'}
@@ -83,7 +110,7 @@ try {
     if($BenchmarkReadyFile) {
         Write-DiskProgress 'DiskSpd: ожидание окончания выборки нагрузки'
         $readyDeadline=[DateTime]::UtcNow.AddSeconds(120)
-        while(!(Test-Path -LiteralPath $BenchmarkReadyFile -PathType Leaf) -and [DateTime]::UtcNow -lt $readyDeadline){Start-Sleep -Milliseconds 250}
+        while(!(Test-Path -LiteralPath $BenchmarkReadyFile -PathType Leaf) -and [DateTime]::UtcNow -lt $readyDeadline){Assert-DiskCheckNotCancelled;Start-Sleep -Milliseconds 250}
         if(!(Test-Path -LiteralPath $BenchmarkReadyFile -PathType Leaf)){throw 'Resource sampling did not signal benchmark readiness.'}
     }
     $exe=Join-Path $ToolsRoot 'CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe'
@@ -92,7 +119,9 @@ try {
     if(!$drive -or $drive.DriveType -ne 3 -or $drive.FreeSpace -lt 3GB){throw 'System disk needs at least 3 GiB free for benchmark.'}
     $read=@();$write=@()
     for($pass=1;$pass -le 2;$pass++) {
+        Assert-DiskCheckNotCancelled
         $read+=Invoke-DiskSpd $exe 'read' $pass
+        Assert-DiskCheckNotCancelled
         $write+=Invoke-DiskSpd $exe 'write' $pass
     }
     $media=Get-SystemDiskMediaType

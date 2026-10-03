@@ -20,17 +20,21 @@ namespace ITSeti.Maintenance.Win7
     internal static class SmartTaskRunner
     {
         internal const string TaskName = "ITSeti-Maintenance-Win7-SMART";
+        internal const string ScheduledTaskName = "ITSeti-Maintenance-Win7-Scheduled-SMART";
         private static readonly string ResultPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "ITSetiMaintenanceWin7", "smart.json");
+        private static string ResultFor(bool scheduled) => scheduled
+            ? Path.Combine(ScheduledCheckRunner.ResultsRoot, "smart-scheduled.json") : ResultPath;
 
-        public static int RunWorker()
+        public static int RunWorker(bool scheduled = false)
         {
             using (var identity = WindowsIdentity.GetCurrent())
                 if (identity.User == null || identity.User.Value != "S-1-5-18") return 2;
 
             var snapshot = new LegacySnapshot();
-            LegacyDiagnostics.CollectSmart(snapshot);
+            try { LegacyDiagnostics.CollectSmart(snapshot, scheduled ? (Func<bool>)null : () => ManualTaskCancellation.IsRequested("smart")); }
+            catch (OperationCanceledException) when (!scheduled) { ManualTaskCancellation.MarkStopped("smart"); return 2; }
             var result = new SmartTaskResult
             {
                 SmartSummary = snapshot.SmartSummary,
@@ -40,12 +44,13 @@ namespace ITSeti.Maintenance.Win7
             };
             var folder = Path.GetDirectoryName(ResultPath);
             Directory.CreateDirectory(folder);
+            var destination = ResultFor(scheduled);
             var temporary = Path.Combine(folder, "smart-" + Guid.NewGuid().ToString("N") + ".tmp");
             try
             {
                 File.WriteAllText(temporary, new JavaScriptSerializer().Serialize(result), new UTF8Encoding(false));
-                if (File.Exists(ResultPath)) File.Replace(temporary, ResultPath, null);
-                else File.Move(temporary, ResultPath);
+                if (File.Exists(destination)) File.Replace(temporary, destination, null);
+                else File.Move(temporary, destination);
             }
             finally
             {
@@ -54,14 +59,17 @@ namespace ITSeti.Maintenance.Win7
             return snapshot.Unavailable.Count == 0 ? 0 : 1;
         }
 
-        public static void CollectInto(LegacySnapshot snapshot)
+        public static void CollectInto(LegacySnapshot snapshot, CancellationToken cancellationToken = default(CancellationToken), bool scheduled = false)
         {
             try
             {
+                if (!scheduled) ManualTaskCancellation.Begin("smart");
                 var started = DateTime.UtcNow;
+                var taskName = scheduled ? ScheduledTaskName : TaskName;
+                var resultPath = ResultFor(scheduled);
                 using (var process = Process.Start(new ProcessStartInfo(
                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "schtasks.exe"),
-                    "/Run /TN \"" + TaskName + "\"")
+                    "/Run /TN \"" + taskName + "\"")
                 {
                     UseShellExecute = false,
                     CreateNoWindow = true,
@@ -69,17 +77,21 @@ namespace ITSeti.Maintenance.Win7
                 }))
                 {
                     if (process == null) throw new InvalidOperationException("Планировщик не запустился.");
-                    if (!process.WaitForExit(10000)) throw new TimeoutException("Планировщик не ответил за 10 секунд.");
+                    var schedulerDeadline = DateTime.UtcNow.AddSeconds(10);
+                    while (!process.WaitForExit(300) && DateTime.UtcNow < schedulerDeadline)
+                        ThrowIfCancelled(cancellationToken, scheduled);
+                    if (!process.HasExited) throw new TimeoutException("Планировщик не ответил за 10 секунд.");
                     if (process.ExitCode != 0) throw new InvalidOperationException("Задача SMART не запущена (код " + process.ExitCode + "). Проверьте установку приложения.");
                 }
 
                 var deadline = DateTime.UtcNow.AddSeconds(45);
                 while (DateTime.UtcNow < deadline)
                 {
-                    if (File.Exists(ResultPath) && File.GetLastWriteTimeUtc(ResultPath) >= started)
+                    ThrowIfCancelled(cancellationToken, scheduled);
+                    if (File.Exists(resultPath) && File.GetLastWriteTimeUtc(resultPath) >= started)
                     {
                         SmartTaskResult result;
-                        using (var stream = new FileStream(ResultPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                        using (var stream = new FileStream(resultPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                         using (var reader = new StreamReader(stream, Encoding.UTF8))
                             result = new JavaScriptSerializer().Deserialize<SmartTaskResult>(reader.ReadToEnd());
                         if (result == null) throw new InvalidDataException("Задача SMART вернула пустой отчёт.");
@@ -93,10 +105,18 @@ namespace ITSeti.Maintenance.Win7
                 }
                 throw new TimeoutException("Задача SMART не вернула отчёт за 45 секунд.");
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 snapshot.Unavailable.Add("SMART: " + ex.Message);
             }
+        }
+
+        private static void ThrowIfCancelled(CancellationToken token, bool scheduled)
+        {
+            if (!token.IsCancellationRequested) return;
+            if (!scheduled) { ManualTaskCancellation.Cancel("smart"); ManualTaskCancellation.WaitStopped("smart"); }
+            token.ThrowIfCancellationRequested();
         }
     }
 }

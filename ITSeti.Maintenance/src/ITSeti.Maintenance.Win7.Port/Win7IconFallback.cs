@@ -17,7 +17,6 @@ namespace ITSeti.Maintenance.App
 
         private static void ApplyLegacyIconFallback(DependencyObject root)
         {
-            if (Environment.OSVersion.Version.Major >= 10) return;
             var block = root as TextBlock;
             if (block != null && block.FontFamily != null &&
                 block.FontFamily.Source.IndexOf("Segoe MDL2 Assets", StringComparison.OrdinalIgnoreCase) >= 0)

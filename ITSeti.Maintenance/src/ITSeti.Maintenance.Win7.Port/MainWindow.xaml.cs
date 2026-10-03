@@ -8,6 +8,7 @@ using System.Linq;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows;
@@ -31,6 +32,10 @@ namespace ITSeti.Maintenance.App
         private LegacySnapshot current;
         private List<LegacySnapshot> history = new List<LegacySnapshot>();
         private bool running;
+        private CancellationTokenSource checkCancellation;
+        private bool closeAfterCheck;
+        private bool windowClosed;
+        private bool scheduledFullPromptOpen;
         private bool cpuSampling;
         private DateTime scheduledReportStamp;
         private readonly DispatcherTimer cpuTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
@@ -48,6 +53,11 @@ namespace ITSeti.Maintenance.App
             AdminTabs.MinWidth = 0;
             AdminNavigation.SelectedIndex = 0;
             AdminTabs.SelectedIndex = 0;
+            AdminTabs.SelectionChanged += (sender, args) =>
+            {
+                if (ReferenceEquals(args.OriginalSource, AdminTabs))
+                    Dispatcher.BeginInvoke(new Action(() => ApplyLegacyIconFallback(AdminTabs)), DispatcherPriority.ContextIdle);
+            };
             SizeToContent = SizeToContent.Manual;
             ResizeMode = ResizeMode.CanResize;
             Width = Math.Min(engineer ? 1320 : 1200, SystemParameters.WorkArea.Width - 24);
@@ -66,9 +76,13 @@ namespace ITSeti.Maintenance.App
                 Loaded += async (sender, args) =>
                 {
                     await CheckAsync(false);
-                    cpuTimer.Start();
+                    if (!windowClosed)
+                    {
+                        cpuTimer.Start();
+                        await PromptScheduledFullFailureAsync();
+                    }
                 };
-                Closed += (sender, args) => cpuTimer.Stop();
+                Closed += (sender, args) => { windowClosed = true; cpuTimer.Stop(); };
             }
             else
             {
@@ -84,6 +98,13 @@ namespace ITSeti.Maintenance.App
                 ApplyLegacyIconFallback(this);
                 UpdateDebug();
             };
+            Closing += (sender, args) =>
+            {
+                if (!running) return;
+                args.Cancel = true;
+                closeAfterCheck = true;
+                StopCheck();
+            };
         }
 
         private async Task RefreshCpuAsync()
@@ -93,6 +114,12 @@ namespace ITSeti.Maintenance.App
             try
             {
                 RefreshScheduledReport();
+                await PromptScheduledFullFailureAsync();
+                if (engineer)
+                {
+                    var updateStatus = Win7GitHubUpdater.ReadBackgroundStatus();
+                    if (!string.IsNullOrWhiteSpace(updateStatus)) view.Set("ApplicationUpdateStatus", updateStatus);
+                }
                 var value = await Task.Run(() => CpuLoadSampler.Read());
                 view.Set("Cpu", CpuValue(value));
                 view.Set("UserCpuLabel", CpuValue(value));
@@ -106,6 +133,30 @@ namespace ITSeti.Maintenance.App
                 view.Set("Status", "Не удалось обновить загрузку CPU: " + ex.Message);
             }
             finally { cpuSampling = false; }
+        }
+
+        private async Task PromptScheduledFullFailureAsync()
+        {
+            if (scheduledFullPromptOpen || running) return;
+            try
+            {
+                if (!ScheduledCheckRunner.NeedsDaytimeFullFailurePrompt(DateTime.Now)) return;
+                scheduledFullPromptOpen = true;
+                var answer = MessageBox.Show(this,
+                    "Плановая полная проверка ночью не завершилась. Запустить её сейчас?\n\n" +
+                    "Проверка выполняется в фоне; если отказаться, напомним завтра.",
+                    "Плановая полная проверка", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                ScheduledCheckRunner.RemindTomorrow();
+                if (answer == MessageBoxResult.Yes)
+                {
+                    var started = await Task.Run(() => ScheduledCheckRunner.StartFullRun());
+                    view.Set("Status", started
+                        ? "Полная проверка запущена в фоне с правами SYSTEM."
+                        : "Не удалось запустить задачу полной проверки. Переустановите приложение от администратора.");
+                }
+            }
+            catch (Exception ex) { view.Set("Status", "Не удалось проверить состояние плановой проверки: " + ex.Message); }
+            finally { scheduledFullPromptOpen = false; }
         }
 
         private void RefreshScheduledReport()
@@ -141,15 +192,20 @@ namespace ITSeti.Maintenance.App
         private async Task CheckAsync(bool full)
         {
             if (running) return;
+            var cancellation = new CancellationTokenSource();
+            checkCancellation = cancellation;
             running = true;
             foreach (var name in new[] { "IsBusy", "CheckProgressIsRunning" }) view.Set(name, true);
+            view.Set("IsFullCheckRunning", true);
+            view.Set("CanStopFullCheck", true);
             foreach (var name in new[] { "CanRunFull", "CanRunQuickFull", "CanRun" }) view.Set(name, false);
             view.Set("CheckProgressPhase", full ? "Полная диагностика, SMART и тест диска" : "Диагностика и SMART");
             view.Set("UserStatus", full ? "Идёт полная проверка..." : "Показатели обновляются...");
             Progress("Проверка", full ? "Запущена полная проверка" : "Запущена быстрая проверка");
             try
             {
-                var snapshot = await Task.Run(() => LegacyDiagnostics.Collect(full));
+                var snapshot = await Task.Run(() => LegacyDiagnostics.Collect(full, cancellation.Token));
+                cancellation.Token.ThrowIfCancellationRequested();
                 current = snapshot;
                 Render(snapshot);
                 try
@@ -162,6 +218,21 @@ namespace ITSeti.Maintenance.App
                 }
                 catch (Exception ex) { Progress("История", "Не удалось сохранить отчёт: " + ex.Message); }
                 Progress("Проверка", snapshot.Findings.Count == 0 ? "Завершена" : "Завершена, есть замечания: " + snapshot.Findings.Count);
+                try
+                {
+                    var updateStatus = await Win7GitHubUpdater.QueueBackgroundCheckAsync();
+                    if (engineer) view.Set("ApplicationUpdateStatus", updateStatus);
+                }
+                catch (Exception ex)
+                {
+                    if (engineer) view.Set("ApplicationUpdateStatus", "Фоновая проверка обновления не запущена: " + ex.Message);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                view.Set("UserStatus", "Проверка остановлена");
+                view.Set("Status", "Проверка остановлена");
+                Progress("Проверка", "Остановлена пользователем");
             }
             catch (Exception ex)
             {
@@ -172,10 +243,23 @@ namespace ITSeti.Maintenance.App
             finally
             {
                 running = false;
+                checkCancellation = null;
+                cancellation.Dispose();
                 foreach (var name in new[] { "IsBusy", "CheckProgressIsRunning" }) view.Set(name, false);
+                view.Set("IsFullCheckRunning", false);
+                view.Set("CanStopFullCheck", false);
                 foreach (var name in new[] { "CanRunFull", "CanRunQuickFull", "CanRun" }) view.Set(name, true);
-                view.Set("CheckProgressPhase", "Проверка завершена");
+                view.Set("CheckProgressPhase", (string)view.Get("Status") == "Проверка остановлена" ? "Проверка остановлена" : "Проверка завершена");
+                if (closeAfterCheck) _ = Dispatcher.BeginInvoke(new Action(Close), DispatcherPriority.Background);
             }
+        }
+
+        private void StopCheck()
+        {
+            if (checkCancellation == null || checkCancellation.IsCancellationRequested) return;
+            checkCancellation.Cancel();
+            view.Set("CanStopFullCheck", false);
+            view.Set("UserStatus", "Останавливаем проверку...");
         }
 
         private void LoadCachedReport()
@@ -267,7 +351,7 @@ namespace ITSeti.Maintenance.App
 
         private static string Gb(long bytes) { return (bytes / 1073741824.0).ToString("N1") + " ГБ"; }
         private static string Value(double? value, string suffix) { return value.HasValue ? value.Value.ToString("N0") + suffix : "нет данных"; }
-        private static string CpuValue(double? value) { return !value.HasValue || value.Value <= 0 ? "нет данных" : value.Value < 1 ? "<1%" : value.Value.ToString("N0") + "%"; }
+        private static string CpuValue(double? value) { return !value.HasValue ? "нет данных" : value.Value < 1 ? "<1%" : value.Value.ToString("N0") + "%"; }
         private static ObservableCollection<Win7Row> Rows(IEnumerable<Win7Row> source) { return new ObservableCollection<Win7Row>(source); }
     }
 }

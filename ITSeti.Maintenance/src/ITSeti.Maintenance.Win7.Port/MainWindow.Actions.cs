@@ -40,6 +40,7 @@ namespace ITSeti.Maintenance.App
             LaunchDiskMarkButton.Visibility = Visibility.Collapsed;
             TreeSizeVolumeSelector.Visibility = Visibility.Collapsed;
             LaunchTreeSizeButton.Visibility = Visibility.Collapsed;
+            OpenLowSpaceScanButton.Visibility = File.Exists(TreeSizePath) ? Visibility.Visible : Visibility.Collapsed;
             var definitions = new[] {
                 new[] { "Управление компьютером", "compmgmt.msc" }, new[] { "Групповые политики", "gpedit.msc" },
                 new[] { "Терминал", "cmd.exe" }, new[] { "Панель управления", "control.exe" },
@@ -110,6 +111,7 @@ namespace ITSeti.Maintenance.App
         private void ShowAllIssues_Click(object sender, RoutedEventArgs e) { }
         private void OpenLowSpaceScan_Click(object sender, RoutedEventArgs e) { LaunchTreeSize_Click(sender, e); }
         private async void RunUserFull_Click(object sender, RoutedEventArgs e) { await CheckAsync(true); }
+        private void StopFullCheck_Click(object sender, RoutedEventArgs e) { StopCheck(); }
         private async void RunQuickFull_Click(object sender, RoutedEventArgs e) { await CheckAsync(false); }
         private async void RunFull_Click(object sender, RoutedEventArgs e) { await CheckAsync(true); }
         private async void RunCleanup_Click(object sender, RoutedEventArgs e)
@@ -152,7 +154,15 @@ namespace ITSeti.Maintenance.App
 
         private void LaunchDiskInfo_Click(object sender, RoutedEventArgs e) { LaunchFile(DiskInfoPath); }
         private void LaunchDiskMark_Click(object sender, RoutedEventArgs e) { }
-        private void LaunchTreeSize_Click(object sender, RoutedEventArgs e) { LaunchFile(TreeSizePath); }
+        private void LaunchTreeSize_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (!File.Exists(TreeSizePath)) throw new FileNotFoundException("TreeSize Free не включён в установщик Windows 7.", TreeSizePath);
+                Process.Start(new ProcessStartInfo(TreeSizePath) { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(TreeSizePath) });
+            }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Запуск TreeSize"); }
+        }
         private void LaunchFile(string file)
         {
             if (!engineer) return;

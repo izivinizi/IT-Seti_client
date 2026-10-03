@@ -39,6 +39,12 @@ public sealed class ApplicationUpdateRunner
     public static bool IsReadyToInstall(string? status) =>
         GetStatusMessage(status).StartsWith("Пакет загружен и проверен. Готов к установке.", StringComparison.OrdinalIgnoreCase);
 
+    public static bool IsPendingInstall(string? status)
+    {
+        var message = GetStatusMessage(status);
+        return IsReadyToInstall(status) || message.StartsWith("Пакет загружен и проверен. Ожидает закрытия приложения.", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static string? FilterStatusForVersion(string? status, Version? runningVersion)
     {
         if (string.IsNullOrWhiteSpace(status) || runningVersion is null) return status;
@@ -53,6 +59,7 @@ public sealed class ApplicationUpdateRunner
     public async Task<bool> RequestUpdateAsync(IProgress<string>? progress = null, CancellationToken cancellationToken = default)
     {
         var requestStarted = DateTime.Now.AddSeconds(-1);
+        var requestStartedUtc = DateTime.UtcNow;
         await RunTaskCommandAsync("/Query", cancellationToken);
         await RunTaskCommandAsync("/Run", cancellationToken);
 
@@ -68,7 +75,8 @@ public sealed class ApplicationUpdateRunner
                 var separator = status.IndexOf('|');
                 var hasFreshTimestamp = separator > 0 && DateTime.TryParseExact(
                     status[..separator].Trim(), "yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture,
-                    System.Globalization.DateTimeStyles.AssumeLocal, out var timestamp) && timestamp >= requestStarted;
+                    System.Globalization.DateTimeStyles.AssumeLocal, out var timestamp) && timestamp >= requestStarted
+                    && File.GetLastWriteTimeUtc(StatusPath) >= requestStartedUtc;
                 if (hasFreshTimestamp && message != lastMessage)
                 {
                     lastMessage = message;

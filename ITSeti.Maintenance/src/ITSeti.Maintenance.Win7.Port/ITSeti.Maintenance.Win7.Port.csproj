@@ -4,9 +4,9 @@
     <TargetFramework>net48</TargetFramework>
     <UseWPF>true</UseWPF>
     <AssemblyName>ITSeti.Maintenance.Win7.Port</AssemblyName>
-    <Version>1.2.1-beta</Version>
-    <AssemblyVersion>1.2.1.0</AssemblyVersion>
-    <FileVersion>1.2.1.0</FileVersion>
+    <Version>1.2.2-beta</Version>
+    <AssemblyVersion>1.2.2.0</AssemblyVersion>
+    <FileVersion>1.2.2.0</FileVersion>
     <RootNamespace>ITSeti.Maintenance.App</RootNamespace>
     <ApplicationIcon>../ITSeti.Maintenance.App/Assets/favicon.ico</ApplicationIcon>
     <LangVersion>latest</LangVersion>
@@ -26,6 +26,7 @@
     <Compile Include="../ITSeti.Maintenance.Win7/LegacySoftwareAudit.cs" Link="Legacy/LegacySoftwareAudit.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/BenchmarkTaskRunner.cs" Link="Legacy/BenchmarkTaskRunner.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/SmartTaskRunner.cs" Link="Legacy/SmartTaskRunner.cs" />
+    <Compile Include="../ITSeti.Maintenance.Win7/ManualTaskCancellation.cs" Link="Legacy/ManualTaskCancellation.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/SmartTaskInstaller.cs" Link="Legacy/SmartTaskInstaller.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/ScheduledCheckRunner.cs" Link="Legacy/ScheduledCheckRunner.cs" />
     <ApplicationDefinition Include="../ITSeti.Maintenance.App/App.xaml" Link="App.xaml" />

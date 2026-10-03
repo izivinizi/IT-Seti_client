@@ -110,10 +110,10 @@ public sealed record FullDiagnosticDetails(string CpuName, string GpuName, bool 
 public sealed record DiagnosticProgress(string Stage, DiagnosticSnapshot? Snapshot = null, IReadOnlyList<string>? Messages = null);
 public interface IFullDiagnosticsRunner
 {
-    Task<DiagnosticSnapshot> RunAsync(IProgress<DiagnosticProgress> progress);
-    Task<DiagnosticSnapshot> RunUserAsync(IProgress<DiagnosticProgress> progress);
-    Task<DiagnosticSnapshot> RunQuickAsync(IProgress<DiagnosticProgress> progress);
-    Task<DiagnosticSnapshot> RunUserQuickAsync(IProgress<DiagnosticProgress> progress);
+    Task<DiagnosticSnapshot> RunAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default);
+    Task<DiagnosticSnapshot> RunUserAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default);
+    Task<DiagnosticSnapshot> RunQuickAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default);
+    Task<DiagnosticSnapshot> RunUserQuickAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default);
 }
 
 public interface IDiagnosticsRunner

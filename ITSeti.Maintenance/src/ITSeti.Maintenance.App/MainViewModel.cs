@@ -152,6 +152,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private DiagnosticSnapshot? selected;
     private DiagnosticSnapshot? live;
     private bool busy;
+    private CancellationTokenSource? fullCheckCancellation;
     private int liveRefreshRunning;
     private DateTimeOffset nextTemperatureProbeUtc;
     private string? temperatureProbeError;
@@ -494,6 +495,9 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public bool CanRun => !busy;
     public bool CanRunFull => CanRun && fullRunner is not null;
     public bool CanRunQuickFull => CanRun && fullRunner is not null;
+    public bool IsFullCheckRunning => fullCheckCancellation is not null;
+    public bool CanStopFullCheck => fullCheckCancellation is { IsCancellationRequested: false };
+    public bool LastCheckWasStopped { get; private set; }
     public bool CanRunCleanup => !busy && !cleanupRunning;
     public bool CanRunRepair => !busy && !repairRunning;
     public bool CanCheckWindowsUpdates => !busy && !windowsUpdateActionRunning;
@@ -1057,10 +1061,13 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public Task RunUserFullAsync() => RunFullCoreAsync(true);
     public Task RunScheduledUserQuickAsync() => RunFullCoreAsync(true);
 
-    public async Task<bool> RunScheduledRepairAsync()
+    public void StopFullCheck()
     {
-        await RunRepairAsync();
-        return repairResult?.Contains("| Завершено.", StringComparison.OrdinalIgnoreCase) == true;
+        if (fullCheckCancellation is not { IsCancellationRequested: false } cancellation) return;
+        cancellation.Cancel();
+        status = "Останавливаем проверку…";
+        currentFullStage = status;
+        Notify();
     }
 
     public async Task OpenLowSpaceScanAsync()
@@ -1076,6 +1083,9 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private async Task RunFullCoreAsync(bool userMode, bool quickMode = false)
     {
         if (busy || fullRunner is null) return;
+        using var cancellation = new CancellationTokenSource();
+        fullCheckCancellation = cancellation;
+        LastCheckWasStopped = false;
         LastFullSucceeded = false;
         if (!userMode)
         {
@@ -1133,8 +1143,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                 Notify();
             });
             var snapshot = await Task.Run(() => quickMode
-                ? userMode ? fullRunner.RunUserQuickAsync(progress) : fullRunner.RunQuickAsync(progress)
-                : userMode ? fullRunner.RunUserAsync(progress) : fullRunner.RunAsync(progress));
+                ? userMode ? fullRunner.RunUserQuickAsync(progress, cancellation.Token) : fullRunner.RunQuickAsync(progress, cancellation.Token)
+                : userMode ? fullRunner.RunUserAsync(progress, cancellation.Token) : fullRunner.RunAsync(progress, cancellation.Token));
             live = null;
             Selected = snapshot;
             if (!userMode && !quickMode)
@@ -1161,6 +1171,15 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             userStatusOverride = userMode ? "Проверка завершена. Результат сохранён." : null;
             if (!userMode) _ = RunPostCheckMaintenanceAsync(checkProgressGeneration);
         }
+        catch (OperationCanceledException)
+        {
+            LastCheckWasStopped = true;
+            if (!userMode) { RecordProgress("Проверка", "Остановлена пользователем"); checkProgressPhase = "Остановлена"; checkProgressActive = false; }
+            status = "Проверка остановлена";
+            currentFullStage = null;
+            userStatusOverride = userMode ? status : null;
+            RefreshDebug();
+        }
         catch (Exception ex)
         {
             if (!userMode) { RecordProgress("Ошибка", ex.Message); checkProgressPhase = "Ошибка проверки"; checkProgressActive = false; }
@@ -1169,7 +1188,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             if (userMode) userStatusOverride = "Проверку не удалось завершить. Подробности доступны инженеру.";
             RefreshDebug();
         }
-        finally { live = null; busy = false; Notify(); }
+        finally { live = null; busy = false; fullCheckCancellation = null; Notify(); }
     }
 
     public Task RunCleanupAsync() => RunCleanupCoreAsync(background: false);

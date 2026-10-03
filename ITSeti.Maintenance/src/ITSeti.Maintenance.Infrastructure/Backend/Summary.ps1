@@ -8,6 +8,9 @@
     }
     return $false
 }
+function Test-TrustedProcess([string]$SignatureStatus,[string]$Signer) {
+    return $SignatureStatus -eq 'Valid' -and (Test-AllowedPublisher $Signer)
+}
 function Get-MaintenanceComparison($Previous,$Current) {
     if(!$Previous){'Первая проверка с историей: сохранена исходная точка.';return}
     'Предыдущая проверка: {0:dd.MM.yyyy HH:mm}' -f $Previous.CapturedAt
@@ -104,7 +107,7 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
     Set-DesignatedAdminPasswordPolicy $s
     $script:WindowsUpdateStatus=$null
     if($script:PendingDiskTest){$s.Notes += 'Нагрузка CPU/ОЗУ измерена во время дискового теста, не в простое.'}
-    $s.PublisherSkipped=0; $s.PublisherMetadataSkipped=0
+    $s.PublisherSkipped=0
     try {
         $s.CPU=((Get-WmiObject Win32_Processor -ErrorAction Stop | ForEach-Object {$_.Name.Trim()}) -join ', ')
         $s.GPU=((Get-WmiObject Win32_VideoController -ErrorAction Stop | Where-Object {$_.Name -notmatch 'Virtual|Parsec|USB Mobile'} | ForEach-Object {$_.Name}) -join ', ')
@@ -177,13 +180,13 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
         $script:AllowedPublishers=@()
         $publisherFile=Join-Path $ScriptRoot 'allowed-publishers.txt'
         if(Test-Path -LiteralPath $publisherFile){$script:AllowedPublishers=@([IO.File]::ReadAllLines($publisherFile,[Text.Encoding]::UTF8) | ForEach-Object {$_.Trim()} | Where-Object {$_ -and !$_.StartsWith('#')})}
-        if($PSVersionTable.PSVersion.Major -ge 3) {$allowed=([IO.File]::ReadAllText((Join-Path $ScriptRoot 'allowed-processes.json')) | ConvertFrom-Json).allowedNames}
-        else {$allowed=@(Get-Content -LiteralPath (Join-Path $ScriptRoot 'allowed-processes-win7.txt'))}
-        $candidates=@(foreach($p in (Get-Process | Sort-Object ProcessName -Unique)) {
-            if($allowed -contains $p.ProcessName) {continue}
+        $seenPaths=@{}
+        $candidates=@(foreach($p in (Get-Process)) {
             $path=$null
             try {$path=$p.Path} catch {}
             if(!$path) {$s.ProcessUnavailable++; continue}
+            if($seenPaths.ContainsKey($path)){continue}
+            $seenPaths[$path]=$true
             New-Object PSObject -Property @{Process=$p;Path=$path}
         })
         $signatures=Get-ProcessSignatures @($candidates | ForEach-Object {$_.Path})
@@ -192,7 +195,6 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
             $sig=$signatures[$path]
             $signer=''
             if($sig.SignerCertificate) {$signer=$sig.SignerCertificate.GetNameInfo('SimpleName',$false)}
-            if($path.StartsWith($env:windir+'\',[StringComparison]::OrdinalIgnoreCase) -and $sig.Status -eq 'Valid' -and $signer -match 'Microsoft') {continue}
             $description=$p.ProcessName; $company=''
             try {
                 $version=[Diagnostics.FileVersionInfo]::GetVersionInfo($path)
@@ -200,14 +202,13 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
                 elseif($version.ProductName){$description=$version.ProductName}
                 $company=$version.CompanyName
             } catch {}
-            if($sig.Status -eq 'Valid' -and (Test-AllowedPublisher $signer)){$s.PublisherSkipped++; continue}
-            if($sig.Status -eq 'NotSigned' -and (Test-AllowedPublisher $company)){$s.PublisherMetadataSkipped++; continue}
+            if(Test-TrustedProcess $sig.Status $signer){$s.PublisherSkipped++; continue}
             $s.Processes += New-Object PSObject -Property @{Name=$p.ProcessName;Description=$description;Company=$company;Path=$path;Signature=[string]$sig.Status;Signer=$signer}
         }
     } catch {$s.Notes += ('Процессы: '+$_.Exception.Message)}
     if($Live -and (Get-Command Save-Result -ErrorAction SilentlyContinue)){Save-Result 'partial.json' -Pending}
     try {('ProcessSeconds={0:N2}' -f $processTimer.Elapsed.TotalSeconds) | Add-Content -LiteralPath (Join-Path $ScriptRoot 'timings.txt') -Encoding UTF8} catch {}
-    if($Live){Show-InitialSection 3; Write-Host 'Процессы вне списка не обязательно вредоносны. Проверяются журналы...' -ForegroundColor DarkGray}
+    if($Live){Show-InitialSection 3; Write-Host 'Проверяются подписи процессов и журналы...' -ForegroundColor DarkGray}
     try {
         if(!$eventProcess){throw 'Работник журналов не запущен.'}
         if(!$eventProcess.WaitForExit(30000)) {
@@ -275,8 +276,8 @@ function Get-SummaryLines {
     elseif($script:DiskFailure){$diskParts+=('тест: '+$script:DiskFailure)}
     'Системный диск: '+($diskParts -join ' | ')
     '03 | НЕСТАНДАРТНЫЕ ПРОЦЕССЫ'
-    'Процессы вне списка: {0}; без доступа к файлу: {1}' -f @($s.Processes).Count,$s.ProcessUnavailable
-    if($s.PublisherSkipped -or $s.PublisherMetadataSkipped){'Исключено по издателю: {0}; по полю файла без подписи: {1} (не проверка подлинности).' -f $s.PublisherSkipped,$s.PublisherMetadataSkipped}
+    'Процессы для проверки: {0}; без доступа к файлу: {1}' -f @($s.Processes).Count,$s.ProcessUnavailable
+    if($s.PublisherSkipped){'Исключено по проверенной подписи издателя: {0}' -f $s.PublisherSkipped}
     if(@($s.Processes).Count){Get-ProcessTableLines $s.Processes}
     '04 | ВАЖНЫЕ СОБЫТИЯ'
     $zeroBugcheckCount=@($s.Events | Where-Object {$_.Id -eq 41 -and $_.ProviderName -match 'Kernel-Power' -and $_.Message -match '\bBugcheckCode\s*[:=]\s*0(?:\D|$)'}).Count

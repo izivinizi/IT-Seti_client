@@ -27,6 +27,17 @@ namespace ITSeti.Maintenance.Win7
             acl.AddAccessRule(new FileSystemAccessRule(admins, FileSystemRights.FullControl, children, PropagationFlags.None, AccessControlType.Allow));
             acl.AddAccessRule(new FileSystemAccessRule(users, FileSystemRights.ReadAndExecute, children, PropagationFlags.None, AccessControlType.Allow));
             new DirectoryInfo(folder).SetAccessControl(acl);
+            foreach (var name in new[] { "smart", "benchmark" })
+            {
+                foreach (var suffix in new[] { "-cancel.txt", "-stopped.txt" })
+                {
+                    var cancellationFile = Path.Combine(folder, name + suffix);
+                    if (!File.Exists(cancellationFile)) File.WriteAllText(cancellationFile, "");
+                    var cancellationAcl = new FileInfo(cancellationFile).GetAccessControl();
+                    cancellationAcl.AddAccessRule(new FileSystemAccessRule(users, FileSystemRights.Modify, AccessControlType.Allow));
+                    new FileInfo(cancellationFile).SetAccessControl(cancellationAcl);
+                }
+            }
             var inventoryDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                 "ITSeti", "Maintenance");
             Directory.CreateDirectory(inventoryDirectory);
@@ -44,8 +55,12 @@ namespace ITSeti.Maintenance.Win7
             service.Connect();
             dynamic root = service.GetFolder("\\");
             RegisterTask(service, root, SmartTaskRunner.TaskName, "--collect-smart", "PT1M", "Сбор SMART");
+            RegisterTask(service, root, SmartTaskRunner.ScheduledTaskName, "--collect-smart-scheduled", "PT1M", "Плановый сбор SMART");
             RegisterTask(service, root, BenchmarkTaskRunner.TaskName, "--collect-benchmark", "PT5M", "Тест системного диска DiskSpd");
-            RegisterTask(service, root, ScheduledCheckRunner.TaskName, "--scheduled-check", "PT15M", "Плановая проверка раз в 14 дней", 14);
+            RegisterTask(service, root, BenchmarkTaskRunner.ScheduledTaskName, "--collect-benchmark-scheduled", "PT5M", "Плановый тест системного диска DiskSpd");
+            RegisterTask(service, root, ScheduledCheckRunner.TaskName, "--scheduled-check", "PT30M", "Плановая быстрая проверка раз в 14 дней", 14);
+            RegisterTask(service, root, ScheduledCheckRunner.FullTaskName, "--scheduled-full", "PT2H", "Плановая полная проверка и SFC раз в 60 дней", 60);
+            RegisterTask(service, root, "ITSeti-Maintenance-Win7-Update", "--update-application", "PT20M", "Фоновая проверка и установка обновления приложения");
         }
 
         private static void RegisterTask(dynamic service, dynamic root, string name, string arguments, string timeLimit, string description, int intervalDays = 0)
@@ -95,9 +110,17 @@ namespace ITSeti.Maintenance.Win7
             dynamic root = service.GetFolder("\\");
             try { root.DeleteTask(SmartTaskRunner.TaskName, 0); }
             catch (System.Runtime.InteropServices.COMException ex) when ((uint)ex.HResult == 0x80070002) { }
+            try { root.DeleteTask(SmartTaskRunner.ScheduledTaskName, 0); }
+            catch (System.Runtime.InteropServices.COMException ex) when ((uint)ex.HResult == 0x80070002) { }
             try { root.DeleteTask(BenchmarkTaskRunner.TaskName, 0); }
             catch (System.Runtime.InteropServices.COMException ex) when ((uint)ex.HResult == 0x80070002) { }
+            try { root.DeleteTask(BenchmarkTaskRunner.ScheduledTaskName, 0); }
+            catch (System.Runtime.InteropServices.COMException ex) when ((uint)ex.HResult == 0x80070002) { }
             try { root.DeleteTask(ScheduledCheckRunner.TaskName, 0); }
+            catch (System.Runtime.InteropServices.COMException ex) when ((uint)ex.HResult == 0x80070002) { }
+            try { root.DeleteTask(ScheduledCheckRunner.FullTaskName, 0); }
+            catch (System.Runtime.InteropServices.COMException ex) when ((uint)ex.HResult == 0x80070002) { }
+            try { root.DeleteTask("ITSeti-Maintenance-Win7-Update", 0); }
             catch (System.Runtime.InteropServices.COMException ex) when ((uint)ex.HResult == 0x80070002) { }
         }
 

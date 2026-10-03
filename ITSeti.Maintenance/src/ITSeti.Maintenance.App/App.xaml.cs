@@ -10,6 +10,8 @@ namespace ITSeti.Maintenance.App;
 
 public partial class App : Application
 {
+    private bool interactiveWindowShown;
+
     protected override async void OnStartup(StartupEventArgs e)
     {
         if (e.Args.Contains("--cpu-temperature-probe", StringComparer.OrdinalIgnoreCase))
@@ -81,6 +83,7 @@ public partial class App : Application
                 EngineerWindowLauncher.GetArgument(e.Args, "--client-sid"),
                 EngineerWindowLauncher.GetArgument(e.Args, "--client-local-data"));
             MainWindow.Show();
+            interactiveWindowShown = true;
             return;
         }
         if (e.Args.Contains("--scheduled-quick", StringComparer.OrdinalIgnoreCase))
@@ -107,20 +110,10 @@ public partial class App : Application
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
 
-                    if (new ScheduledCheckPrompt().ShowDialog() != true)
-                    {
-                        await File.WriteAllTextAsync(reminderPath, DateTimeOffset.UtcNow.AddDays(1).ToString("O"));
-                        Shutdown();
-                        return;
-                    }
-                    try { File.Delete(reminderPath); }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-
-                    var maintenanceWindow = new MainWindow();
-                    MainWindow = maintenanceWindow;
-                    ShutdownMode = ShutdownMode.OnMainWindowClose;
-                    maintenanceWindow.Show();
-                    await maintenanceWindow.RunScheduledFullMaintenanceAsync(pendingFull);
+                    var retry = new ScheduledCheckPrompt().ShowDialog() == true;
+                    await File.WriteAllTextAsync(reminderPath, DateTimeOffset.UtcNow.AddDays(1).ToString("O"));
+                    if (retry) await RunScheduledFullRetryAsync();
+                    Shutdown();
                     return;
                 }
                 Shutdown();
@@ -139,6 +132,7 @@ public partial class App : Application
             {
                 MainWindow = new MainWindow();
                 MainWindow.Show();
+                interactiveWindowShown = true;
             }
             catch (Exception ex)
             {
@@ -186,10 +180,44 @@ public partial class App : Application
         if (!File.Exists(pending)) return null;
         var runId = File.ReadAllText(pending).Trim();
         if (!Guid.TryParseExact(runId, "N", out _)) return null;
-        var completed = Path.Combine(data, "auto-full-maintained.txt");
-        if (File.Exists(completed) && string.Equals(File.ReadAllText(completed).Trim(), runId, StringComparison.OrdinalIgnoreCase))
-            return null;
-        return File.Exists(Path.Combine(data, "Runs", runId, "result.json")) ? runId : null;
+        return File.Exists(Path.Combine(data, "Runs", runId, "error.txt")) ? runId : null;
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        if (interactiveWindowShown && ApplicationUpdateRunner.IsPendingInstall(ApplicationUpdateRunner.ReadRawStatus()))
+        {
+            var helper = Path.Combine(AppContext.BaseDirectory, "Backend", "Resume-ApplicationUpdate.ps1");
+            if (File.Exists(helper))
+            {
+                try
+                {
+                    var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                        "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
+                    {
+                        UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden
+                    };
+                    foreach (var argument in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper,
+                        "-ParentPid", Environment.ProcessId.ToString() }) start.ArgumentList.Add(argument);
+                    Process.Start(start)?.Dispose();
+                }
+                catch (Exception exception) when (exception is Win32Exception or IOException or UnauthorizedAccessException) { }
+            }
+        }
+        base.OnExit(e);
+    }
+
+    private static async Task RunScheduledFullRetryAsync()
+    {
+        using var process = new Process { StartInfo = new ProcessStartInfo("schtasks.exe")
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            ArgumentList = { "/Run", "/TN", "ITSeti-Maintenance-AutoFullRepair" }
+        } };
+        if (!process.Start()) throw new InvalidOperationException("Windows не запустила повторную плановую проверку.");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        await process.WaitForExitAsync(timeout.Token);
+        if (process.ExitCode != 0) throw new InvalidOperationException("Планировщик не запустил повторную проверку (код " + process.ExitCode + ").");
     }
 
 }

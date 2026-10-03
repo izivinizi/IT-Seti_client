@@ -14,11 +14,11 @@ namespace ITSeti.Maintenance.App
             "BenchmarkRead BenchmarkReadBrush BenchmarkState BenchmarkTitle BenchmarkWrite CanChangeWindowsUpdatePolicy " +
             "CanCheckApplicationUpdates CanCheckWindowsUpdates CanInstallApplicationUpdate CanInstallSetup CanLaunchDiskTools " +
             "CanLaunchTreeSize CanManageSetup CanOpenDebugDirectory CanOpenRepairLog CanRun CanRunCleanup CanRunFull " +
-            "CanRunQuickFull CanRunRepair CanToggleWindowsDefender CheckProgressEntries CheckProgressIsRunning " +
+            "CanRunQuickFull CanRunRepair CanStopFullCheck CanToggleWindowsDefender CheckProgressEntries CheckProgressIsRunning " +
             "CheckProgressPhase CleanupStatus Comparison ComputerName Cpu CpuDetail CpuStatusBrush DebugErrorLine " +
             "DebugFiles DebugSource DebugStage DebugSteps DiskCount DiskDetail DiskGroups DiskStatusBrush EventMessage " +
             "EventStatus FilteredEvents FullRunHint Gpu HasAnyDeskId HasInventoryNumber HasLowDiskSpace " +
-            "HasMoreUserIssues HasRmsId History HistoryCount IsBusy Memory MemoryDetail MemoryStatusBrush MemoryType " +
+            "HasMoreUserIssues HasRmsId History HistoryCount IsBusy IsFullCheckRunning Memory MemoryDetail MemoryStatusBrush MemoryType " +
             "MoreUserIssuesLabel NetworkAdapters OverviewCoverage OverviewIssues OverviewStatus OverviewUptimeLabel " +
             "Processes ProcessStatus ScheduleStatus Selected SelectedEvent SelectedHistorySummary SelectedTreeSizeVolume " +
             "SetupBundleStatus SetupBundleTooltip SetupComponents SetupSummary SetupWarning SnapshotDate SoftwareActionStatus " +
@@ -48,6 +48,7 @@ namespace ITSeti.Maintenance.App
             Set("UserIssueHeading", "Проверка ещё не выполнена");
             Set("UserStatus", "Загрузка сохранённой проверки...");
             Set("Status", "Готово к проверке");
+            Set("IsFullCheckRunning", false);
             Set("BenchmarkReadBrush", Brushes.DarkSlateGray);
             Set("CpuStatusBrush", Brushes.DarkSlateGray);
             Set("MemoryStatusBrush", Brushes.DarkSlateGray);

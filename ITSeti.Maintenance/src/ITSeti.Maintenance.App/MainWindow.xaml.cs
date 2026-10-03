@@ -21,9 +21,9 @@ public partial class MainWindow : Window
     private readonly string historyDatabasePath;
     private bool engineerOnly;
     private bool closeAfterMaintenance;
+    private bool closeAfterCheck;
     private bool exitForUpdate;
     private bool handingOffToEngineer;
-    private bool scheduledFullMaintenanceRunning;
     private bool syncingAdminPassword;
     private DispatcherOperation? progressScroll;
     private bool closed;
@@ -73,9 +73,14 @@ public partial class MainWindow : Window
             if (ViewModel.IsBusy)
             {
                 e.Cancel = true;
-                MessageBox.Show(this, "Диагностика ещё выполняется. Сверните окно и дождитесь результата.", "Проверка выполняется", MessageBoxButton.OK, MessageBoxImage.Information);
+                if (ViewModel.IsFullCheckRunning)
+                {
+                    closeAfterCheck = true;
+                    ViewModel.StopFullCheck();
+                }
+                else MessageBox.Show(this, "Действие ещё выполняется. Дождитесь его завершения.", "Операция выполняется", MessageBoxButton.OK, MessageBoxImage.Information);
             }
-            else if ((ViewModel.IsBackgroundMaintenanceRunning || scheduledFullMaintenanceRunning) && !exitForUpdate)
+            else if (ViewModel.IsBackgroundMaintenanceRunning && !exitForUpdate)
             {
                 e.Cancel = true;
                 closeAfterMaintenance = true;
@@ -88,37 +93,6 @@ public partial class MainWindow : Window
     {
         await initializationCompleted.Task;
         await ViewModel.RunScheduledUserQuickAsync();
-    }
-
-    public async Task<bool> RunScheduledFullMaintenanceAsync(string runId)
-    {
-        await initializationCompleted.Task;
-        scheduledFullMaintenanceRunning = true;
-        try
-        {
-            var repaired = await ViewModel.RunScheduledRepairAsync();
-            var recorded = repaired;
-            if (repaired)
-            {
-                var data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                    "ITSeti", "Maintenance");
-                try { await File.WriteAllTextAsync(Path.Combine(data, "auto-full-maintained.txt"), runId); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    recorded = false;
-                    await File.WriteAllTextAsync(Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                        "ITSeti", "Maintenance", "scheduled-full-status.txt"),
-                        "Не удалось сохранить завершение планового обслуживания: " + ex.Message);
-                }
-            }
-            return recorded;
-        }
-        finally
-        {
-            scheduledFullMaintenanceRunning = false;
-            if (!IsVisible && !exitForUpdate) Show();
-        }
     }
 
     private void QueueProgressScroll()
@@ -137,17 +111,26 @@ public partial class MainWindow : Window
     {
         AdminTabs.SelectedItem = ProgressTab;
         await ViewModel.RunFullAsync();
-        await InstallAvailableUpdateAfterFullCheckAsync();
+        CloseAfterStoppedCheck();
     }
     private async void RunQuickFull_Click(object sender, RoutedEventArgs e)
     {
         AdminTabs.SelectedItem = ProgressTab;
         await ViewModel.RunQuickFullAsync();
+        CloseAfterStoppedCheck();
     }
     private async void RunUserFull_Click(object sender, RoutedEventArgs e)
     {
         await ViewModel.RunUserFullAsync();
-        await InstallAvailableUpdateAfterFullCheckAsync();
+        CloseAfterStoppedCheck();
+    }
+    private void StopFullCheck_Click(object sender, RoutedEventArgs e) => ViewModel.StopFullCheck();
+    private void CloseAfterStoppedCheck()
+    {
+        if (!closeAfterCheck) return;
+        closeAfterCheck = false;
+        if (ViewModel.LastCheckWasStopped) Close();
+        else MessageBox.Show(this, "Не удалось подтвердить остановку проверки. Проверьте её статус перед закрытием окна.", "Остановка проверки", MessageBoxButton.OK, MessageBoxImage.Warning);
     }
     private async void RunCleanup_Click(object sender, RoutedEventArgs e) => await ViewModel.RunCleanupAsync();
     private async void RunRepair_Click(object sender, RoutedEventArgs e)
@@ -531,13 +514,6 @@ public partial class MainWindow : Window
     {
         await ViewModel.CheckApplicationUpdatesAsync();
         await InstallAvailableUpdateAsync(confirm: true);
-    }
-
-    private async Task InstallAvailableUpdateAfterFullCheckAsync()
-    {
-        if (!ViewModel.LastFullSucceeded) return;
-        await ViewModel.CheckApplicationUpdatesAsync(automatic: true);
-        await InstallAvailableUpdateAsync(confirm: false);
     }
 
     private async Task InstallAvailableUpdateAsync(bool confirm)

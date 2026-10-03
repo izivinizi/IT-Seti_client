@@ -3,7 +3,7 @@
 [Setup]
 AppId={{9C83D41A-9753-4E64-8EC8-A9A324BD7D52}
 AppName=ИТ-Сети Обслуживание ПК (Windows 7 beta)
-AppVersion=1.2.1
+AppVersion=1.2.2
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance Win7
 DisableDirPage=yes

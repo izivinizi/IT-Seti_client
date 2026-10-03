@@ -27,12 +27,14 @@ namespace ITSeti.Maintenance.App
             var benchmark = s.Benchmark;
             var temperature = s.CpuTemperatureC.HasValue ? " · " + s.CpuTemperatureC.Value.ToString("N0") + " °C" : "";
             var issueRows = findings.Select(x => new Win7Row { Title = x, Detail = "", Accent = Red }).ToList();
+            var adminAudit = engineer ? LegacyAdminAccountAudit.Inspect() : "";
+            var adminIssues = findings.Count + (adminAudit.StartsWith("Посторонние администраторы:", StringComparison.Ordinal) ? 1 : 0);
 
             view.Set("ComputerName", s.ComputerName ?? Environment.MachineName);
             view.Set("SnapshotDate", "Проверка от " + (s.CheckedAt ?? "неизвестно"));
             view.Set("Cpu", CpuValue(s.CpuPercent));
             view.Set("CpuDetail", (s.CpuName ?? "Процессор не определён") + temperature);
-            view.Set("CpuStatusBrush", !s.CpuPercent.HasValue || s.CpuPercent <= 0 ? Blue : s.CpuTemperatureC >= 85 ? Red : s.CpuTemperatureC >= 75 ? Amber : Green);
+            view.Set("CpuStatusBrush", !s.CpuPercent.HasValue ? Blue : s.CpuTemperatureC >= 85 ? Red : s.CpuTemperatureC >= 75 ? Amber : Green);
             view.Set("Memory", Value(memoryUsed, "%"));
             view.Set("MemoryDetail", s.TotalMemoryGb.HasValue ? "Свободно " + s.FreeMemoryGb.GetValueOrDefault().ToString("N1") + " из " + s.TotalMemoryGb.Value.ToString("N1") + " ГБ" : "Нет данных");
             view.Set("MemoryStatusBrush", memoryUsed >= 90 ? Amber : Green);
@@ -54,9 +56,9 @@ namespace ITSeti.Maintenance.App
             view.Set("BenchmarkWrite", benchmark != null && benchmark.WriteMbps.HasValue ? benchmark.WriteMbps.Value.ToString("N0") + " МБ/с" : "Нет результата");
             view.Set("BenchmarkState", benchmark == null ? "Тест не запускался" : benchmark.Error ?? "Измерение завершено");
             view.Set("OverviewIssues", Rows(issueRows));
-            view.Set("OverviewStatus", findings.Count == 0 ? "По доступным показателям замечаний нет" : "Требуют внимания: " + findings.Count);
+            view.Set("OverviewStatus", adminIssues == 0 ? "По доступным показателям замечаний нет" : "Требуют внимания: " + adminIssues);
             view.Set("OverviewCoverage", unavailable.Count == 0 ? "Все доступные показатели проверены." : "Не удалось проверить: " + string.Join("; ", unavailable));
-            view.Set("AdminAccountAuditStatus", engineer ? LegacyAdminAccountAudit.Inspect() : "");
+            view.Set("AdminAccountAuditStatus", adminAudit);
             view.Set("UserVisibleIssues", Rows(issueRows));
             view.Set("UserIssueHeading", findings.Count == 0 ? "По доступным показателям замечаний нет" : "Что требует внимания");
             view.Set("UserIssueDetail", findings.Count == 0 ? "" : "Обнаружено: " + findings.Count);

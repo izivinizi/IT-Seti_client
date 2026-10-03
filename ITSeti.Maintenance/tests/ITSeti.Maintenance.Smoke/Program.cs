@@ -39,6 +39,7 @@ internal static class Program
         }
         if (args.Contains("--progress-regression") || args.Contains("--installed-user-check"))
             return CheckProgressRegression(args.Contains("--installed-user-check"));
+        if (args.Contains("--cancel-contract")) return CheckCancellationContract().GetAwaiter().GetResult();
         if (args.Contains("--organization-setup-contract")) return CheckBundledOrganizationSetup().GetAwaiter().GetResult();
         if (args.Contains("--installed-quick-check")) return CheckInstalledQuick().GetAwaiter().GetResult();
         if (args.Contains("--installed-full-check")) return CheckInstalledFull().GetAwaiter().GetResult();
@@ -819,9 +820,11 @@ internal static class Program
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
             ?? throw new Exception("Scheduled full maintenance policy was not found");
         string? Pending() => (string?)method.Invoke(null, [systemData]);
-        if (Pending() != runId) throw new Exception("A completed night check did not request user-session maintenance");
-        File.WriteAllText(Path.Combine(systemData, "auto-full-maintained.txt"), runId);
-        if (Pending() is not null) throw new Exception("Completed maintenance was requested again");
+        if (Pending() is not null) throw new Exception("A successful night check prompted the user");
+        File.WriteAllText(Path.Combine(run, "error.txt"), "repair failed");
+        if (Pending() != runId) throw new Exception("A failed night check did not request a retry");
+        File.Delete(Path.Combine(run, "error.txt"));
+        if (Pending() is not null) throw new Exception("A recovered night check prompted the user");
         File.WriteAllText(Path.Combine(systemData, "pending-auto-full-maintenance.txt"), "..\\invalid");
         if (Pending() is not null) throw new Exception("An invalid scheduled run identifier was accepted");
     }
@@ -848,8 +851,9 @@ internal static class Program
         if (!allowlist.RootElement.TryGetProperty("allowedNames", out var names) || names.GetArrayLength() == 0)
             throw new Exception("Packaged process allowlist is empty or malformed");
         var summary = await File.ReadAllTextAsync(Path.Combine(backend, "Summary.ps1"));
-        if (!summary.Contains("if($allowed -contains $p.ProcessName)", StringComparison.Ordinal))
-            throw new Exception("The diagnostic process scan does not filter its packaged allowlist");
+        if (!summary.Contains("Test-TrustedProcess $sig.Status $signer", StringComparison.Ordinal) ||
+            summary.Contains("if($allowed -contains $p.ProcessName)", StringComparison.Ordinal))
+            throw new Exception("The diagnostic process scan must trust verified signatures, not process names");
         var fullWorker = await File.ReadAllTextAsync(Path.Combine(backend, "FullCheckWorker.ps1"));
         var diskWorker = await File.ReadAllTextAsync(Path.Combine(backend, "HeadlessDiskWorker.ps1"));
         var installedCheck = await File.ReadAllTextAsync(Path.Combine(backend, "InstalledCheck.ps1"));
@@ -986,6 +990,44 @@ internal static class Program
         };
         app.Run(window);
         return exitCode;
+    }
+
+    private sealed class WaitingFullRunner : IFullDiagnosticsRunner
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<DiagnosticSnapshot> RunAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default) => WaitAsync(cancellationToken);
+        public Task<DiagnosticSnapshot> RunUserAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default) => WaitAsync(cancellationToken);
+        public Task<DiagnosticSnapshot> RunQuickAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default) => WaitAsync(cancellationToken);
+        public Task<DiagnosticSnapshot> RunUserQuickAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default) => WaitAsync(cancellationToken);
+        private async Task<DiagnosticSnapshot> WaitAsync(CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("A cancelled check must not return a snapshot.");
+        }
+    }
+
+    private static async Task<int> CheckCancellationContract()
+    {
+        var database = Path.Combine(Path.GetTempPath(), "ITSeti-cancel-" + Guid.NewGuid().ToString("N"), "history.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(database)!);
+        var runner = new WaitingFullRunner();
+        var history = new SqliteHistoryStore(database);
+        var viewModel = new MainViewModel(new WindowsDiagnosticsRunner(), history, runner);
+        var first = viewModel.RunQuickFullAsync();
+        await runner.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (!viewModel.IsFullCheckRunning || !viewModel.CanStopFullCheck) throw new Exception("Stop control was not enabled.");
+        viewModel.StopFullCheck();
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+        if (!viewModel.LastCheckWasStopped || viewModel.IsFullCheckRunning || !viewModel.CanRunQuickFull)
+            throw new Exception("The check did not return to an idle state after cancellation.");
+        if ((await history.GetRecentAsync()).Count != 0) throw new Exception("A cancelled check was saved in history.");
+        var second = viewModel.RunQuickFullAsync();
+        if (!viewModel.CanStopFullCheck) throw new Exception("A second check could not start after cancellation.");
+        viewModel.StopFullCheck();
+        await second.WaitAsync(TimeSpan.FromSeconds(5));
+        Console.WriteLine("PASS: stop control, idle recovery, repeat check and no cancelled history entry.");
+        return 0;
     }
 
     private static async Task<int> CheckInstalledQuick()

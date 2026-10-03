@@ -150,8 +150,9 @@ namespace ITSeti.Maintenance.Win7
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool QueryUnbiasedInterruptTime(out ulong ticks);
 
-        public static LegacySnapshot Collect(bool full = false)
+        public static LegacySnapshot Collect(bool full = false, CancellationToken cancellationToken = default(CancellationToken), bool scheduled = false)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var snapshot = new LegacySnapshot
             {
                 ComputerName = Environment.MachineName,
@@ -159,13 +160,20 @@ namespace ITSeti.Maintenance.Win7
                 CheckedAt = DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss")
             };
             CollectSystem(snapshot);
+            cancellationToken.ThrowIfCancellationRequested();
             CollectCpu(snapshot);
+            cancellationToken.ThrowIfCancellationRequested();
             CollectDisks(snapshot);
+            cancellationToken.ThrowIfCancellationRequested();
             LegacyExtras.Collect(snapshot);
-            SmartTaskRunner.CollectInto(snapshot);
-            CollectEvents(snapshot);
-            if (full) BenchmarkTaskRunner.CollectInto(snapshot);
+            cancellationToken.ThrowIfCancellationRequested();
+            SmartTaskRunner.CollectInto(snapshot, cancellationToken, scheduled);
+            cancellationToken.ThrowIfCancellationRequested();
+            CollectEvents(snapshot, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (full) BenchmarkTaskRunner.CollectInto(snapshot, cancellationToken, scheduled);
             else snapshot.Benchmark = new LegacyBenchmark { State = "Skipped", Error = "Быстрая проверка: тест скорости не запускался." };
+            cancellationToken.ThrowIfCancellationRequested();
             return snapshot;
         }
 
@@ -253,7 +261,7 @@ namespace ITSeti.Maintenance.Win7
             catch (Exception ex) { result.Unavailable.Add("Диски: " + ex.Message); }
         }
 
-        internal static void CollectSmart(LegacySnapshot result)
+        internal static void CollectSmart(LegacySnapshot result, Func<bool> cancellationRequested = null)
         {
             var source = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Tools", "CrystalDiskInfo");
             var exe = Path.Combine(source, Environment.Is64BitOperatingSystem ? "DiskInfo64.exe" : "DiskInfo32.exe");
@@ -262,6 +270,7 @@ namespace ITSeti.Maintenance.Win7
                 "ITSetiMaintenanceWin7", "work-" + Guid.NewGuid().ToString("N"));
             try
             {
+                if (cancellationRequested != null && cancellationRequested()) throw new OperationCanceledException();
                 CopyDirectory(source, temporary);
                 var localExe = Path.Combine(temporary, Path.GetFileName(exe));
                 using (var process = Process.Start(new ProcessStartInfo(localExe, "/CopyExit")
@@ -273,7 +282,17 @@ namespace ITSeti.Maintenance.Win7
                 }))
                 {
                     if (process == null) throw new InvalidOperationException("Утилита не запустилась.");
-                    if (!process.WaitForExit(30000))
+                    var deadline = DateTime.UtcNow.AddSeconds(30);
+                    while (!process.WaitForExit(500) && DateTime.UtcNow < deadline)
+                    {
+                        if (cancellationRequested != null && cancellationRequested())
+                        {
+                            try { process.Kill(); } catch (InvalidOperationException) { }
+                            try { process.WaitForExit(5000); } catch (InvalidOperationException) { }
+                            throw new OperationCanceledException();
+                        }
+                    }
+                    if (!process.HasExited)
                     {
                         try { process.Kill(); } catch (InvalidOperationException) { }
                         throw new TimeoutException("CrystalDiskInfo не завершил экспорт за 30 секунд.");
@@ -316,6 +335,7 @@ namespace ITSeti.Maintenance.Win7
             {
                 result.Unavailable.Add("SMART: CrystalDiskInfo требует права администратора; проверка пропущена без запроса пароля.");
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex) { result.Unavailable.Add("SMART: " + ex.Message); }
             finally
             {
@@ -333,7 +353,7 @@ namespace ITSeti.Maintenance.Win7
                 CopyDirectory(directory, Path.Combine(target, Path.GetFileName(directory)));
         }
 
-        private static void CollectEvents(LegacySnapshot result)
+        private static void CollectEvents(LegacySnapshot result, CancellationToken cancellationToken)
         {
             var cutoff = DateTime.Now.AddDays(-7);
             foreach (var name in new[] { "System", "Application" })
@@ -345,6 +365,7 @@ namespace ITSeti.Maintenance.Win7
                         var count = 0;
                         for (var i = log.Entries.Count - 1; i >= 0 && count < 300; i--)
                         {
+                            cancellationToken.ThrowIfCancellationRequested();
                             var entry = log.Entries[i];
                             if (entry.TimeGenerated < cutoff) break;
                             count++;
@@ -362,6 +383,7 @@ namespace ITSeti.Maintenance.Win7
                         if (count == 300) result.Unavailable.Add("Журнал " + name + ": просмотрены только последние 300 событий.");
                     }
                 }
+                catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { result.Unavailable.Add("Журнал " + name + ": " + ex.Message); }
             }
             result.Events = result.Events.OrderByDescending(x => x.Time).Take(20).ToList();

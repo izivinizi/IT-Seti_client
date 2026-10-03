@@ -62,8 +62,12 @@ namespace ITSeti.Maintenance.App
         {
             if (args.Length == 1 && args[0] == "--engineer-bootstrap") { EngineerLauncher.Bootstrap(); return 0; }
             if (args.Length == 1 && args[0] == "--collect-smart") return SmartTaskRunner.RunWorker();
+            if (args.Length == 1 && args[0] == "--collect-smart-scheduled") return SmartTaskRunner.RunWorker(scheduled: true);
             if (args.Length == 1 && args[0] == "--collect-benchmark") return BenchmarkTaskRunner.RunWorker();
+            if (args.Length == 1 && args[0] == "--collect-benchmark-scheduled") return BenchmarkTaskRunner.RunWorker(scheduled: true);
             if (args.Length == 1 && args[0] == "--scheduled-check") return ScheduledCheckRunner.RunWorker();
+            if (args.Length == 1 && args[0] == "--scheduled-full") return ScheduledCheckRunner.RunFullWorker();
+            if (args.Length == 1 && args[0] == "--update-application") return Win7GitHubUpdater.RunBackgroundWorker();
             if (args.Length == 1 && args[0] == "--register-smart-task") { SmartTaskInstaller.Register(); return 0; }
             if (args.Length == 1 && args[0] == "--unregister-smart-task") { SmartTaskInstaller.Unregister(); return 0; }
             if (args.Length == 2 && args[0] == "--diagnose")

@@ -1,7 +1,7 @@
 param([string]$Root = (Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference = 'Stop'
-$files = @(Get-ChildItem -LiteralPath $Root -Filter '*.ps1' -File)
-$files += @(Get-ChildItem -LiteralPath (Join-Path $Root 'src') -Filter '*.ps1' -File -Recurse | Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' })
+$files = @(Get-ChildItem -LiteralPath $Root -Filter '*.ps1' -File -Recurse |
+    Where-Object { $_.FullName -notmatch '\\(bin|obj|dist|artifacts)\\' })
 $failures = @()
 foreach ($file in $files) {
     $bytes = [IO.File]::ReadAllBytes($file.FullName)

@@ -15,9 +15,19 @@ namespace ITSeti.Maintenance.Win7
                 try { return SmartTaskRunner.RunWorker(); }
                 catch { return 1; }
             }
+            if (args.Length == 1 && args[0] == "--collect-smart-scheduled")
+            {
+                try { return SmartTaskRunner.RunWorker(scheduled: true); }
+                catch { return 1; }
+            }
             if (args.Length == 1 && args[0] == "--collect-benchmark")
             {
                 try { return BenchmarkTaskRunner.RunWorker(); }
+                catch { return 1; }
+            }
+            if (args.Length == 1 && args[0] == "--collect-benchmark-scheduled")
+            {
+                try { return BenchmarkTaskRunner.RunWorker(scheduled: true); }
                 catch { return 1; }
             }
             if (args.Length == 1 && args[0] == "--scheduled-check")

@@ -1,4 +1,4 @@
-param([string]$Root = (Split-Path $PSScriptRoot -Parent))
+﻿param([string]$Root = (Split-Path $PSScriptRoot -Parent))
 
 $ErrorActionPreference = 'Stop'
 $summaryPath = Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Summary.ps1'
