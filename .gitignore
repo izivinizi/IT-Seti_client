@@ -3,6 +3,7 @@
 !/README.md
 !/ITSeti.Maintenance/
 !/release.json
+!/release-win7.json
 
 # Local credentials and machine-specific state
 /AdminCredentials.ps1
