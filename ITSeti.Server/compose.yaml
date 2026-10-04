@@ -24,8 +24,8 @@ services:
 
   server:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: ITSeti.Server/Dockerfile
     restart: unless-stopped
     environment:
       ConnectionStrings__Database: Host=database;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD};Maximum Pool Size=25;Timeout=15;Command Timeout=30

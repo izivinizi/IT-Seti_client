@@ -1,9 +1,13 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
-COPY ITSeti.Server.csproj ./
-RUN dotnet restore ITSeti.Server.csproj
-COPY . ./
-RUN dotnet publish ITSeti.Server.csproj -c Release -o /out --no-restore /p:UseAppHost=false
+COPY ITSeti.Server/ITSeti.Server.csproj ITSeti.Server/
+COPY ITSeti.Maintenance/src/ITSeti.Maintenance.Core/ITSeti.Maintenance.Core.csproj ITSeti.Maintenance/src/ITSeti.Maintenance.Core/
+RUN dotnet restore ITSeti.Server/ITSeti.Server.csproj
+COPY ITSeti.Server/ ITSeti.Server/
+COPY ITSeti.Maintenance/src/ITSeti.Maintenance.Core/ ITSeti.Maintenance/src/ITSeti.Maintenance.Core/
+COPY ITSeti.Maintenance/src/ITSeti.Maintenance.Infrastructure/Backend/allowed-processes.json ITSeti.Maintenance/src/ITSeti.Maintenance.Infrastructure/Backend/allowed-processes.json
+COPY ITSeti.Maintenance/src/ITSeti.Maintenance.Infrastructure/Backend/allowed-publishers.txt ITSeti.Maintenance/src/ITSeti.Maintenance.Infrastructure/Backend/allowed-publishers.txt
+RUN dotnet publish ITSeti.Server/ITSeti.Server.csproj -c Release -o /out --no-restore /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
