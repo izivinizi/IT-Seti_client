@@ -51,7 +51,9 @@ namespace ITSeti.Maintenance.App
             view.Set("SystemDiskSummary", system == null ? "Нет данных" : system.Name + " · свободно " + Gb(system.FreeBytes) + " из " + Gb(system.TotalBytes) + " · занято " + used.ToString("N0") + "%");
             view.Set("SystemDiskSpeedSummary", benchmark != null && benchmark.State == "Completed" ? "SEQ чт/зп " + benchmark.ReadMbps.GetValueOrDefault().ToString("N0") + "/" + benchmark.WriteMbps.GetValueOrDefault().ToString("N0") + " МБ/с" : "Скорость диска: " + (benchmark == null ? "тест не запускался" : benchmark.Error ?? "не проверена"));
             view.Set("BenchmarkReadBrush", benchmark != null && benchmark.State == "Completed" ? Green : Blue);
-            view.Set("BenchmarkTitle", "DiskSpd · системный диск · 2 прохода");
+            view.Set("BenchmarkTitle", benchmark == null ? "DiskSpd · системный диск · 2 прохода" :
+                "DiskSpd · " + (benchmark.TargetVolume ?? "системный диск") +
+                (string.IsNullOrWhiteSpace(benchmark.TargetDiskModel) ? "" : " · " + benchmark.TargetDiskModel) + " · 2 прохода");
             view.Set("BenchmarkRead", benchmark != null && benchmark.ReadMbps.HasValue ? benchmark.ReadMbps.Value.ToString("N0") + " МБ/с" : "Нет результата");
             view.Set("BenchmarkWrite", benchmark != null && benchmark.WriteMbps.HasValue ? benchmark.WriteMbps.Value.ToString("N0") + " МБ/с" : "Нет результата");
             view.Set("BenchmarkState", benchmark == null ? "Тест не запускался" : benchmark.Error ?? "Измерение завершено");
@@ -111,7 +113,7 @@ namespace ITSeti.Maintenance.App
             view.Set("NetworkAdapters", Rows((s.Network ?? new List<LegacyNetworkAdapter>()).Select(x => new Win7Row { Name = x.Name, Type = x.Kind, Status = x.Status, LinkSpeed = x.Speed, Addresses = x.Addresses })));
             view.Set("Processes", Rows((s.Processes ?? new List<LegacyProcess>()).Select(x => new Win7Row { Name = x.Name,
                 Description = x.Path == null || x.Path == "нет доступа" ? "Нет доступа" : System.IO.Path.GetFileName(x.Path),
-                Publisher = "—", Signature = "Не проверена" })));
+                Publisher = x.Signer ?? "—", Signature = x.Signature ?? "Не проверена" })));
             view.Set("ProcessStatus", "Процессов: " + (s.Processes == null ? 0 : s.Processes.Count));
             var progress = view.Get<ObservableCollection<Win7Row>>("CheckProgressEntries");
             if (progress.Count == 0)
@@ -128,7 +130,11 @@ namespace ITSeti.Maintenance.App
         {
             if (current == null) return;
             var events = current.Events ?? new List<LegacyEvent>();
-            var rows = events.Select(x => new Win7Row { Time = x.Time, LevelLabel = "Ошибка", Provider = x.Source, Id = x.Id, Message = x.Message }).ToList();
+            var filter = EventLevelSelector.SelectedIndex;
+            var rows = events.Where(x => filter >= 2 || filter == 1 && x.Level <= 3 || filter == 0 && x.Level == 2)
+                .Select(x => new Win7Row { Time = x.Time,
+                    LevelLabel = x.Level == 2 ? "Ошибка" : x.Level == 3 ? "Предупреждение" : "Сведения",
+                    Provider = x.Source, Id = x.Id, Message = x.Message }).ToList();
             view.Set("FilteredEvents", Rows(rows));
             view.Set("EventStatus", "Событий: " + rows.Count);
         }

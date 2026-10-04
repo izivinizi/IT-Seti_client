@@ -18,6 +18,7 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        Environment.SetEnvironmentVariable("ITSETI_DISABLE_REPORT_UPLOAD", "1");
         if (args.Contains("--diagnostic-rules-contract"))
         {
             AssertRules();
@@ -127,14 +128,28 @@ internal static class Program
                 support.Show();
                 support.UpdateLayout();
                 await Task.Delay(150);
-                if (((TextBox)support.FindName("IdentityValue")!).Text != $"Инв. номер: 0042{Environment.NewLine}RMS: 123-456{Environment.NewLine}AnyDesk: 123456789"
-                    || !((TextBox)support.FindName("IdentityValue")!).IsReadOnly
-                    || !((TextBox)support.FindName("IdentityValue")!).IsReadOnlyCaretVisible
-                    || !((TextBox)support.FindName("IdentityValue")!).AcceptsReturn
-                    || !((Button)support.FindName("CopyAllButton")!).IsEnabled
-                    || CountButtons((DependencyObject)support.FindName("IdentityPanel")!) != 1)
-                    throw new Exception("Support dialog is missing selectable PC identifiers or quick-copy action");
-                Capture(support, Path.Combine(output, "support.png"));
+                if (support.FindName("IdentityValue") is not null
+                    || ((ComboBox)support.FindName("TicketService")!).Items.Count < 5
+                    || ((CheckBox)support.FindName("IncludePcInfo")!).IsChecked != true
+                    || !((Button)support.FindName("MyTicketsButton")!).IsEnabled)
+                    throw new Exception("Ticket composer contains the old identity panel or is missing controls");
+                foreach (var height in new[] { 760d, 540d })
+                {
+                    support.Height = height;
+                    support.UpdateLayout();
+                    var submit = (Button)support.FindName("SubmitTicket")!;
+                    var top = submit.TranslatePoint(new Point(0, 0), support);
+                    if (top.Y < 0 || top.Y + submit.ActualHeight > support.ActualHeight)
+                        throw new Exception("Ticket submit button is clipped");
+                    Capture(support, Path.Combine(output, $"support-{height}.png"));
+                }
+                var contacts = new ContactsDialog($"Инв. номер: 0042{Environment.NewLine}RMS: 123-456{Environment.NewLine}AnyDesk: 123456789") { Owner = support };
+                contacts.Show();
+                contacts.UpdateLayout();
+                if (!((TextBox)contacts.FindName("IdentityValue")!).Text.Contains("0042"))
+                    throw new Exception("Contacts dialog lost PC identifiers");
+                Capture(contacts, Path.Combine(output, "contacts.png"));
+                contacts.Close();
                 support.Close();
                 while (!window.ViewModel.CanRun) await Task.Delay(50);
                 while (window.ViewModel.UserMemoryLabel == "—") await Task.Delay(50);
@@ -263,6 +278,8 @@ internal static class Program
                 OpenEngineerShellForTest(window);
                 if (adminShell.Visibility != Visibility.Visible || userShell.Visibility != Visibility.Collapsed)
                     throw new Exception("Test engineer shell did not open");
+                if (window.FindName("ServerAssignmentButton") is not Button { IsEnabled: true })
+                    throw new Exception("Engineer company/object selection button is disabled");
                 if (window.ViewModel.UserCpuName == "Модель процессора не определена")
                     throw new Exception("Processor model is missing below the usage graph");
                 if (window.FindName("AdminRmsValue") is not TextBox { IsReadOnly: true, IsReadOnlyCaretVisible: true }
@@ -682,6 +699,9 @@ internal static class Program
                 .Any(finding => finding.Contains("Критических событий", StringComparison.Ordinal)))
             throw new Exception("One or two Kernel-Power 41 events with BugcheckCode 0 must not count as errors");
         var frequentKernelPower = kernelPowerNoise.Append(kernelPowerNoise[0] with { RecordId = 103 }).ToArray();
+        if (!DiagnosticRules.GetUserIssues(snapshot with { Full = full with { Events = kernelPowerNoise.ToList() } })
+            .Any(issue => issue.Severity == "Warning" && issue.Title.Contains("некорректно")))
+            throw new Exception("Zero-code power loss must remain visible without claiming a BSOD");
         if (DiagnosticRules.GetActionableEvents(frequentKernelPower).Count != 3
             || !DiagnosticRules.GetFindings(snapshot with { Full = full with { Events = frequentKernelPower.ToList() } })
                 .Any(finding => finding.Contains("Критических событий в доступной выборке: 3", StringComparison.Ordinal)))
@@ -1068,7 +1088,7 @@ internal static class Program
         string Format(string value) => (string)(formatter.Invoke(null, [value]) ?? "");
         if (Format("Пользователь: Завершена; удалено 0 файлов | Система: Код 0; изменение свободного места 0,02 ГБ") != "Очистка выполнена")
             throw new Exception("Successful cleanup summary includes implementation details");
-        if (Format("Пользователь: Завершена | Система: Файлы обновлений не очищены: доступа нет") != "Очистка профиля выполнена; системная очистка не выполнена")
+        if (Format("Пользователь: Завершена | Система: Системные категории Windows (оптимизация доставки, очистка обновлений и пакеты драйверов) не очищены: доступа нет") != "Очистка профиля выполнена; системная очистка не выполнена")
             throw new Exception("Partial cleanup summary does not explain the missing system cleanup");
     }
 

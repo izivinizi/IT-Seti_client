@@ -26,8 +26,8 @@ namespace ITSeti.Maintenance.Win7
             common.Controls.Add(check);
             if (!engineerMode)
             {
-                var cleanup = Command("Очистить мои временные файлы", false); cleanup.Width = 240;
-                cleanup.Click += async (sender, args) => await RunMaintenanceAsync("Очистка файлов текущего пользователя…", LegacyMaintenance.CleanCurrentUser);
+                var cleanup = Command("Очистить профиль и системные файлы", false); cleanup.Width = 290;
+                cleanup.Click += async (sender, args) => await RunMaintenanceAsync("Очистка профиля и категорий Windows…", LegacyMaintenance.CleanupAllForCurrentUser);
                 common.Controls.Add(cleanup);
             }
             content.Controls.Add(common);

@@ -60,6 +60,19 @@ try {
         Move-Item -LiteralPath $temporary -Destination $result -Force
         return
     }
+    if (Test-Path -LiteralPath (Join-Path $base 'server-device.json')) {
+        Remove-Item -LiteralPath $request.FullName -Force
+        $serverWorker = Join-Path $PSScriptRoot 'ServerSoftware.ps1'
+        if (!(Test-Path -LiteralPath $serverWorker -PathType Leaf)) { throw 'Trusted server software worker is missing.' }
+        $powershell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $arguments = '-NoProfile -ExecutionPolicy Bypass -File "'+$serverWorker+'"'
+        if ($component) { $arguments += ' -Component '+$component }
+        $process = Start-Process -FilePath $powershell -ArgumentList $arguments -WindowStyle Hidden -PassThru -Wait
+        if ($process.ExitCode -ne 0) { throw 'Server software installation failed. Inspect server-software-error.txt.' }
+        [IO.File]::WriteAllText($temporary,'OK',[Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporary -Destination $result -Force
+        return
+    }
     if($component -in @('WinRAR','Yandex')){
         Remove-Item -LiteralPath $request.FullName -Force
         $softwareRoot=Join-Path (Split-Path -Parent $PSScriptRoot) 'Tools\Software'

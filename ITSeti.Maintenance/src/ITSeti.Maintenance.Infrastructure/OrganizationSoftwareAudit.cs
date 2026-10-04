@@ -7,7 +7,7 @@ public sealed record OrganizationComponent(string Name, string State, string Det
 {
     public string ActionStatus { get; init; } = "";
     public bool CanInstall => !string.IsNullOrWhiteSpace(InstallKey) &&
-        (State == "Установлено" || Package == "Файл есть");
+        (State == "Установлено" || Package == "Файл есть" || Package == "На сервере");
     public string InstallLabel => State switch { "Установлено" => "Удалить", "Требует обновления" => "Обновить", _ => "Установить" };
 }
 
@@ -40,6 +40,33 @@ public static class OrganizationSoftwareAudit
             EvaluateStandalone("WinRAR", "WinRAR", winRar, "winrar-x64-723ru.exe", new Version(7, 23, 0)),
             EvaluateStandalone("Яндекс Браузер", "Yandex", yandex, "Yandex.exe", new Version(26, 8, 4, 893))
         };
+        if (File.Exists(Path.Combine(data,"ITSeti","Maintenance","server-device.json")))
+        {
+            var catalog = ServerSoftwareCatalog.Read();
+            var serverRows = new List<OrganizationComponent>();
+            foreach (var package in catalog)
+            {
+                var row = rows.FirstOrDefault(x => x.InstallKey.Equals(package.Key,StringComparison.OrdinalIgnoreCase));
+                if (row is null)
+                {
+                    serverRows.Add(new(package.Key,"Требует настройки","Нет проверенного сценария тихой установки.","На сервере",false,""));
+                    continue;
+                }
+                var executable = row.InstallKey switch
+                {
+                    "AnyDesk" => anyDesk, "RMS" => rms, "OCS" => Existing(programFiles,programFiles86,"OCS Inventory Agent","OcsService.exe"),
+                    "Panel" => Existing(programFiles,programFiles86,"Desktop Info","DesktopInfo.exe"), "WinRAR" => winRar, "Yandex" => yandex, _ => null
+                };
+                var installed = executable is not null;
+                var currentText = installed ? FileVersionInfo.GetVersionInfo(executable!).FileVersion?.Split(' ').FirstOrDefault() : null;
+                var versionKnown = Version.TryParse(currentText,out var current);
+                var requiredKnown = Version.TryParse(package.Version,out var required);
+                var outdated = installed && versionKnown && requiredKnown && current! < required!;
+                var state = !installed ? "Не найдено" : outdated ? "Требует обновления" : "Установлено";
+                serverRows.Add(row with { State=state, Detail=$"На сервере: {package.Version}."+(installed ? $" На ПК: {currentText ?? "не определена"}." : " Программа не обнаружена."), Package="На сервере",NeedsAttention=state!="Установлено" });
+            }
+            return serverRows;
+        }
         return rows;
     }
 

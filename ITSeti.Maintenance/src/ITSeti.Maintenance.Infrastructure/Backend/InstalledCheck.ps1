@@ -102,11 +102,26 @@ if((Test-Path -LiteralPath $cancelRequest) -and [IO.File]::ReadAllText($cancelRe
     exit 0
 }
 if(Test-Path -LiteralPath (Join-Path $run 'result.json')){
+    try { & (Join-Path $env:WINDIR 'System32\schtasks.exe') /Run /TN 'ITSeti-Maintenance-Upload' | Out-Null } catch {}
     [IO.File]::WriteAllText((Join-Path $base 'last-quick-run.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII)
     if($StartRepair){
         [IO.File]::WriteAllText((Join-Path $run 'stage.txt'),'Плановое восстановление Windows',[Text.Encoding]::UTF8)
         Complete-ScheduledFullCheck $base $run (Join-Path $source 'InstalledRepair.ps1')
         [IO.File]::WriteAllText((Join-Path $run 'stage.txt'),'Плановое восстановление завершено',[Text.Encoding]::UTF8)
+        try {
+            [IO.File]::WriteAllText((Join-Path $run 'stage.txt'),'Очистка системных обновлений и пакетов драйверов',[Text.Encoding]::UTF8)
+            $script:Admin=$true
+            $script:CompactOutput=$true
+            function Section([string]$Text) { [IO.File]::WriteAllText((Join-Path $run 'stage.txt'),$Text,[Text.Encoding]::UTF8) }
+            . ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $source 'Cleanup.ps1'),[Text.Encoding]::UTF8)))
+            Invoke-Cleanup
+            $selectedText=if($script:CleanupResult.SelectedCategories.Count){$script:CleanupResult.SelectedCategories -join ', '}else{'нет'}
+            $unavailableText=if($script:CleanupResult.UnavailableCategories.Count){$script:CleanupResult.UnavailableCategories -join ', '}else{'нет'}
+            [IO.File]::WriteAllText((Join-Path $run 'cleanup-after-repair.txt'),
+                ('Профиль вошедшего пользователя не запускался: плановая задача работает от SYSTEM. Системные категории: {0}; отсутствуют в этой Windows: {1}; код {2}; изменение свободного места {3:N2} ГБ (включая параллельные изменения).' -f $selectedText,$unavailableText,$script:CleanupResult.ExitCode,$script:CleanupResult.ChangeGB),[Text.Encoding]::UTF8)
+        } catch {
+            [IO.File]::WriteAllText((Join-Path $run 'cleanup-after-repair.txt'),('Системная очистка не выполнена: '+$_.Exception.Message),[Text.Encoding]::UTF8)
+        }
         Remove-Item -LiteralPath (Join-Path $base 'pending-auto-full-maintenance.txt') -Force -ErrorAction SilentlyContinue
     }
     elseif(!$Quick){

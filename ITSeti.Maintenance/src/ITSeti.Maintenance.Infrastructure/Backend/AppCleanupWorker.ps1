@@ -19,7 +19,9 @@ try {
     Write-Stage 'Очистка системных файлов и обновлений Windows…'
     try {
         Invoke-Cleanup
-        ('Код {0}; изменение свободного места {1:N2} ГБ (включая работу других программ).' -f $script:CleanupResult.ExitCode,$script:CleanupResult.ChangeGB) | Set-Content -LiteralPath (Join-Path $StatusRoot 'admin-cleanup.txt') -Encoding UTF8
+        $selectedText=if($script:CleanupResult.SelectedCategories.Count){$script:CleanupResult.SelectedCategories -join ', '}else{'нет'}
+        $unavailableText=if($script:CleanupResult.UnavailableCategories.Count){$script:CleanupResult.UnavailableCategories -join ', '}else{'нет'}
+        ('Код {0}; системные категории: {1}; отсутствуют в этой Windows: {2}; изменение свободного места {3:N2} ГБ (включая работу других программ).' -f $script:CleanupResult.ExitCode,$selectedText,$unavailableText,$script:CleanupResult.ChangeGB) | Set-Content -LiteralPath (Join-Path $StatusRoot 'admin-cleanup.txt') -Encoding UTF8
     } catch {('Не выполнена: '+$_.Exception.Message) | Set-Content -LiteralPath (Join-Path $StatusRoot 'admin-cleanup.txt') -Encoding UTF8}
     Write-Stage 'Очистка завершена.'
 } catch {Write-Stage ('Ошибка очистки: '+$_.Exception.Message)}

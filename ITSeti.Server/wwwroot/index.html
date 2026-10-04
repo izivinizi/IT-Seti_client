@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="csrf-token" content="__CSRF_TOKEN__">
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <title>ИТ-Сети · Сервер</title>
+  <script src="/theme.js?v=1"></script>
+  <link rel="stylesheet" href="/app.css?v=9">
+  <script src="/app.js?v=9" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><img class="brand-logo" src="/brand-logo.png" alt="ИТ-Сети"><span><small>Обслуживание ПК</small></span></div>
+      <nav class="navigation" aria-label="Разделы">
+        <button class="nav-item active" type="button" data-view="computers" aria-current="page">Компьютеры</button>
+        <button class="nav-item" type="button" data-view="monitoring">Мониторинг <span id="monitor-badge" class="nav-count hidden">0</span></button>
+        <button class="nav-item" type="button" data-view="tickets">Заявки</button>
+        <button class="nav-item" type="button" data-view="packages">ПО и обновления</button>
+      </nav>
+      <div class="sidebar-bottom">Центральный сервер</div>
+    </aside>
+    <div class="content">
+      <header class="topbar">
+        <div><strong id="page-title">Компьютеры</strong><span>ИТ-Сети · Обслуживание ПК</span></div>
+        <div class="topbar-actions"><button id="theme-toggle" type="button" class="secondary compact" aria-label="Включить тёмную тему" aria-pressed="false" title="Включить тёмную тему"><span id="theme-icon" aria-hidden="true">☾</span></button><form method="post" action="/logout"><input type="hidden" name="__RequestVerificationToken" value="__CSRF_TOKEN__"><button type="submit" class="secondary compact">Выйти</button></form></div>
+      </header>
+      <main>
+        <section id="view-computers" class="view active" aria-labelledby="computers-title">
+          <div class="page-heading"><div><h1 id="computers-title">Компьютеры</h1><p>Состояние зарегистрированных рабочих мест</p></div><button id="refresh-devices" type="button" class="secondary">Обновить</button></div>
+          <div class="metrics" aria-label="Сводка">
+            <div><span>Всего ПК</span><strong id="stat-all">—</strong></div>
+            <div><span>На связи за 24 ч</span><strong id="stat-online">—</strong></div>
+            <div><span>Проверок за 24 ч</span><strong id="stat-checks">—</strong></div>
+            <div><span>Компаний</span><strong id="stat-companies">—</strong></div>
+            <div><span>Объектов</span><strong id="stat-sites">—</strong></div>
+          </div>
+          <div class="filterbar">
+            <label class="search-field"><span>Инвентарный номер</span><input id="device-search" class="field" placeholder="Введите часть номера" autocomplete="off"></label>
+            <label><span>Компания</span><select id="device-company" class="field"><option value="">Все компании</option></select></label>
+            <label><span>Объект</span><select id="device-site" class="field"><option value="">Все объекты</option></select></label>
+            <button id="sync-okdesk" type="button" class="secondary sync-button">Синхронизировать Okdesk</button>
+          </div>
+          <div id="device-status" class="status" role="status"></div>
+          <div class="split">
+            <section class="list-pane" aria-label="Список компьютеров">
+              <div class="section-heading"><h2 id="computer-list-title">Компании</h2><span id="device-count" class="meta"></span></div>
+              <div class="table-scroll"><table class="data-table device-table"><thead><tr id="computer-columns"><th>Компания</th><th>Компьютеры</th><th></th></tr></thead><tbody id="device-rows"></tbody></table></div>
+              <div id="device-empty" class="empty hidden">Зарегистрированных компьютеров пока нет.</div>
+              <div class="pager"><button id="device-prev" type="button" class="secondary compact">Назад</button><span id="device-page">Страница 1</span><button id="device-next" type="button" class="secondary compact">Далее</button></div>
+            </section>
+            <section class="detail-pane" aria-label="Проверки компьютера">
+              <div class="section-heading"><div><h2 id="selected-title">Выберите компьютер</h2><span id="selected-meta" class="meta"></span></div></div>
+              <div id="run-list" class="run-list"></div>
+              <div id="run-detail" class="run-detail"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="view-monitoring" class="view" aria-labelledby="monitoring-title">
+          <div class="page-heading"><div><h1 id="monitoring-title">Мониторинг</h1><p>Проблемы, появившиеся после предыдущей проверки ПК</p></div><button id="refresh-monitoring" type="button" class="secondary">Обновить</button></div>
+          <div class="monitor-summary"><strong id="monitor-total">—</strong><span>новых событий за 7 дней по всем ПК</span></div>
+          <div class="filterbar monitoring-filters">
+            <label><span>Важность</span><select id="monitor-severity" class="field"><option value="1" selected>Только критические</option><option value="2">Предупреждения</option><option value="0">Все проблемы</option></select></label>
+            <label><span>Период</span><select id="monitor-days" class="field"><option value="1">24 часа</option><option value="7" selected>7 дней</option><option value="30">30 дней</option><option value="90">90 дней</option></select></label>
+            <label><span>Тип</span><select id="monitor-category" class="field"><option value="">Все</option><option value="event">Ошибки журнала</option><option value="finding">Замечания проверки</option></select></label>
+            <label><span>Компания</span><select id="monitor-company" class="field"><option value="">Все компании</option></select></label>
+            <label><span>Объект</span><select id="monitor-site" class="field"><option value="">Все объекты</option></select></label>
+          </div>
+          <div id="monitor-status" class="status" role="status"></div>
+          <div class="monitor-head"><span>Новое событие</span><span>Инвентарный номер и объект</span><span>Обнаружено</span><span></span></div>
+          <div id="monitor-list" class="monitor-list"></div>
+          <div id="monitor-empty" class="empty hidden">Новых ошибок и замечаний пока нет. Первая проверка ПК служит точкой отсчёта.</div>
+          <div class="pager"><button id="monitor-prev" type="button" class="secondary compact">Назад</button><span id="monitor-page">Страница 1</span><button id="monitor-next" type="button" class="secondary compact">Далее</button></div>
+        </section>
+
+        <section id="view-tickets" class="view" aria-labelledby="tickets-title">
+          <div class="page-heading"><div><h1 id="tickets-title">Заявки</h1><p>Запросы с компьютеров и их отправка в Okdesk</p></div><button id="refresh-tickets" type="button" class="secondary">Обновить</button></div>
+          <div class="filterbar">
+            <label><span>Статус</span><select id="ticket-status-filter" class="field"><option value="">Все статусы</option><option value="queued">В очереди</option><option value="sending">Отправляется</option><option value="created">Отправлена в Okdesk</option><option value="rejected">Отклонена</option><option value="unknown">Требует проверки</option></select></label>
+            <label><span>Компания</span><select id="ticket-company" class="field"><option value="">Все компании</option></select></label>
+            <label><span>Объект</span><select id="ticket-site" class="field"><option value="">Все объекты</option></select></label>
+          </div>
+          <div id="ticket-status" class="status" role="status"></div>
+          <div class="table-scroll"><table class="data-table ticket-table"><thead><tr><th>Тема и сервис</th><th>Инвентарный номер и объект</th><th>Создана</th><th>Статус</th></tr></thead><tbody id="ticket-rows"></tbody></table></div>
+          <div id="ticket-empty" class="empty hidden">Заявок пока нет.</div>
+          <div class="pager"><button id="ticket-prev" type="button" class="secondary compact">Назад</button><span id="ticket-page">Страница 1</span><button id="ticket-next" type="button" class="secondary compact">Далее</button></div>
+        </section>
+
+        <section id="view-packages" class="view" aria-labelledby="packages-title">
+          <div class="page-heading"><div><h1 id="packages-title">ПО и обновления</h1><p>Пакеты для зарегистрированных компьютеров</p></div></div>
+          <section class="upload-section" aria-labelledby="upload-title">
+            <h2 id="upload-title">Загрузить пакет</h2>
+            <form id="package-form" class="upload-form">
+              <label><span>Ключ</span><input class="field" name="key" placeholder="rms, ocs, application" required></label>
+              <label><span>Версия</span><input class="field" name="version" placeholder="7.7.3" required></label>
+              <label><span>Платформа</span><select class="field" name="platform"><option value="windows">Windows 10/11</option><option value="win7">Windows 7</option><option value="any">Любая</option></select></label>
+              <label class="file-label"><span>Файл</span><input name="file" type="file" required></label>
+              <button type="submit" class="primary">Загрузить</button>
+            </form>
+            <div id="package-status" class="status" role="status"></div>
+          </section>
+          <section class="package-section" aria-labelledby="package-list-title"><div class="section-heading"><h2 id="package-list-title">Пакеты</h2><span id="package-count" class="meta"></span></div>
+            <div class="table-scroll"><table class="data-table package-table"><thead><tr><th>Ключ</th><th>Версия</th><th>Платформа</th><th>Размер</th><th>SHA-256</th><th>Статус</th><th></th></tr></thead><tbody id="package-rows"></tbody></table></div>
+            <div id="package-empty" class="empty hidden">Пакеты ещё не загружены.</div>
+          </section>
+          <section class="upload-section" aria-labelledby="process-policy-title"><h2 id="process-policy-title">Разрешённые процессы</h2>
+            <form id="process-policy-form" class="policy-form">
+              <label>Имена процессов<textarea id="process-policy-names" class="field" rows="6" spellcheck="false"></textarea></label>
+              <label>Доверенные издатели<textarea id="process-policy-publishers" class="field" rows="6" spellcheck="false"></textarea></label>
+              <button type="submit" class="primary">Сохранить список</button>
+            </form><div id="process-policy-status" class="status" role="status"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+  </div>
+  <dialog id="ticket-dialog" class="ticket-dialog" aria-labelledby="ticket-dialog-title">
+    <header><h2 id="ticket-dialog-title">Заявка</h2><button id="ticket-dialog-close" type="button" class="secondary compact" title="Закрыть" aria-label="Закрыть">×</button></header>
+    <p id="ticket-dialog-description" class="ticket-description"></p>
+    <div id="ticket-conversation" class="ticket-conversation"></div>
+    <form id="ticket-reply-form"><label for="ticket-reply">Ответ</label><textarea id="ticket-reply" class="field" rows="4" maxlength="5000" required></textarea>
+      <label class="public-comment"><input id="ticket-reply-public" type="checkbox" checked> Ответ виден пользователю</label>
+      <div class="ticket-actions"><button type="submit" class="primary">Отправить ответ</button><button id="ticket-complete" type="button" class="secondary">Выполнить</button><button id="ticket-cancel" type="button" class="secondary">Отменить заявку</button></div>
+    </form><div id="ticket-action-status" class="status" role="status"></div>
+  </dialog>
+</body>
+</html>

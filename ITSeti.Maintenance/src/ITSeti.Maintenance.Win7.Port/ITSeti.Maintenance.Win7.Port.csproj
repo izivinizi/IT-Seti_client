@@ -4,9 +4,9 @@
     <TargetFramework>net48</TargetFramework>
     <UseWPF>true</UseWPF>
     <AssemblyName>ITSeti.Maintenance.Win7.Port</AssemblyName>
-    <Version>1.2.2-beta</Version>
-    <AssemblyVersion>1.2.2.0</AssemblyVersion>
-    <FileVersion>1.2.2.0</FileVersion>
+    <Version>2.1.1-beta</Version>
+    <AssemblyVersion>2.1.1.0</AssemblyVersion>
+    <FileVersion>2.1.1.0</FileVersion>
     <RootNamespace>ITSeti.Maintenance.App</RootNamespace>
     <ApplicationIcon>../ITSeti.Maintenance.App/Assets/favicon.ico</ApplicationIcon>
     <LangVersion>latest</LangVersion>
@@ -14,6 +14,9 @@
     <ImplicitUsings>disable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <Content Include="../ITSeti.Maintenance.Infrastructure/Backend/allowed-processes.json" Link="allowed-processes.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../ITSeti.Maintenance.Infrastructure/Backend/allowed-publishers.txt" Link="allowed-publishers.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Compile Include="../ITSeti.Maintenance.Win7/LegacyProcessTrust.cs" Link="Legacy/LegacyProcessTrust.cs" />
     <Reference Include="System.Management" />
     <Reference Include="System.Web" />
     <Reference Include="System.Web.Extensions" />
@@ -26,8 +29,11 @@
     <Compile Include="../ITSeti.Maintenance.Win7/LegacySoftwareAudit.cs" Link="Legacy/LegacySoftwareAudit.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/BenchmarkTaskRunner.cs" Link="Legacy/BenchmarkTaskRunner.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/SmartTaskRunner.cs" Link="Legacy/SmartTaskRunner.cs" />
+    <Compile Include="../ITSeti.Maintenance.Win7/SystemCleanupTaskRunner.cs" Link="Legacy/SystemCleanupTaskRunner.cs" />
+    <Compile Include="../ITSeti.Maintenance.Win7/UserProfileCleanupBridge.cs" Link="Legacy/UserProfileCleanupBridge.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/ManualTaskCancellation.cs" Link="Legacy/ManualTaskCancellation.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/SmartTaskInstaller.cs" Link="Legacy/SmartTaskInstaller.cs" />
+    <Compile Include="../ITSeti.Maintenance.Win7/ServerReportUploader.cs" Link="Legacy/ServerReportUploader.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/ScheduledCheckRunner.cs" Link="Legacy/ScheduledCheckRunner.cs" />
     <ApplicationDefinition Include="../ITSeti.Maintenance.App/App.xaml" Link="App.xaml" />
     <Page Include="../ITSeti.Maintenance.App/MainWindow.xaml" Link="MainWindow.xaml" />

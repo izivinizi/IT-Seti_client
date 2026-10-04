@@ -24,7 +24,8 @@ namespace ITSeti.Maintenance.Win7
             using (var identity = WindowsIdentity.GetCurrent())
                 if (identity.User == null || identity.User.Value != "S-1-5-18") return 2;
 
-            var result = new LegacyBenchmark();
+            var targetVolume = Path.GetPathRoot(Environment.SystemDirectory).TrimEnd('\\');
+            var result = new LegacyBenchmark { TargetVolume = targetVolume };
             try
             {
                 var systemRoot = Path.GetPathRoot(Environment.SystemDirectory);
@@ -157,6 +158,9 @@ namespace ITSeti.Maintenance.Win7
                     {
                         snapshot.Benchmark = new JavaScriptSerializer().Deserialize<LegacyBenchmark>(File.ReadAllText(resultPath));
                         if (snapshot.Benchmark == null) throw new InvalidDataException("DiskSpd вернул пустой отчёт.");
+                        var systemDisk = snapshot.Disks.FirstOrDefault(x => x.IsSystem);
+                        snapshot.Benchmark.TargetVolume = systemDisk == null ? Path.GetPathRoot(Environment.SystemDirectory).TrimEnd('\\') : systemDisk.Name;
+                        snapshot.Benchmark.TargetDiskModel = systemDisk == null ? null : systemDisk.PhysicalDiskModel;
                         if (snapshot.Benchmark.State != "Completed") snapshot.Unavailable.Add("Тест скорости: " + snapshot.Benchmark.Error);
                         else
                         {

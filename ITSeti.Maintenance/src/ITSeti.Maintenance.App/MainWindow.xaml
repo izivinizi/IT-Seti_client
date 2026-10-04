@@ -62,9 +62,11 @@
       <Button x:Name="UserCleanupButton" Style="{StaticResource UserSecondaryButton}" Height="88" Margin="0,10,0,0" Click="RunCleanup_Click" IsEnabled="{Binding CanRunCleanup}" ToolTip="Корзина, временные файлы и кэш пользователя; системно: обновления Windows, оптимизация доставки и пакеты драйверов">
       <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><StackPanel Grid.Column="1" VerticalAlignment="Center"><TextBlock Text="Выполнить очистку" FontSize="16" FontWeight="SemiBold" Foreground="#14419E"/><TextBlock x:Name="UserCleanupHint" Text="Корзина · временные файлы" FontSize="14" Foreground="#354F68" Margin="0,5,0,0"/></StackPanel></Grid>
       </Button>
-     <Button x:Name="SupportButton" Style="{StaticResource UserSecondaryButton}" Height="72" Margin="0,10,0,0" Click="ShowSupport_Click" ToolTip="Способы связи с ИТ-Сети">
+     <Button x:Name="SupportButton" Style="{StaticResource UserSecondaryButton}" Height="72" Margin="0,10,0,0" Click="ShowSupport_Click" ToolTip="Создать заявку в поддержку">
       <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE8F2;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Оставить заявку" FontSize="16" FontWeight="SemiBold" Foreground="#14419E" VerticalAlignment="Center"/></Grid>
      </Button>
+     <Button x:Name="MyTicketsButton" Height="42" Margin="0,10,0,0" Click="ShowMyTickets_Click" Content="Мои заявки"/>
+     <Button x:Name="ContactsButton" Height="42" Margin="0,8,0,0" Click="ShowContacts_Click" Content="Контакты"/>
     </StackPanel>
     <Border Grid.Column="2" Background="White" BorderBrush="#E1EAF0" BorderThickness="1" CornerRadius="6" Padding="24,20">
       <StackPanel>
@@ -155,6 +157,7 @@
         <StackPanel><TextBlock Text="Инвентарный номер" FontWeight="SemiBold"/><TextBlock Text="{Binding ScheduleStatus}" Style="{StaticResource SecondaryText}" Margin="0,4,12,0"/></StackPanel>
         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top"><TextBox x:Name="InventoryInput" Text="{Binding AdminInventoryInput, UpdateSourceTrigger=PropertyChanged}" MaxLength="4" Width="82" Height="36" Padding="9,6" ToolTip="Четыре цифры инвентарного номера"/><Button Click="SaveInventory_Click" Width="36" Height="36" Margin="7,0,0,0" Cursor="Hand" ToolTip="Сохранить инвентарный номер"><TextBlock Text="&#xE74E;" FontFamily="Segoe MDL2 Assets"/></Button></StackPanel>
        </Grid>
+       <Button x:Name="ServerAssignmentButton" Content="Компания и объект ПК" Click="OpenServerAssignment_Click" HorizontalAlignment="Left" Padding="12,7" Margin="0,0,0,18" Background="White" BorderBrush="#C7D5E5" Foreground="#14419E" Cursor="Hand" ToolTip="Изменить привязку компьютера к серверу ИТ-Сети"/>
        <Border BorderBrush="#DDE6EB" BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,18" Background="#F7FAFD">
         <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
          <StackPanel><TextBlock Text="RMS" FontSize="14" Foreground="#354A5E"/><TextBox x:Name="AdminRmsValue" Text="{Binding AdminRmsLabel, Mode=OneWay}" IsReadOnly="True" IsReadOnlyCaretVisible="True" IsTabStop="False" BorderThickness="0" Background="Transparent" Padding="0" Foreground="#203A50" FontWeight="SemiBold" ToolTip="Выделите мышью, чтобы скопировать номер RMS" Margin="0,3,14,0"/></StackPanel>
@@ -357,15 +360,17 @@
         <Button Click="CheckWindowsUpdates_Click" IsEnabled="{Binding CanCheckWindowsUpdates}" Content="Проверить обновления" Padding="14,9" Margin="0,0,8,8"/>
         <Button Click="DisableWindowsUpdates_Click" IsEnabled="{Binding CanChangeWindowsUpdatePolicy}" Content="Отключить автообновления" Padding="14,9" Margin="0,0,8,8"/>
         <Button Click="RestoreWindowsUpdates_Click" IsEnabled="{Binding CanChangeWindowsUpdatePolicy}" Content="Вернуть прежнюю настройку" Padding="14,9" Margin="0,0,8,8"/>
-        <Button Click="ToggleWindowsDefender_Click" IsEnabled="{Binding CanToggleWindowsDefender}" Content="{Binding WindowsDefenderButtonLabel}" Padding="14,9" Margin="0,0,8,8"/>
+        <Button x:Name="WindowsDefenderToggleButton" Click="ToggleWindowsDefender_Click" IsEnabled="{Binding CanToggleWindowsDefender}" Content="{Binding WindowsDefenderButtonLabel}" Padding="14,9" Margin="0,0,8,8"/>
        </WrapPanel>
        <TextBlock Text="Результат проверки" FontWeight="SemiBold" Margin="0,8,0,4"/>
        <TextBlock Text="{Binding WindowsUpdateStatus}" TextWrapping="Wrap" Foreground="#2D4354"/>
        <TextBlock Text="Состояние автообновлений" FontWeight="SemiBold" Margin="0,10,0,4"/>
        <TextBlock Text="{Binding WindowsUpdatePolicyStatus}" TextWrapping="Wrap" Foreground="#2D4354"/>
-       <TextBlock Text="Состояние Microsoft Defender" FontWeight="SemiBold" Margin="0,10,0,4"/>
-       <TextBlock Text="{Binding WindowsDefenderStatus}" TextWrapping="Wrap" Foreground="#2D4354"/>
-       <TextBlock Text="Переключается только защита в реальном времени. Системные политики и Tamper Protection не обходятся." Style="{StaticResource SecondaryText}" Margin="0,3,0,0" TextWrapping="Wrap"/>
+       <StackPanel x:Name="WindowsDefenderInfoSection">
+        <TextBlock Text="Состояние Microsoft Defender" FontWeight="SemiBold" Margin="0,10,0,4"/>
+        <TextBlock Text="{Binding WindowsDefenderStatus}" TextWrapping="Wrap" Foreground="#2D4354"/>
+        <TextBlock Text="Переключается только защита в реальном времени. Системные политики и Tamper Protection не обходятся." Style="{StaticResource SecondaryText}" Margin="0,3,0,0" TextWrapping="Wrap"/>
+       </StackPanel>
        <Border BorderBrush="#DDE6EB" BorderThickness="0,1,0,0" Margin="0,24,0,20"/>
        <TextBlock Text="Восстановление Windows" Style="{StaticResource SectionHeading}"/>
        <TextBlock x:Name="MaintenanceRepairHint" Text="DISM и SFC запускаются только отдельно. Работают в фоне; автоматической перезагрузки нет." Foreground="#354A5E" Margin="0,8,0,12" TextWrapping="Wrap"/>

@@ -1,0 +1,19 @@
+<Window x:Class="ITSeti.Maintenance.App.MyTicketsDialog"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="ИТ-Сети | Мои заявки" Icon="Assets/favicon.ico" Width="900" Height="650" MinWidth="650" MinHeight="430"
+ WindowStartupLocation="CenterOwner" Background="White" FontFamily="Segoe UI Variable Text, Segoe UI"
+ Loaded="Window_Loaded">
+ <Grid Margin="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <DockPanel Margin="0,0,0,14"><Button Content="Обновить" Click="Refresh_Click" DockPanel.Dock="Right" Padding="13,7"/><TextBlock Text="Мои заявки" FontSize="22" FontWeight="SemiBold" Foreground="#143C87" VerticalAlignment="Center"/></DockPanel>
+  <Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="270"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+   <ListBox x:Name="Tickets" Grid.Column="0" SelectionChanged="Tickets_SelectionChanged" BorderBrush="#DDE6EB" DisplayMemberPath="Label"/>
+   <Grid Grid.Column="2"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <TextBlock x:Name="TicketHeader" FontSize="17" FontWeight="SemiBold" Foreground="#143C87" TextWrapping="Wrap" Margin="0,0,0,10"/>
+    <ListBox x:Name="Messages" Grid.Row="1" BorderBrush="#DDE6EB"><ListBox.ItemTemplate><DataTemplate><StackPanel Margin="8,6"><TextBlock Text="{Binding Header}" FontWeight="SemiBold" Foreground="#143C87"/><TextBlock Text="{Binding Content}" TextWrapping="Wrap" Margin="0,4,0,0"/></StackPanel></DataTemplate></ListBox.ItemTemplate></ListBox>
+    <StackPanel Grid.Row="2" Margin="0,10,0,0"><TextBox x:Name="ReplyBody" AcceptsReturn="True" TextWrapping="Wrap" Height="74" Padding="8" PreviewKeyDown="ReplyBody_PreviewKeyDown"/><WrapPanel Margin="0,7,0,0"><Button Content="Прикрепить" Click="Attach_Click" Padding="12,6"/><TextBlock x:Name="AttachmentLabel" VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#526477"/></WrapPanel></StackPanel>
+    <WrapPanel Grid.Row="3" Margin="0,10,0,0"><Button x:Name="SendButton" Content="Отправить ответ" Click="Send_Click" Padding="15,8" Background="#326EFF" Foreground="White" BorderThickness="0"/><ComboBox x:Name="AttachmentPicker" Width="145" Height="34" DisplayMemberPath="FileName" Margin="10,0,0,0"/><Button Content="Скачать" Click="Download_Click" Padding="13,8" Margin="6,0,0,0"/></WrapPanel>
+   </Grid>
+  </Grid>
+  <TextBlock x:Name="StatusText" Grid.Row="2" Foreground="#24796F" TextWrapping="Wrap" Margin="0,10,0,0"/>
+ </Grid>
+</Window>

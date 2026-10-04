@@ -161,8 +161,8 @@ if($softwareCode.Contains('MatchesPassword') -or !$softwareCode.Contains('Config
     throw 'Engineering startup, Windows Settings, setup choices, or component uninstall regression detected.'
 }
 if(!$softwareCode.Contains('CopyAnyDesk_Click') -or !$softwareView.Contains('UserAnyDeskLabel') -or
-   !$supportView.Contains('При подаче заявки укажите данные компьютера.') -or
-   !$supportCode.Contains('CopyAll_Click') -or $softwareCode.Contains('GetMissingNewPcPackages')) {
+   !$supportView.Contains('Click="Contacts_Click"') -or
+   !$supportCode.Contains('new ContactsDialog(identity)') -or $softwareCode.Contains('GetMissingNewPcPackages')) {
     throw 'Support identity display or setup mode selection is missing.'
 }
 if(!$organizationHelper.Contains('ValidateSet(''AnyDesk'', ''RMS'', ''OCS'', ''Panel'')') -or
@@ -246,6 +246,29 @@ if(!$entry.Contains('Test-ScheduledFullDue') -or !$entry.Contains('Complete-Sche
    $window.Contains('RunScheduledFullMaintenanceAsync') -or
    $window.Contains('InstallAvailableUpdateAfterFullCheckAsync')) {
     throw 'The full check must repair and request the app update unattended; user checks must be cancellable.'
+}
+$entryPath=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCheck.ps1'
+$entryTokens=$null;$entryErrors=$null
+[void][Management.Automation.Language.Parser]::ParseFile($entryPath,[ref]$entryTokens,[ref]$entryErrors)
+$entrySource=[IO.File]::ReadAllText($entryPath,[Text.Encoding]::UTF8)
+$repairPosition=$entrySource.IndexOf('Complete-ScheduledFullCheck')
+$postRepairCleanupPosition=$entrySource.IndexOf("Join-Path `$source 'Cleanup.ps1'")
+if($entryErrors -or $repairPosition -lt 0 -or $postRepairCleanupPosition -le $repairPosition -or
+   $entrySource -notmatch 'Invoke-Cleanup' -or
+   $entrySource -notmatch 'Профиль вошедшего пользователя не запускался: плановая задача работает от SYSTEM' -or
+   $entrySource -notmatch 'UnavailableCategories') { throw 'Scheduled full cleanup must report its user-context limitation and selected/unavailable system categories after DISM/SFC.' }
+$cleanupSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Cleanup.ps1'),[Text.Encoding]::UTF8)
+if($cleanupSource -notmatch 'Thumbnail Cache' -or $cleanupSource -notmatch 'Recycle Bin' -or
+   $cleanupSource -notmatch 'Internet Cache' -or $cleanupSource -notmatch 'D3D Shader Cache' -or
+   $cleanupSource -notmatch 'Delivery Optimization Files' -or $cleanupSource -notmatch 'Update Cleanup' -or
+   $cleanupSource -notmatch 'Device Driver Packages') { throw 'Cleanup category contract lost a requested profile or Windows category.' }
+$userCleanupWorker=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\UserCleanupWorker.ps1'),[Text.Encoding]::UTF8)
+$userCleanupTokens=$null;$userCleanupErrors=$null
+[void][Management.Automation.Language.Parser]::ParseInput($userCleanupWorker,[ref]$userCleanupTokens,[ref]$userCleanupErrors)
+if($userCleanupErrors -or $userCleanupWorker -notmatch 'thumbcache_\*\.db' -or
+   $userCleanupWorker -notmatch 'Temporary Internet Files' -or $userCleanupWorker -notmatch 'INetCache' -or
+   $userCleanupWorker -notmatch 'D3DSCache' -or $userCleanupWorker -notmatch 'SHEmptyRecycleBin') {
+    throw 'User-context fallback cleanup must include thumbnails, temporary and internet/Direct3D caches, and the current user recycle bin.'
 }
 if(!$entry.Contains('[switch]$ScheduledQuick') -or !$entry.Contains('if($ScheduledQuick)') -or
    $install -notmatch 'ITSeti-Maintenance-AutoQuick' -or $install -notmatch '\-ScheduledQuick') {

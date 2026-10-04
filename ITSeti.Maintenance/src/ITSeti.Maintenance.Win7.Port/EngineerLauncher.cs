@@ -8,7 +8,7 @@ namespace ITSeti.Maintenance.App
 {
     internal static class EngineerLauncher
     {
-        public static void Start(string account, string password)
+        public static void Start(string account, string password, string originalUserSid)
         {
             var value = account.Trim();
             var slash = value.LastIndexOf('\\');
@@ -25,7 +25,7 @@ namespace ITSeti.Maintenance.App
                 secure.MakeReadOnly();
                 var start = new ProcessStartInfo(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ITSeti.Maintenance.Win7.Port.exe"))
                 {
-                    Arguments = "--engineer-bootstrap",
+                    Arguments = "--engineer-bootstrap --cleanup-sid \"" + (originalUserSid ?? "") + "\"",
                     UserName = user,
                     Domain = domain,
                     Password = secure,
@@ -46,10 +46,11 @@ namespace ITSeti.Maintenance.App
             }
         }
 
-        public static void Bootstrap()
+        public static void Bootstrap(string originalUserSid)
         {
             var exe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ITSeti.Maintenance.Win7.Port.exe");
-            using (var process = Process.Start(new ProcessStartInfo(exe, "--engineer")
+            using (var process = Process.Start(new ProcessStartInfo(exe,
+                "--engineer --cleanup-sid \"" + (originalUserSid ?? "") + "\"")
             { UseShellExecute = true, Verb = "runas", WorkingDirectory = Environment.SystemDirectory }))
                 if (process == null) throw new InvalidOperationException("Windows не открыла инженерское окно.");
         }

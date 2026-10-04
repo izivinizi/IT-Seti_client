@@ -1,0 +1,9 @@
+bin/
+obj/
+publish/
+.env
+.env.*
+!.env.example
+.git/
+packages/
+data/

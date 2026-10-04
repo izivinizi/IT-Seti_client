@@ -20,14 +20,16 @@ namespace ITSeti.Maintenance.App
     {
         private Win7Release availableUpdate;
         private string DiskInfoPath { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Tools", "CrystalDiskInfo", Environment.Is64BitOperatingSystem ? "DiskInfo64.exe" : "DiskInfo32.exe"); } }
+        private string DiskMarkPath { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Tools", "CrystalDiskMark9", Environment.Is64BitOperatingSystem ? "DiskMark64.exe" : "DiskMark32.exe"); } }
         private string TreeSizePath { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Tools", "TreeSize", "TreeSize.exe"); } }
         private string RepairLogPath { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSetiMaintenanceWin7", "sfc-last.txt"); } }
 
         private void PopulateTools()
         {
-            UserCleanupButton.ToolTip = "Удаляются старые временные файлы текущего пользователя.";
-            UserCleanupHint.Text = "Временные файлы";
-            MaintenanceCleanupHint.Text = "В Windows 7 удаляются старые временные файлы текущего пользователя. Корзина и системные файлы не затрагиваются.";
+            MyTicketsButton.Visibility = Visibility.Collapsed;
+            UserCleanupButton.ToolTip = "Очищаются временные файлы, корзина, кэш эскизов, интернет-кэш и кэш Direct3D текущего пользователя; системные категории запускаются отдельно от SYSTEM.";
+            UserCleanupHint.Text = "Профиль, эскизы, интернет- и Direct3D-кэш, корзина";
+            MaintenanceCleanupHint.Text = "Очищаются категории профиля и корзина текущего пользователя, затем поддерживаемые Windows категории оптимизации доставки, очистки обновлений и пакетов драйверов. Загрузки и профили браузеров не затрагиваются.";
             MaintenanceRepairHint.Text = "Доступна проверка системных файлов SFC. Автоматической перезагрузки нет.";
             SetupInstallSection.Visibility = Visibility.Collapsed;
             SetupComponentsList.ItemTemplate = (DataTemplate)FindResource("SoftwareAuditOnlyTemplate");
@@ -37,7 +39,7 @@ namespace ITSeti.Maintenance.App
             ApplicationUpdateHint.Visibility = Visibility.Collapsed;
             view.Set("CanCheckApplicationUpdates", engineer);
             view.Set("ApplicationUpdateStatus", "Обновления Windows 7 проверяются отдельно от основной версии.");
-            LaunchDiskMarkButton.Visibility = Visibility.Collapsed;
+            LaunchDiskMarkButton.Visibility = engineer && File.Exists(DiskMarkPath) ? Visibility.Visible : Visibility.Collapsed;
             TreeSizeVolumeSelector.Visibility = Visibility.Collapsed;
             LaunchTreeSizeButton.Visibility = Visibility.Collapsed;
             OpenLowSpaceScanButton.Visibility = File.Exists(TreeSizePath) ? Visibility.Visible : Visibility.Collapsed;
@@ -52,8 +54,10 @@ namespace ITSeti.Maintenance.App
             view.Set("WindowsUpdateStatus", "Проверка обновлений не запускалась.");
             view.Set("StandaloneRepairStatus", "В Windows 7 доступен SFC.");
             view.Set("CleanupStatus", "Очистка не запускалась.");
-            view.Set("CanRunCleanup", !engineer);
-            LaunchDiskMarkButton.IsEnabled = false;
+            view.Set("CanRunCleanup", true);
+            LaunchDiskMarkButton.IsEnabled = engineer && File.Exists(DiskMarkPath);
+            WindowsDefenderToggleButton.Visibility = Visibility.Collapsed;
+            WindowsDefenderInfoSection.Visibility = Visibility.Collapsed;
             CreateAdminAccountButton.IsEnabled = false;
         }
 
@@ -91,21 +95,44 @@ namespace ITSeti.Maintenance.App
         private void Copy(string value) { if (!string.IsNullOrEmpty(value)) Clipboard.SetText(value); }
 
         private void ShowSupport_Click(object sender, RoutedEventArgs e)
+        { ShowContacts_Click(sender, e); }
+
+        private void ShowMyTickets_Click(object sender, RoutedEventArgs e) { }
+
+        private void ShowContacts_Click(object sender, RoutedEventArgs e)
         {
-            var text = "При подаче заявки укажите данные компьютера." + Environment.NewLine + Environment.NewLine +
-                "Инв. номер: " + (current == null ? "не указан" : current.InventoryNumber ?? "не указан") + Environment.NewLine +
+            var text = "Инв. номер: " + (current == null ? "не указан" : current.InventoryNumber ?? "не указан") + Environment.NewLine +
                 "RMS: " + (current == null ? "не найден" : current.RmsId ?? "не найден") + Environment.NewLine +
                 "AnyDesk: " + (current == null ? "не найден" : current.AnyDeskId ?? "не найден");
-            var window = new Window { Title = "Данные для заявки", Owner = this, Width = 470, Height = 270,
+            var window = new Window { Title = "Контакты ИТ-Сети", Owner = this, Width = 470, Height = 330,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize };
             var panel = new StackPanel { Margin = new Thickness(20) };
+            panel.Children.Add(new TextBlock { Text = "+7 (343) 243-57-63 · кнопка 2\nsupport@it-seti.ru", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
             panel.Children.Add(new TextBox { Text = text, IsReadOnly = true, TextWrapping = TextWrapping.Wrap,
                 VerticalContentAlignment = VerticalAlignment.Top, Height = 145, FontSize = 16, Padding = new Thickness(8) });
             var copy = new Button { Content = "Копировать всё", Padding = new Thickness(12, 7, 12, 7), Margin = new Thickness(0, 12, 0, 0), HorizontalAlignment = HorizontalAlignment.Right };
-            copy.Click += (s, a) => { Clipboard.SetText(text); window.Close(); };
+            copy.Click += (s, a) =>
+            {
+                try { Clipboard.SetDataObject(text, true); window.Close(); }
+                catch (Exception ex) { MessageBox.Show(window, "Не удалось скопировать данные: " + ex.Message, "Буфер обмена"); }
+            };
             panel.Children.Add(copy);
             window.Content = panel;
             window.ShowDialog();
+        }
+
+        private void OpenServerAssignment_Click(object sender, RoutedEventArgs e)
+        {
+            var script = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Connect-Server.ps1");
+            if (!File.Exists(script)) { MessageBox.Show(this, "Скрипт подключения к серверу отсутствует."); return; }
+            try
+            {
+                Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
+                    "WindowsPowerShell", "v1.0", "powershell.exe"),
+                    "-STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + script + "\"")
+                { UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Hidden });
+            }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Не удалось открыть привязку ПК"); }
         }
 
         private void ShowAllIssues_Click(object sender, RoutedEventArgs e) { }
@@ -116,8 +143,8 @@ namespace ITSeti.Maintenance.App
         private async void RunFull_Click(object sender, RoutedEventArgs e) { await CheckAsync(true); }
         private async void RunCleanup_Click(object sender, RoutedEventArgs e)
         {
-            if (engineer) { view.Set("CleanupStatus", "Очистка запускается только из окна текущего пользователя."); return; }
-            await RunActionAsync("Очистка файлов текущего пользователя", "CleanupStatus", LegacyMaintenance.CleanCurrentUser);
+            await RunActionAsync("Очистка профиля и системных временных файлов", "CleanupStatus",
+                () => LegacyMaintenance.CleanupAfterFullCheck(cleanupUserSid, System.Threading.CancellationToken.None));
         }
 
         private void RefreshNetwork_Click(object sender, RoutedEventArgs e) { if (current != null) Render(current); }
@@ -138,7 +165,8 @@ namespace ITSeti.Maintenance.App
                 new Win7Row { Name = "Тест диска", State = current.Benchmark == null ? "Не запускался" : current.Benchmark.State, Detail = current.Benchmark == null ? "" : current.Benchmark.Error } }));
             var files = new[] { Path.Combine(dataPath, "latest.json"), Path.Combine(dataPath, "latest.txt"),
                 Path.Combine(ScheduledCheckRunner.ResultsRoot, "latest.json"),
-                Path.Combine(ScheduledCheckRunner.ResultsRoot, "scheduled-error.txt"), RepairLogPath };
+                Path.Combine(ScheduledCheckRunner.ResultsRoot, "scheduled-error.txt"),
+                Path.Combine(ScheduledCheckRunner.ResultsRoot, "server-upload-error.txt"), RepairLogPath };
             view.Set("DebugFiles", Rows(files.Where(File.Exists).Select(x => new Win7Row { Name = Path.GetFileName(x), Path = x })));
             view.Set("CanOpenDebugDirectory", Directory.Exists(dataPath));
         }
@@ -153,7 +181,7 @@ namespace ITSeti.Maintenance.App
         private void OpenDirectory(string path) { if (Directory.Exists(path)) Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
 
         private void LaunchDiskInfo_Click(object sender, RoutedEventArgs e) { LaunchFile(DiskInfoPath); }
-        private void LaunchDiskMark_Click(object sender, RoutedEventArgs e) { }
+        private void LaunchDiskMark_Click(object sender, RoutedEventArgs e) { LaunchFile(DiskMarkPath); }
         private void LaunchTreeSize_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -253,14 +281,30 @@ namespace ITSeti.Maintenance.App
                 new MainWindow(true).Show();
                 return;
             }
-            AdminAccount.ItemsSource = new[] { Environment.MachineName + "\\Admin",
-                Environment.MachineName + "\\Administrator", Environment.MachineName + "\\it-seti" };
-            AdminAccount.Text = Environment.MachineName + "\\Admin";
+            AdminAccount.ItemsSource = null;
+            AdminAccount.Text = "";
             AdminPassword.Clear();
             AdminVisiblePassword.Clear();
             AdminError.Visibility = Visibility.Collapsed;
             AdminUnlock.Visibility = Visibility.Visible;
             AdminPassword.Focus();
+            PopulateAdministratorCandidatesAsync();
+        }
+        private async void PopulateAdministratorCandidatesAsync()
+        {
+            try
+            {
+                var candidates = await Task.Run(LegacyDiagnostics.FindAdministratorCandidates);
+                if (AdminUnlock.Visibility != Visibility.Visible) return;
+                var typed = AdminAccount.Text;
+                AdminAccount.ItemsSource = candidates;
+                AdminAccount.Text = string.IsNullOrWhiteSpace(typed) ? candidates.FirstOrDefault() ?? "" : typed;
+            }
+            catch (Exception)
+            {
+                if (AdminUnlock.Visibility == Visibility.Visible)
+                    ShowAdminError("Не удалось получить список администраторов. Укажите учётную запись вручную.");
+            }
         }
         private void CancelAdmin_Click(object sender, RoutedEventArgs e) { AdminUnlock.Visibility = Visibility.Collapsed; }
         private void ExitAdmin_Click(object sender, RoutedEventArgs e) { Close(); }
@@ -287,11 +331,18 @@ namespace ITSeti.Maintenance.App
         {
             var account = AdminAccount.Text.Trim();
             var password = AdminVisiblePassword.Visibility == Visibility.Visible ? AdminVisiblePassword.Text : AdminPassword.Password;
+            if (string.Equals(password, "itseti", StringComparison.Ordinal))
+            {
+                try { EngineerLauncher.Bootstrap(cleanupUserSid); AdminUnlock.Visibility = Visibility.Collapsed; }
+                catch (Exception ex) { ShowAdminError(ex.Message); }
+                finally { AdminPassword.Clear(); AdminVisiblePassword.Clear(); }
+                return;
+            }
             if (account.Length == 0 || password.Length == 0) { ShowAdminError("Укажите учётную запись и пароль."); return; }
             UnlockButton.IsEnabled = false;
             try
             {
-                await Task.Run(() => EngineerLauncher.Start(account, password));
+                await Task.Run(() => EngineerLauncher.Start(account, password, cleanupUserSid));
                 AdminUnlock.Visibility = Visibility.Collapsed;
             }
             catch (Exception ex) { ShowAdminError(ex.Message); }

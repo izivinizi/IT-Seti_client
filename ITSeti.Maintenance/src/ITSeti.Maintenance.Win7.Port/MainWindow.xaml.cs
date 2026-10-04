@@ -29,6 +29,8 @@ namespace ITSeti.Maintenance.App
         private readonly Win7ViewModel view = new Win7ViewModel();
         private readonly string dataPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ITSeti", "MaintenanceWin7");
         private readonly bool engineer;
+        private readonly string cleanupUserSid;
+        private UserProfileCleanupBridge cleanupBridge;
         private LegacySnapshot current;
         private List<LegacySnapshot> history = new List<LegacySnapshot>();
         private bool running;
@@ -40,15 +42,21 @@ namespace ITSeti.Maintenance.App
         private DateTime scheduledReportStamp;
         private readonly DispatcherTimer cpuTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
 
-        public MainWindow(bool engineerMode = false, string previewReport = null)
+        public MainWindow(bool engineerMode = false, string previewReport = null, string originalUserSid = null)
         {
             engineer = engineerMode;
+            cleanupUserSid = !engineerMode && string.IsNullOrWhiteSpace(originalUserSid)
+                ? UserProfileCleanupBridge.CurrentUserSid : originalUserSid;
             if (previewReport != null) dataPath = Path.GetDirectoryName(Path.GetFullPath(previewReport));
             InitializeComponent();
             DataContext = view;
+            EventLevelSelector.Items.Clear();
+            EventLevelSelector.Items.Add(new ComboBoxItem { Content = "Только ошибки" });
+            EventLevelSelector.Items.Add(new ComboBoxItem { Content = "Ошибки и предупреждения" });
+            EventLevelSelector.Items.Add(new ComboBoxItem { Content = "Все уровни" });
             EventLevelSelector.SelectedIndex = 1;
-            EventLevelSelector.IsEnabled = false;
-            EventLevelSelector.ToolTip = "В отчёте Windows 7 собираются ошибки и сбои аудита; другие уровни не сохраняются.";
+            EventLevelSelector.IsEnabled = true;
+            EventLevelSelector.ToolTip = "Фильтр применяетcя к сохранённым событиям System и Application за последние 7 дней.";
             AdminShell.ColumnDefinitions[1].MinWidth = 0;
             AdminTabs.MinWidth = 0;
             AdminNavigation.SelectedIndex = 0;
@@ -71,6 +79,7 @@ namespace ITSeti.Maintenance.App
             RefreshSoftware();
             if (previewReport == null)
             {
+                if (!engineer) cleanupBridge = UserProfileCleanupBridge.Start(cleanupUserSid);
                 LoadCachedReport();
                 cpuTimer.Tick += async (sender, args) => await RefreshCpuAsync();
                 Loaded += async (sender, args) =>
@@ -82,7 +91,7 @@ namespace ITSeti.Maintenance.App
                         await PromptScheduledFullFailureAsync();
                     }
                 };
-                Closed += (sender, args) => { windowClosed = true; cpuTimer.Stop(); };
+                Closed += (sender, args) => { windowClosed = true; cpuTimer.Stop(); if (cleanupBridge != null) cleanupBridge.Dispose(); };
             }
             else
             {
@@ -195,6 +204,7 @@ namespace ITSeti.Maintenance.App
             var cancellation = new CancellationTokenSource();
             checkCancellation = cancellation;
             running = true;
+            view.Get<ObservableCollection<Win7Row>>("CheckProgressEntries").Clear();
             foreach (var name in new[] { "IsBusy", "CheckProgressIsRunning" }) view.Set(name, true);
             view.Set("IsFullCheckRunning", true);
             view.Set("CanStopFullCheck", true);
@@ -204,9 +214,22 @@ namespace ITSeti.Maintenance.App
             Progress("Проверка", full ? "Запущена полная проверка" : "Запущена быстрая проверка");
             try
             {
-                var snapshot = await Task.Run(() => LegacyDiagnostics.Collect(full, cancellation.Token));
+                var progress = new Progress<string>(message =>
+                {
+                    view.Set("CheckProgressPhase", message);
+                    Progress("Проверка", message);
+                });
+                var snapshot = await Task.Run(() => engineer
+                    ? LegacyDiagnostics.CollectWithCleanup(full, cancellation.Token, false, true, cleanupUserSid, progress)
+                    : LegacyDiagnostics.Collect(full, cancellation.Token, false));
                 cancellation.Token.ThrowIfCancellationRequested();
                 current = snapshot;
+                if (full && new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent())
+                    .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator))
+                {
+                    try { ScheduledCheckRunner.SetFullBaseline(DateTime.UtcNow); }
+                    catch (Exception ex) { Progress("Расписание","Не удалось обновить срок полной проверки: "+ex.Message); }
+                }
                 Render(snapshot);
                 try
                 {
@@ -217,6 +240,12 @@ namespace ITSeti.Maintenance.App
                     RefreshHistory();
                 }
                 catch (Exception ex) { Progress("История", "Не удалось сохранить отчёт: " + ex.Message); }
+                try
+                {
+                    ServerReportUploader.Queue(snapshot);
+                    ServerReportUploader.Trigger();
+                }
+                catch (Exception ex) { Progress("Сервер", "Отчёт сохранён локально; отправка отложена: " + ex.Message); }
                 Progress("Проверка", snapshot.Findings.Count == 0 ? "Завершена" : "Завершена, есть замечания: " + snapshot.Findings.Count);
                 try
                 {

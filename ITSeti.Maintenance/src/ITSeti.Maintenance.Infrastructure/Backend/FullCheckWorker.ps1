@@ -99,7 +99,6 @@ function Save-Result([string]$Name,[switch]$Pending) {
     elseif($failure -or $null -eq $read -or $null -eq $write){$state='Failed';if(!$failure){$failure='Завершённый результат чтения/записи не получен.'}}
     $events=@(foreach($e in $s.Events){@{Log=[string]$e.LogName;Provider=[string]$e.ProviderName;Id=[int]$e.Id;Level=[int]$e.Level;RecordId=[long]$e.RecordId;Time=$e.TimeCreated.ToString('o');Message=$(if($e.Message){[string]$e.Message}else{'Описание не получено для этого события.'})}})
     $notes=@($s.Notes | Where-Object {$_})
-    if($s.ProcessUnavailable){$notes+=('Без доступа к исполняемому файлу процессов: '+$s.ProcessUnavailable)}
     if($s.EventUnavailable){$notes+=('Недоступно выборок журналов: '+$s.EventUnavailable)}
     $data=@{
         Id=$id;StartedAt=$started;ComputerName=$env:COMPUTERNAME;LastBootAt=$s.LastBootAt;ActiveUptimeHours=$s.ActiveUptimeHours;WindowsEdition=$s.WindowsEdition;WindowsRelease=$s.WindowsRelease;WindowsBuild=$s.WindowsBuild;CpuTemperatureC=$(if($null -ne $s.CpuTemperatureC){[double]$s.CpuTemperatureC}else{$null});CpuTemperatureStatus=[string]$s.CpuTemperatureStatus

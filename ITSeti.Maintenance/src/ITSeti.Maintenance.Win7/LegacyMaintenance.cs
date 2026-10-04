@@ -1,10 +1,13 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Web.Script.Serialization;
 using Microsoft.Win32;
+using System.Security.Principal;
 
 namespace ITSeti.Maintenance.Win7
 {
@@ -20,7 +23,15 @@ namespace ITSeti.Maintenance.Win7
         private static readonly string StatePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "ITSetiMaintenanceWin7", "windows-updates-before.json");
 
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern int SHEmptyRecycleBin(IntPtr hwnd, string rootPath, uint flags);
+
         public static string CleanCurrentUser()
+        {
+            return CleanCurrentUser(System.Threading.CancellationToken.None);
+        }
+
+        public static string CleanCurrentUser(System.Threading.CancellationToken cancellationToken)
         {
             var temp = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar);
             var profile = Path.GetFullPath(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)).TrimEnd(Path.DirectorySeparatorChar);
@@ -28,21 +39,146 @@ namespace ITSeti.Maintenance.Win7
                 throw new InvalidOperationException("Временная папка находится вне профиля текущего пользователя. Очистка отменена.");
             long freed = 0;
             var removed = 0;
-            foreach (var path in Directory.GetFiles(temp, "*", SearchOption.TopDirectoryOnly))
+            var skipped = 0;
+            var categories = new List<string>();
+            CleanDirectoryContents(temp, DateTime.UtcNow.AddDays(-2), cancellationToken, ref freed, ref removed, ref skipped);
+            categories.Add("временные файлы");
+
+            var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var thumbnailCache = Path.Combine(local, "Microsoft", "Windows", "Explorer");
+            var thumbnailCount = DeleteFiles(thumbnailCache, new[] { "thumbcache_*.db", "iconcache_*.db" }, cancellationToken, ref freed, ref removed, ref skipped);
+            if (Directory.Exists(thumbnailCache)) categories.Add("кэш эскизов (" + thumbnailCount + " файлов)");
+            else categories.Add("кэш эскизов недоступен в этой версии Windows");
+
+            var internetRoots = new[] {
+                new { Name = "Internet Cache Files", Path = Path.Combine(local, "Microsoft", "Windows", "Temporary Internet Files") },
+                new { Name = "Internet Cache", Path = Path.Combine(local, "Microsoft", "Windows", "INetCache") }
+            };
+            foreach (var item in internetRoots)
             {
-                try
-                {
-                    var file = new FileInfo(path);
-                    if ((file.Attributes & FileAttributes.ReparsePoint) != 0 || file.LastWriteTimeUtc > DateTime.UtcNow.AddDays(-2)) continue;
-                    var bytes = file.Length;
-                    file.Delete();
-                    freed += bytes;
-                    removed++;
-                }
-                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
+                if (!Directory.Exists(item.Path)) { categories.Add(item.Name + " недоступен в этой версии Windows"); continue; }
+                CleanDirectoryContents(item.Path, DateTime.MaxValue, cancellationToken, ref freed, ref removed, ref skipped);
+                categories.Add(item.Name);
             }
-            return "Временные файлы текущего пользователя: удалено " + removed + ", освобождено " +
-                (freed / 1048576.0).ToString("N1") + " МБ. Файлы моложе двух дней и вложенные папки не тронуты.";
+
+            var shaderCache = Path.Combine(local, "D3DSCache");
+            if (Directory.Exists(shaderCache))
+            {
+                CleanDirectoryContents(shaderCache, DateTime.MaxValue, cancellationToken, ref freed, ref removed, ref skipped);
+                categories.Add("кэш шейдеров Direct3D");
+            }
+            else categories.Add("кэш Direct3D недоступен в этой версии Windows");
+
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var hr = SHEmptyRecycleBin(IntPtr.Zero, null, 0x1 | 0x2 | 0x4);
+                if (hr < 0) Marshal.ThrowExceptionForHR(hr);
+                categories.Add("корзина текущего пользователя");
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception || ex is UnauthorizedAccessException || ex is COMException)
+            {
+                categories.Add("корзина: не удалось очистить (" + ex.Message + ")");
+            }
+
+            return "Очистка текущего пользователя (" + WindowsIdentity.GetCurrent().Name + "): " +
+                string.Join("; ", categories) + ". Удалено файлов: " + removed +
+                ", освобождено " + (freed / 1048576.0).ToString("N1") + " МБ; пропущено занятых/недоступных: " + skipped + ".";
+        }
+
+        private static int DeleteFiles(string root, IEnumerable<string> patterns, System.Threading.CancellationToken token,
+            ref long freed, ref int removed, ref int skipped)
+        {
+            if (!Directory.Exists(root)) return 0;
+            var count = 0;
+            foreach (var pattern in patterns)
+                foreach (var file in Directory.GetFiles(root, pattern, SearchOption.TopDirectoryOnly))
+                {
+                    token.ThrowIfCancellationRequested();
+                    try
+                    {
+                        if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0) { skipped++; continue; }
+                        var info = new FileInfo(file);
+                        var length = info.Length;
+                        info.Delete();
+                        freed += length;
+                        removed++;
+                        count++;
+                    }
+                    catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { skipped++; }
+                }
+            return count;
+        }
+
+        private static void CleanDirectoryContents(string root, DateTime newerThanUtc, System.Threading.CancellationToken token,
+            ref long freed, ref int removed, ref int skipped)
+        {
+            if (!Directory.Exists(root)) return;
+            var directories = new List<string>();
+            var pending = new System.Collections.Generic.Stack<string>();
+            pending.Push(root);
+            while (pending.Count > 0)
+            {
+                token.ThrowIfCancellationRequested();
+                var directory = pending.Pop();
+                string[] entries;
+                try { entries = Directory.GetFileSystemEntries(directory); }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { continue; }
+                foreach (var path in entries)
+                {
+                    token.ThrowIfCancellationRequested();
+                    try
+                    {
+                        var attributes = File.GetAttributes(path);
+                        if ((attributes & FileAttributes.ReparsePoint) != 0) { skipped++; continue; }
+                        if ((attributes & FileAttributes.Directory) != 0)
+                        {
+                            directories.Add(path);
+                            pending.Push(path);
+                            continue;
+                        }
+                        var file = new FileInfo(path);
+                        if (file.LastWriteTimeUtc >= newerThanUtc) continue;
+                        var bytes = file.Length;
+                        file.Delete();
+                        freed += bytes;
+                        removed++;
+                    }
+                    catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { skipped++; }
+                }
+            }
+            foreach (var directory in directories.OrderByDescending(x => x.Length))
+                try { if (!Directory.EnumerateFileSystemEntries(directory).Any()) Directory.Delete(directory, false); }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { skipped++; }
+        }
+
+        public static string CleanupAfterFullCheck(string originalUserSid, System.Threading.CancellationToken cancellationToken)
+        {
+            var results = new System.Collections.Generic.List<string>();
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                if (string.IsNullOrWhiteSpace(originalUserSid))
+                    results.Add("Профиль пользователя не очищен: исходная учётная запись недоступна.");
+                else if (string.Equals(UserProfileCleanupBridge.CurrentUserSid, originalUserSid, StringComparison.OrdinalIgnoreCase))
+                    results.Add(CleanCurrentUser(cancellationToken));
+                else results.Add(UserProfileCleanupBridge.Clean(originalUserSid, cancellationToken));
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { results.Add("Профиль пользователя не очищен: " + ex.Message); }
+            cancellationToken.ThrowIfCancellationRequested();
+            results.Add(SystemCleanupTaskRunner.CollectInto(cancellationToken));
+            return string.Join(" ", results);
+        }
+
+        public static string CleanupAfterFullCheck(bool cleanupCurrentUser, System.Threading.CancellationToken cancellationToken)
+        {
+            return CleanupAfterFullCheck(cleanupCurrentUser ? UserProfileCleanupBridge.CurrentUserSid : null, cancellationToken);
+        }
+
+        public static string CleanupAllForCurrentUser()
+        {
+            return CleanupAfterFullCheck(UserProfileCleanupBridge.CurrentUserSid, System.Threading.CancellationToken.None);
         }
 
         public static string CheckWindowsUpdates()

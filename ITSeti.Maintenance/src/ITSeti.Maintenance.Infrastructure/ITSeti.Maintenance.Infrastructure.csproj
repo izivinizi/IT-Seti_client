@@ -13,6 +13,8 @@
     <Content Include="Backend\Set-WindowsAutomaticUpdates.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\WindowsDefender.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\Update-Application.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Backend\Upload-Reports.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Backend\ServerSoftware.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\Resume-ApplicationUpdate.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\UpdateProgressHost.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\HeadlessDiskWorker.ps1;Backend\InstalledCheck.ps1;Backend\InstalledRepair.ps1;Backend\InstalledCleanup.ps1;Backend\DirectRepair.ps1;Backend\AppCleanupWorker.ps1;Backend\ResourceSampler.ps1;Backend\CpuLoad.ps1;Backend\Create-LocalAdmin.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

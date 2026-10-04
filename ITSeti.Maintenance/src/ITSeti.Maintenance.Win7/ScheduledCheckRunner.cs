@@ -26,11 +26,9 @@ namespace ITSeti.Maintenance.Win7
                 var root = new DirectoryInfo(ResultsRoot);
                 if (!root.Exists || (root.Attributes & FileAttributes.ReparsePoint) != 0)
                     throw new InvalidOperationException("Каталог результатов проверки не готов.");
+                if (full && !IsFullDue(DateTime.UtcNow, ResultsRoot)) return 0;
 
                 var snapshot = LegacyDiagnostics.Collect(full, scheduled: true);
-                WriteAtomically(Path.Combine(ResultsRoot, "latest.txt"), snapshot.ToReport());
-                LegacyHistoryStore.Save(ResultsRoot, snapshot);
-                WriteAtomically(Path.Combine(ResultsRoot, "latest.json"), snapshot.ToJson());
                 var errorPath = Path.Combine(ResultsRoot, "scheduled-error.txt");
                 if (File.Exists(errorPath)) File.Delete(errorPath);
                 if (full)
@@ -43,6 +41,7 @@ namespace ITSeti.Maintenance.Win7
                             (succeeded ? "Завершена: " : "Ошибка восстановления: ") + repair);
                         if (succeeded)
                         {
+                            SetFullBaseline(DateTime.UtcNow);
                             DeleteIfExists(Path.Combine(ResultsRoot, "scheduled-full-failure.txt"));
                             DeleteIfExists(Path.Combine(ResultsRoot, "scheduled-full-remind-after.txt"));
                         }
@@ -53,7 +52,23 @@ namespace ITSeti.Maintenance.Win7
                         WriteAtomically(Path.Combine(ResultsRoot, "scheduled-full-status.txt"), "Ошибка восстановления: " + ex.Message);
                         WriteAtomically(Path.Combine(ResultsRoot, "scheduled-full-failure.txt"), DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
                     }
+                    try
+                    {
+                        var cleanup = LegacyMaintenance.CleanupAfterFullCheck(
+                            UserProfileCleanupBridge.ActiveConsoleUserSid(), System.Threading.CancellationToken.None);
+                        snapshot.CleanupSummary = cleanup;
+                        WriteAtomically(Path.Combine(ResultsRoot, "scheduled-full-cleanup.txt"), cleanup);
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteAtomically(Path.Combine(ResultsRoot, "scheduled-full-cleanup.txt"), "Очистка не выполнена: " + ex.Message);
+                    }
                 }
+                WriteAtomically(Path.Combine(ResultsRoot, "latest.txt"), snapshot.ToReport());
+                LegacyHistoryStore.Save(ResultsRoot, snapshot);
+                WriteAtomically(Path.Combine(ResultsRoot, "latest.json"), snapshot.ToJson());
+                ServerReportUploader.Queue(snapshot);
+                ServerReportUploader.Trigger();
                 QueueApplicationUpdate();
                 return 0;
             }
@@ -70,9 +85,25 @@ namespace ITSeti.Maintenance.Win7
                     }
                     catch (Exception) { }
                 }
+                try { ServerReportUploader.Trigger(); } catch (Exception) { }
                 try { QueueApplicationUpdate(); } catch (Exception) { }
                 return 1;
             }
+        }
+
+        internal static bool IsFullDue(DateTime utcNow, string root)
+        {
+            if (File.Exists(Path.Combine(root,"scheduled-full-failure.txt"))) return true;
+            DateTime baseline;
+            var path = Path.Combine(root,"full-check-baseline.txt");
+            if (!File.Exists(path) || !DateTime.TryParse(File.ReadAllText(path), System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind,out baseline)) return false;
+            return utcNow.ToUniversalTime() >= baseline.ToUniversalTime().AddDays(60);
+        }
+
+        internal static void SetFullBaseline(DateTime utcNow)
+        {
+            WriteAtomically(Path.Combine(ResultsRoot,"full-check-baseline.txt"),utcNow.ToUniversalTime().ToString("o",System.Globalization.CultureInfo.InvariantCulture));
         }
 
         public static bool NeedsDaytimeFullFailurePrompt(DateTime localNow)

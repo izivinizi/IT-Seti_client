@@ -46,14 +46,15 @@ public sealed class DiagnosticDebugView
             Steps.Add(new("Скорость диска", benchmark.State == "Completed" ? "Готово" : benchmark.State == "Running" ? "Выполняется" : "Ошибка",
                 benchmark.State == "Completed" ? $"{benchmark.Drive}: чтение {benchmark.ReadLabel}, запись {benchmark.WriteLabel}" : string.IsNullOrWhiteSpace(benchmark.Error) ? "Результат теста не получен" : benchmark.Error));
             Steps.Add(new("Процессы", full.ProcessUnavailable == 0 ? "Готово" : "Частично",
-                $"Вне списка: {full.Processes.Count}; без доступа к файлу: {full.ProcessUnavailable}"));
+                $"Вне списка: {full.Processes.Count}"));
             Steps.Add(new("События Windows", full.EventLimited || full.EventUnavailable > 0 ? "Частично" : "Готово",
                 $"Получено: {full.Events.Count}; недоступно: {full.EventUnavailable}"));
             var repair = ReadSmallFile(Path.Combine("repair", "status.txt"));
             var repairStarted = File.Exists(Path.Combine(DirectoryPath, "repair", "started.txt"));
             Steps.Add(new("Восстановление Windows", repair is not null ? "Статус" : repairStarted ? "Запущено" : "Не запускалось",
                 repair ?? (repairStarted ? "DISM и SFC выполняются отдельно от диагностики" : "Для проверки пользователя не требуется")));
-            foreach (var note in snapshot.Notes.Where(n => n.Contains(':') && !n.StartsWith("Проверка выполнена", StringComparison.OrdinalIgnoreCase)))
+            foreach (var note in snapshot.Notes.Where(n => n.Contains(':') && !n.StartsWith("Проверка выполнена", StringComparison.OrdinalIgnoreCase)
+                && !n.StartsWith("Без доступа к исполняемому файлу процессов", StringComparison.OrdinalIgnoreCase)))
                 Steps.Add(new("Примечание", "Информация", note));
         }
 

@@ -180,11 +180,20 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
         $script:AllowedPublishers=@()
         $publisherFile=Join-Path $ScriptRoot 'allowed-publishers.txt'
         if(Test-Path -LiteralPath $publisherFile){$script:AllowedPublishers=@([IO.File]::ReadAllLines($publisherFile,[Text.Encoding]::UTF8) | ForEach-Object {$_.Trim()} | Where-Object {$_ -and !$_.StartsWith('#')})}
+        $allowedNames=@()
+        try {
+            $policyFile=Join-Path $env:ProgramData 'ITSeti\Maintenance\process-policy.json'
+            if(!(Test-Path -LiteralPath $policyFile)){$policyFile=Join-Path $ScriptRoot 'allowed-processes.json'}
+            $policy=[IO.File]::ReadAllText($policyFile,[Text.Encoding]::UTF8) | ConvertFrom-Json
+            $allowedNames=@($policy.allowedNames | ForEach-Object {([string]$_ -replace '\.exe$','').ToLowerInvariant()})
+            if($null -ne $policy.allowedPublishers){$script:AllowedPublishers=@($policy.allowedPublishers)}
+        } catch {}
         $seenPaths=@{}
         $candidates=@(foreach($p in (Get-Process)) {
             $path=$null
             try {$path=$p.Path} catch {}
             if(!$path) {$s.ProcessUnavailable++; continue}
+            if($allowedNames -contains $p.ProcessName.ToLowerInvariant()){continue}
             if($seenPaths.ContainsKey($path)){continue}
             $seenPaths[$path]=$true
             New-Object PSObject -Property @{Process=$p;Path=$path}
@@ -276,7 +285,7 @@ function Get-SummaryLines {
     elseif($script:DiskFailure){$diskParts+=('тест: '+$script:DiskFailure)}
     'Системный диск: '+($diskParts -join ' | ')
     '03 | НЕСТАНДАРТНЫЕ ПРОЦЕССЫ'
-    'Процессы для проверки: {0}; без доступа к файлу: {1}' -f @($s.Processes).Count,$s.ProcessUnavailable
+    'Процессы для проверки: {0}' -f @($s.Processes).Count
     if($s.PublisherSkipped){'Исключено по проверенной подписи издателя: {0}' -f $s.PublisherSkipped}
     if(@($s.Processes).Count){Get-ProcessTableLines $s.Processes}
     '04 | ВАЖНЫЕ СОБЫТИЯ'

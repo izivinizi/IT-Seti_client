@@ -3,7 +3,7 @@
 [Setup]
 AppId={{CFA7B53D-16A9-4D77-9D82-EE68369AB185}
 AppName=ИТ-Сети Обслуживание ПК
-AppVersion=1.2.2
+AppVersion=2.1.1
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance
 DefaultGroupName=ИТ-Сети
@@ -31,15 +31,18 @@ Source: "{#PackageRoot}\App\*"; DestDir: "{app}"; Flags: ignoreversion recursesu
 Source: "{#PackageRoot}\Tools\*"; DestDir: "{app}\Tools"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "Install-Maintenance.ps1"; DestDir: "{tmp}\ITSeti-Package"; Flags: ignoreversion deleteafterinstall
 Source: "Install-OrganizationSoftware.ps1"; DestDir: "{tmp}\ITSeti-Package"; Flags: ignoreversion deleteafterinstall
+Source: "Setup\ITSETI-Setup\*"; DestDir: "{tmp}\ITSeti-Package\Setup\ITSETI-Setup"; Flags: ignoreversion recursesubdirs createallsubdirs deleteafterinstall
 Source: "Uninstall-Maintenance.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Uninstall-Options.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "OrganizationUninstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "Connect-Server.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Uninstall-ITSeti.cmd"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\ИТ-Сети Обслуживание ПК"; Filename: "{app}\ITSeti.Maintenance.exe"
 Name: "{autodesktop}\ИТ-Сети Обслуживание ПК"; Filename: "{app}\ITSeti.Maintenance.exe"
 Name: "{autoprograms}\Удалить ИТ-Сети"; Filename: "{app}\Uninstall-ITSeti.cmd"; IconFilename: "{app}\ITSeti.Maintenance.exe"
+Name: "{autoprograms}\Подключить ПК к серверу ИТ-Сети"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-STA -NoProfile -ExecutionPolicy Bypass -File ""{app}\Connect-Server.ps1"""; IconFilename: "{app}\ITSeti.Maintenance.exe"
 
 [Run]
 Filename: "{app}\ITSeti.Maintenance.exe"; Description: "Запустить ИТ-Сети Обслуживание ПК"; Flags: nowait postinstall skipifsilent runasoriginaluser
@@ -150,12 +153,13 @@ var
   ResultText: AnsiString;
   MaintenanceResult: String;
   MaintenanceText: AnsiString;
+  ConnectCode: Integer;
 begin
   if CurStep = ssInstall then
   begin
     if Trim(InventoryEdit.Text) <> '' then
     begin
-      if not CreateDir(ExpandConstant('{commonappdata}\ITSeti\Maintenance')) then
+      if not ForceDirectories(ExpandConstant('{commonappdata}\ITSeti\Maintenance')) then
         RaiseException('Не удалось создать каталог инвентарного номера.');
       if not SaveStringToFile(ExpandConstant('{commonappdata}\ITSeti\Maintenance\inventory.txt'),
         Trim(InventoryEdit.Text), False) then
@@ -177,6 +181,15 @@ begin
         MaintenanceText := 'PowerShell не записал подробности. Проверьте C:\ProgramData\ITSeti\Maintenance\install.log.';
       RaiseException('Установка приложения не завершена. Код: ' + IntToStr(Code) + #13#10 + MaintenanceText);
     end;
+    if not WizardSilent then
+    begin
+      WizardForm.StatusLabel.Caption := 'Подключение компьютера к серверу...';
+      ConnectCode := -1;
+      if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+        '-STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ExpandConstant('{app}\Connect-Server.ps1') + '"',
+        '', SW_SHOWNORMAL, ewWaitUntilTerminated, ConnectCode) or (ConnectCode <> 0) then
+        MsgBox('Не удалось открыть подключение к серверу. Локальная установка завершена; подключить ПК можно позже через меню «Пуск».', mbInformation, MB_OK);
+    end;
     if SoftwareCheck.Checked then
     begin
       WizardForm.StatusLabel.Caption := 'Устанавливаем выбранные программы. Дождитесь результата...';
@@ -184,7 +197,7 @@ begin
       SoftwareCode := 2;
       if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
         '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\Backend\Install-OrganizationSoftware.ps1') +
-        '" -InstallerDirectory "' + ExpandConstant('{app}\Setup\ITSETI-Setup') + '" -ResultFile "' + ResultPath + '"',
+        '" -InstallerDirectory "' + ExpandConstant('{tmp}\ITSeti-Package\Setup\ITSETI-Setup') + '" -ResultFile "' + ResultPath + '"',
         '', SW_HIDE, ewWaitUntilTerminated, SoftwareCode) or (SoftwareCode <> 0) then
       begin
         if not LoadStringFromFile(ResultPath, ResultText) then

@@ -51,6 +51,8 @@ function Invoke-Cleanup([switch]$Preview) {
     $base = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches'
     $keys = @(Get-ChildItem -LiteralPath $base)
     $selected = @($keys | Where-Object { $script:CleanupNames -contains $_.PSChildName })
+    $selectedNames = @($selected | ForEach-Object { $_.PSChildName } | Sort-Object)
+    $unavailableNames = @($script:CleanupNames | Where-Object { $selectedNames -notcontains $_ } | Sort-Object)
     if(!$script:CompactOutput -or $Preview) {
         $selected | ForEach-Object { Write-Host "  $($_.PSChildName)" }
         Write-Host 'Только согласованные категории. Загрузки и профили браузеров не очищаются.'
@@ -80,6 +82,11 @@ function Invoke-Cleanup([switch]$Preview) {
         $old = $before | Where-Object { $_.DeviceID -eq $currentDisk.DeviceID }
         New-Object PSObject -Property @{Disk=$_.DeviceID; FreeGB=[math]::Round($_.FreeSpace/1GB,2); ChangeGB=[math]::Round(($_.FreeSpace-$old.FreeSpace)/1GB,2)}
     })
-    $script:CleanupResult=@{ExitCode=$p.ExitCode;ChangeGB=($changes | Measure-Object ChangeGB -Sum).Sum}
+    $script:CleanupResult=@{
+        ExitCode=$p.ExitCode
+        ChangeGB=($changes | Measure-Object ChangeGB -Sum).Sum
+        SelectedCategories=$selectedNames
+        UnavailableCategories=$unavailableNames
+    }
     if(!$script:CompactOutput) {Table $changes; Write-Host 'Изменение места включает фоновую работу системы.'}
 }

@@ -174,6 +174,9 @@ public partial class MainWindow : Window
         catch (Exception ex) { MessageBox.Show(this, ex.Message, "Не удалось открыть журнал", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
     private void ShowSupport_Click(object sender, RoutedEventArgs e) => new SupportDialog(ViewModel.InventoryNumber, ViewModel.RmsId, ViewModel.AnyDeskId) { Owner = this }.ShowDialog();
+    private void ShowMyTickets_Click(object sender, RoutedEventArgs e) => new MyTicketsDialog { Owner = this }.ShowDialog();
+    private void ShowContacts_Click(object sender, RoutedEventArgs e) => new ContactsDialog(
+        $"Инв. номер: {ViewModel.InventoryNumber}\nRMS: {ViewModel.RmsId}\nAnyDesk: {ViewModel.AnyDeskId}") { Owner = this }.ShowDialog();
     private void CopyInventory_Click(object sender, RoutedEventArgs e) => CopyIdentity(ViewModel.InventoryNumber, "инвентарный номер");
     private void CopyRms_Click(object sender, RoutedEventArgs e) => CopyIdentity(ViewModel.RmsId, "номер RMS");
     private void CopyAnyDesk_Click(object sender, RoutedEventArgs e) => CopyIdentity(ViewModel.AnyDeskId, "номер AnyDesk");
@@ -579,6 +582,26 @@ public partial class MainWindow : Window
         {
             MessageBox.Show(this, ex.Message, "Инвентарный номер не сохранён", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+    }
+    private void OpenServerAssignment_Click(object sender, RoutedEventArgs e)
+    {
+        var script = Path.Combine(AppContext.BaseDirectory, "Connect-Server.ps1");
+        if (!File.Exists(script))
+        {
+            MessageBox.Show(this, "Окно подключения к серверу не найдено.", "Компания и объект", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        try
+        {
+            Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
+            {
+                UseShellExecute = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+                ArgumentList = { "-STA", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", script }
+            });
+        }
+        catch (Exception ex) { MessageBox.Show(this, ex.Message, "Компания и объект", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
     private void RefreshRepairStatus_Click(object sender, RoutedEventArgs e) => ViewModel.RefreshRepairStatus();
 

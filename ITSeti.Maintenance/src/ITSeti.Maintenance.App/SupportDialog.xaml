@@ -1,46 +1,40 @@
 <Window x:Class="ITSeti.Maintenance.App.SupportDialog"
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
- Title="ИТ-Сети | Оставить заявку" Icon="Assets/favicon.ico" Width="550" SizeToContent="Height" ResizeMode="NoResize"
- WindowStartupLocation="CenterOwner" Background="White" FontFamily="Segoe UI Variable Text, Segoe UI">
+ Title="ИТ-Сети | Новая заявка" Icon="Assets/favicon.ico" Width="720" Height="700" MinWidth="540" MinHeight="480"
+ WindowStartupLocation="CenterOwner" Background="White" FontFamily="Segoe UI" FontSize="14">
  <Window.Resources>
-  <Style TargetType="Hyperlink"><Setter Property="Foreground" Value="#235CCB"/><Setter Property="TextDecorations" Value="None"/><Setter Property="Cursor" Value="Hand"/></Style>
-  <Style x:Key="PrimaryActionButton" TargetType="Button">
-   <Setter Property="Background" Value="#326EFF"/><Setter Property="Foreground" Value="White"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Padding" Value="14,9"/><Setter Property="FontSize" Value="15"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Cursor" Value="Hand"/>
-   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button"><Border x:Name="Surface" Background="{TemplateBinding Background}" CornerRadius="5" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Background" Value="#1458EE"/></Trigger><Trigger Property="IsPressed" Value="True"><Setter TargetName="Surface" Property="Background" Value="#14419E"/></Trigger><Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Opacity" Value="0.55"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter>
+  <Style TargetType="TextBox"><Setter Property="Padding" Value="10,8"/><Setter Property="BorderBrush" Value="#C8D5E2"/><Setter Property="BorderThickness" Value="1"/><Setter Property="VerticalContentAlignment" Value="Center"/></Style>
+  <Style TargetType="Button"><Setter Property="Padding" Value="14,9"/><Setter Property="Background" Value="White"/><Setter Property="Foreground" Value="#143C87"/><Setter Property="BorderBrush" Value="#C8D5E2"/><Setter Property="Cursor" Value="Hand"/><Setter Property="MinHeight" Value="38"/></Style>
+  <Style x:Key="PrimaryActionButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Setter Property="Background" Value="#326EFF"/><Setter Property="Foreground" Value="White"/><Setter Property="FontWeight" Value="SemiBold"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button"><Border x:Name="Surface" Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Background" Value="#1458EE"/></Trigger><Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Opacity" Value="0.5"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter>
   </Style>
  </Window.Resources>
- <Grid Margin="30,26,30,26">
-  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <TextBlock Text="Связаться с ИТ-Сети" FontSize="20" FontWeight="SemiBold" Foreground="#143C87" Margin="0,0,0,6"/>
-  <TextBlock Grid.Row="1" Text="Выберите удобный способ подачи заявки" Foreground="#354A5E" FontSize="14" Margin="0,0,0,12"/>
-  <Border x:Name="IdentityPanel" Grid.Row="2" Background="#F3F6F8" BorderBrush="#DDE6EB" BorderThickness="1" CornerRadius="4" Padding="16" Margin="0,0,0,14">
+ <Grid>
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <Grid Margin="24,20,24,16">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+   <TextBlock Text="Новая заявка" FontSize="22" FontWeight="SemiBold" Foreground="#143C87" VerticalAlignment="Center"/>
+   <Button Grid.Column="1" Content="Контакты" Click="Contacts_Click"/>
+  </Grid>
+  <ScrollViewer x:Name="Composer" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+   <Grid Margin="24,0,24,16">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <StackPanel Margin="0,0,0,14"><TextBlock Text="Тема"/><TextBox x:Name="TicketTitle" MaxLength="200" Margin="0,5,0,0"/></StackPanel>
+    <StackPanel Grid.Row="1" Margin="0,0,0,14"><TextBlock Text="Сервис"/><ComboBox x:Name="TicketService" DisplayMemberPath="Name" SelectedValuePath="Code" Height="38" Margin="0,5,0,0"/></StackPanel>
+    <StackPanel Grid.Row="2" Margin="0,0,0,14"><TextBlock Text="Суть заявки"/><TextBox x:Name="TicketBody" MaxLength="5000" AcceptsReturn="True" TextWrapping="Wrap" Height="150" VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto" Margin="0,5,0,0" PreviewKeyDown="TicketBody_PreviewKeyDown"/></StackPanel>
+    <StackPanel Grid.Row="3" Margin="0,0,0,12"><TextBlock Text="Как с вами связаться"/><TextBox x:Name="TicketContact" MaxLength="300" Margin="0,5,0,0" ToolTip="Телефон или электронная почта"/></StackPanel>
+    <CheckBox Grid.Row="4" x:Name="IncludePcInfo" Content="Добавить данные о ПК" IsChecked="True" Margin="0,0,0,14"/>
+    <StackPanel Grid.Row="5">
+     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button Content="Прикрепить файл" Click="Attach_Click" HorizontalAlignment="Left"/><Button x:Name="RemoveAttachment" Grid.Column="1" Content="&#x00D7;" FontSize="20" IsEnabled="False" Click="RemoveFile_Click" ToolTip="Удалить выбранное вложение" AutomationProperties.Name="Удалить выбранное вложение"/></Grid>
+     <ListBox x:Name="TicketFiles" Margin="0,8,0,0" MinHeight="0" MaxHeight="80" BorderThickness="0"/>
+    </StackPanel>
+   </Grid>
+  </ScrollViewer>
+  <Border Grid.Row="2" BorderBrush="#DDE6EB" BorderThickness="0,1,0,0" Background="#F3F6F8" Padding="24,12">
    <StackPanel>
-    <TextBlock Text="При подаче заявки укажите данные компьютера." FontWeight="SemiBold" Foreground="#143C87" TextWrapping="Wrap" Margin="0,0,0,8"/>
-    <TextBox x:Name="IdentityValue" Margin="0,2,0,12" IsReadOnly="True" IsReadOnlyCaretVisible="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Disabled" MinHeight="82" BorderBrush="#DDE6EB" Background="White" Padding="8,7" FontSize="14" Foreground="#203A50" ToolTip="Можно выделить мышью весь блок, включая подписи"/>
-    <Button x:Name="CopyAllButton" Style="{StaticResource PrimaryActionButton}" Click="CopyAll_Click" HorizontalAlignment="Stretch" Height="44" AutomationProperties.Name="Скопировать данные компьютера">
-     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-      <TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="16" Foreground="White" Margin="0,0,9,0" VerticalAlignment="Center"/>
-      <TextBlock Text="Копировать всё" Foreground="White" VerticalAlignment="Center"/>
-     </StackPanel>
-    </Button>
+    <TextBlock x:Name="TicketStatus" TextWrapping="Wrap" Foreground="#24796F" Margin="0,0,0,8"/>
+    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button x:Name="MyTicketsButton" Content="Мои заявки" Click="MyTickets_Click" HorizontalAlignment="Left"/><Button Grid.Column="1" Content="Закрыть" Click="Close_Click" Margin="8,0"/><Button Grid.Column="2" x:Name="SubmitTicket" Content="Отправить заявку" Click="SubmitTicket_Click" Style="{StaticResource PrimaryActionButton}"/></Grid>
    </StackPanel>
   </Border>
-  <Grid Grid.Row="3" Margin="0,0,0,0"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-   <TextBlock Text="MAX" FontWeight="SemiBold" FontSize="16" Foreground="#203A50"/>
-   <TextBlock Grid.Row="1" Margin="0,3,0,16" FontSize="14"><Hyperlink NavigateUri="https://max.ru/id6670529055_bot" RequestNavigate="OpenLink">Открыть бота в MAX</Hyperlink></TextBlock>
-  </Grid>
-  <Border Grid.Row="4" BorderBrush="#E6EDF2" BorderThickness="0,1,0,0" Padding="0,15,0,15"><Grid>
-   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-   <StackPanel><TextBlock Text="Электронная почта" FontWeight="SemiBold" FontSize="16" Foreground="#203A50"/><TextBlock Text="support@it-seti.ru" FontSize="14" Foreground="#30475A" Margin="0,4,0,0"/></StackPanel>
-   <Button Grid.Column="1" Width="34" Height="34" Click="CopyEmail_Click" ToolTip="Скопировать адрес почты" AutomationProperties.Name="Скопировать адрес почты" Cursor="Hand" Background="#F3F6F8" BorderBrush="#DDE6EB"><TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="16" Foreground="#143C87"/></Button>
-  </Grid></Border>
-  <StackPanel Grid.Row="5">
-   <Border BorderBrush="#E6EDF2" BorderThickness="0,1,0,0" Padding="0,15,0,15"><StackPanel><TextBlock Text="Telegram" FontWeight="SemiBold" FontSize="16" Foreground="#203A50"/><TextBlock Margin="0,4,0,0" FontSize="14"><Hyperlink NavigateUri="https://t.me/it_seti_support_bot" RequestNavigate="OpenLink">@it_seti_support_bot</Hyperlink></TextBlock></StackPanel></Border>
-   <Border BorderBrush="#E6EDF2" BorderThickness="0,1,0,0" Padding="0,15,0,15"><StackPanel><TextBlock Text="Телефон" FontWeight="SemiBold" FontSize="16" Foreground="#203A50"/><TextBlock Text="+7 (343) 243-57-63" FontSize="14" Foreground="#30475A" Margin="0,4,0,0"/><TextBlock Text="Кнопка 2 в голосовом меню" FontSize="14" Foreground="#526477" Margin="0,3,0,0"/></StackPanel></Border>
-  </StackPanel>
-  <Grid Grid.Row="6" Margin="0,4,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-   <TextBlock x:Name="CopyStatus" Foreground="#24796F" FontSize="14" VerticalAlignment="Center"/>
-   <Button Grid.Column="1" Content="Закрыть" Click="Close_Click" Padding="18,8" Background="#326EFF" Foreground="White" BorderThickness="0" Cursor="Hand"/>
-  </Grid>
  </Grid>
 </Window>

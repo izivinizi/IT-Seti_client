@@ -123,7 +123,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private bool applicationUpdateRunning;
     private string applicationUpdateStatus = ApplicationUpdateRunner.ReadLastStatus() ?? "Проверка обновлений ещё не выполнялась";
     public bool HasBundledSetup => bundledSetupDirectory is not null;
-    public bool CanInstallSetup => !setupInstallRunning && HasBundledSetup;
+    public bool CanInstallSetup => !setupInstallRunning && (HasBundledSetup || SetupComponents.Any(component => component.Package == "На сервере" && component.CanInstall && component.InstallKey is not "WinRAR" and not "Yandex"));
     public bool CanManageSetup => !setupInstallRunning;
     public bool CanLaunchDiskTools => fullRunner is FullDiagnosticsRunner;
     public string SoftwareActionStatus => softwareActionStatus;
@@ -441,7 +441,9 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public void RefreshSetupAudit()
     {
         bundledSetupDirectory = OrganizationSoftwareAudit.FindBundledDirectory();
-        var statuses = SetupComponents.ToDictionary(component => component.InstallKey, component => component.ActionStatus);
+        var statuses = SetupComponents.Where(component => !string.IsNullOrWhiteSpace(component.InstallKey))
+            .GroupBy(component => component.InstallKey, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().ActionStatus, StringComparer.OrdinalIgnoreCase);
         SetupComponents.Clear();
         foreach (var component in OrganizationSoftwareAudit.Inspect(bundledSetupDirectory))
             SetupComponents.Add(component with { ActionStatus = statuses.GetValueOrDefault(component.InstallKey) ?? "" });
@@ -744,7 +746,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                     : "По проверенным показателям причин замедления не найдено. Это короткая проверка, а не оценка всего компьютера.";
             }
             var lines = DiagnosticRules.GetFindings(Selected).ToList();
-            lines.AddRange(Selected.Notes);
+            lines.AddRange(Selected.Notes.Where(note => !note.StartsWith("Без доступа к исполняемому файлу процессов", StringComparison.OrdinalIgnoreCase)));
             if (Selected.Full?.Benchmark is { State: "Failed" } test) lines.Add("Тест диска: " + test.Error);
             return lines.Count > 0 ? string.Join(Environment.NewLine, lines) : "По измеренным показателям замечаний нет";
         }
@@ -976,7 +978,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         finally { windowsUpdateActionRunning = false; Notify(); }
     }
     public string ProcessStatus => Selected?.Full is { } f
-        ? $"Вне списка: {f.Processes.Count} · Недоступно: {f.ProcessUnavailable}. Не является списком вредоносных программ."
+        ? $"Вне списка: {f.Processes.Count}. Не является списком вредоносных программ."
         : "Запущенные программы в быстрой проверке не проверялись.";
     public string EventStatus => Selected?.Full is { } f
         ? $"За 7 дней: критических {DiagnosticRules.GetActionableEvents(f.Events).Count(e => e.Level == 1)}, ошибок {f.Events.Count(e => e.Level == 2)}, предупреждений {f.Events.Count(e => e.Level == 3)}"
@@ -1157,6 +1159,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                 RecordProgress("Обслуживание", windowsUpdatePolicyStatus);
             }
             await history.SaveAsync(snapshot);
+            try { await ServerReportQueue.EnqueueAsync(snapshot); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             await ReloadAsync();
             LastFullSucceeded = true;
             status = quickMode ? "Быстрая полная проверка завершена. Результат сохранён" : "Полная проверка завершена. Результат сохранён";
@@ -1343,6 +1347,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             Selected = snapshot;
             status = "Сохранение результата…"; Notify();
             await history.SaveAsync(snapshot);
+            try { await ServerReportQueue.EnqueueAsync(snapshot); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             await ReloadAsync();
             status = "Быстрая проверка завершена. Результат сохранён";
         }

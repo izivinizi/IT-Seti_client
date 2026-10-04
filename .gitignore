@@ -2,8 +2,11 @@
 !/.gitignore
 !/README.md
 !/ITSeti.Maintenance/
+!/ITSeti.Server/
+!/ITSeti.Server.Tests/
 !/release.json
 !/release-win7.json
+!/AUDIT-2026-10-05.md
 
 # Local credentials and machine-specific state
 /AdminCredentials.ps1
@@ -16,10 +19,13 @@
 *.private.xml
 .env
 .env.*
+!.env.example
 
 # Build and diagnostic output
 **/bin/
 **/obj/
+ITSeti.Server/publish/
+ITSeti.Server/publish-candidate/
 /.build/
 /.test-output/
 **/artifacts/

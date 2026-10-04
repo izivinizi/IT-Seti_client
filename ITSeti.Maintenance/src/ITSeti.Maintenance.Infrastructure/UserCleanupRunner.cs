@@ -71,7 +71,8 @@ public sealed class UserCleanupRunner
                 await SignalUserAsync(root, "fallback");
                 userReleased = true;
                 await WaitForExitAsync(user, TimeSpan.FromHours(2));
-                return new CleanupResult(await ReadStatusAsync(root, "user-status.txt"), "Файлы обновлений не очищены: приложение не установлено");
+                return new CleanupResult(await ReadStatusAsync(root, "user-status.txt"),
+                    "Системные категории Windows (оптимизация доставки, очистка обновлений и пакеты драйверов) не очищены: приложение не установлено.");
             }
 
             request = Path.Combine(QueueRoot, Path.GetFileName(root) + ".request");
@@ -118,9 +119,11 @@ public sealed class UserCleanupRunner
                 userReleased = true;
             }
             if (user.HasExited || ex is TimeoutException && userReleased)
-                return new CleanupResult(await ReadStatusAsync(root, "user-status.txt"), "Файлы обновлений не очищены: " + ex.Message);
+                return new CleanupResult(await ReadStatusAsync(root, "user-status.txt"),
+                    "Системные категории Windows (оптимизация доставки, очистка обновлений и пакеты драйверов) не очищены: " + ex.Message);
             await WaitForExitAsync(user, TimeSpan.FromHours(2));
-            return new CleanupResult(await ReadStatusAsync(root, "user-status.txt"), "Файлы обновлений не очищены: " + ex.Message);
+            return new CleanupResult(await ReadStatusAsync(root, "user-status.txt"),
+                "Системные категории Windows (оптимизация доставки, очистка обновлений и пакеты драйверов) не очищены: " + ex.Message);
         }
         finally
         {

@@ -35,6 +35,7 @@ namespace ITSeti.Maintenance.App
             }
             var elevated = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
             var preview = args.Length == 2 && args[0] == "--preview-report" ? args[1] : null;
+            var cleanupSid = ReadOption(args, "--cleanup-sid");
 #if DEBUG
             if (args.Length >= 2 && args[0] == "--preview-admin") preview = args[1];
 #endif
@@ -42,7 +43,7 @@ namespace ITSeti.Maintenance.App
 #if DEBUG
             engineer |= args.Length >= 2 && args[0] == "--preview-admin";
 #endif
-            var window = new MainWindow(engineer, preview);
+            var window = new MainWindow(engineer, preview, cleanupSid);
 #if DEBUG
             if (engineer && preview != null && args.Length == 3)
             {
@@ -60,13 +61,19 @@ namespace ITSeti.Maintenance.App
 
         private static int? HandleWorker(string[] args)
         {
-            if (args.Length == 1 && args[0] == "--engineer-bootstrap") { EngineerLauncher.Bootstrap(); return 0; }
+            if (args.Length > 0 && args[0] == "--engineer-bootstrap")
+            {
+                EngineerLauncher.Bootstrap(ReadOption(args, "--cleanup-sid"));
+                return 0;
+            }
             if (args.Length == 1 && args[0] == "--collect-smart") return SmartTaskRunner.RunWorker();
             if (args.Length == 1 && args[0] == "--collect-smart-scheduled") return SmartTaskRunner.RunWorker(scheduled: true);
             if (args.Length == 1 && args[0] == "--collect-benchmark") return BenchmarkTaskRunner.RunWorker();
             if (args.Length == 1 && args[0] == "--collect-benchmark-scheduled") return BenchmarkTaskRunner.RunWorker(scheduled: true);
+            if (args.Length == 1 && args[0] == "--cleanup-system") return SystemCleanupTaskRunner.RunWorker();
             if (args.Length == 1 && args[0] == "--scheduled-check") return ScheduledCheckRunner.RunWorker();
             if (args.Length == 1 && args[0] == "--scheduled-full") return ScheduledCheckRunner.RunFullWorker();
+            if (args.Length == 1 && args[0] == "--upload-reports") return ServerReportUploader.Upload();
             if (args.Length == 1 && args[0] == "--update-application") return Win7GitHubUpdater.RunBackgroundWorker();
             if (args.Length == 1 && args[0] == "--register-smart-task") { SmartTaskInstaller.Register(); return 0; }
             if (args.Length == 1 && args[0] == "--unregister-smart-task") { SmartTaskInstaller.Unregister(); return 0; }
@@ -75,6 +82,13 @@ namespace ITSeti.Maintenance.App
                 File.WriteAllText(args[1], LegacyDiagnostics.Collect().ToJson(), new UTF8Encoding(false));
                 return 0;
             }
+            return null;
+        }
+
+        private static string ReadOption(string[] args, string option)
+        {
+            for (var index = 0; index < args.Length - 1; index++)
+                if (string.Equals(args[index], option, StringComparison.OrdinalIgnoreCase)) return args[index + 1];
             return null;
         }
     }

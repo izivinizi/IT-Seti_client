@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Management;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -16,6 +17,8 @@ namespace ITSeti.Maintenance.Win7
     public sealed class LegacyDisk
     {
         public string Name { get; set; }
+        public string PhysicalDiskModel { get; set; }
+        public string MediaType { get; set; }
         public long TotalBytes { get; set; }
         public long FreeBytes { get; set; }
         public bool IsSystem { get; set; }
@@ -25,6 +28,7 @@ namespace ITSeti.Maintenance.Win7
     {
         public string Log { get; set; }
         public string Source { get; set; }
+        public int Level { get; set; }
         public long Id { get; set; }
         public string Time { get; set; }
         public string Message { get; set; }
@@ -33,6 +37,7 @@ namespace ITSeti.Maintenance.Win7
     public sealed class LegacySmartDisk
     {
         public string Model { get; set; }
+        public string SerialNumber { get; set; }
         public string Health { get; set; }
         public string Letters { get; set; }
         public string MediaType { get; set; }
@@ -51,6 +56,8 @@ namespace ITSeti.Maintenance.Win7
 
     public sealed class LegacyProcess
     {
+        public string Signature { get; set; }
+        public string Signer { get; set; }
         public string Name { get; set; }
         public long MemoryBytes { get; set; }
         public string Path { get; set; }
@@ -58,6 +65,8 @@ namespace ITSeti.Maintenance.Win7
 
     public sealed class LegacyBenchmark
     {
+        public string TargetVolume { get; set; }
+        public string TargetDiskModel { get; set; }
         public double? ReadMbps { get; set; }
         public double? WriteMbps { get; set; }
         public string State { get; set; }
@@ -66,6 +75,8 @@ namespace ITSeti.Maintenance.Win7
 
     public sealed class LegacySnapshot
     {
+        public string Id { get; set; }
+        public string StartedAt { get; set; }
         public string Kind { get; set; }
         public string ComputerName { get; set; }
         public string OsName { get; set; }
@@ -77,6 +88,7 @@ namespace ITSeti.Maintenance.Win7
         public string InventoryNumber { get; set; }
         public string RmsId { get; set; }
         public string AnyDeskId { get; set; }
+        public List<string> AdminAccounts { get; set; } = new List<string>();
         public string CheckedAt { get; set; }
         public string LastBootAt { get; set; }
         public double? ActiveUptimeHours { get; set; }
@@ -85,6 +97,7 @@ namespace ITSeti.Maintenance.Win7
         public double? CpuTemperatureC { get; set; }
         public double? TotalMemoryGb { get; set; }
         public double? FreeMemoryGb { get; set; }
+        public double? MemoryUsedPercent { get { return TotalMemoryGb > 0 ? (TotalMemoryGb - FreeMemoryGb) / TotalMemoryGb * 100 : (double?)null; } }
         public string SmartSummary { get; set; }
         public List<LegacyDisk> Disks { get; set; } = new List<LegacyDisk>();
         public List<LegacySmartDisk> SmartDisks { get; set; } = new List<LegacySmartDisk>();
@@ -92,6 +105,7 @@ namespace ITSeti.Maintenance.Win7
         public List<LegacyProcess> Processes { get; set; } = new List<LegacyProcess>();
         public List<LegacyEvent> Events { get; set; } = new List<LegacyEvent>();
         public LegacyBenchmark Benchmark { get; set; }
+        public string CleanupSummary { get; set; }
         public List<string> Findings { get; set; } = new List<string>();
         public List<string> Unavailable { get; set; } = new List<string>();
 
@@ -108,6 +122,7 @@ namespace ITSeti.Maintenance.Win7
                 "Система: " + OsName + " (" + OsVersion + ")",
                 "Серийный номер: " + (string.IsNullOrWhiteSpace(SerialNumber) ? "не получен" : SerialNumber),
                 "Инв. №: " + (InventoryNumber ?? "не указан") + " | RMS: " + (RmsId ?? "не найден") + " | AnyDesk: " + (AnyDeskId ?? "не найден"),
+                "Локальные администраторы: " + (AdminAccounts.Count == 0 ? "не получены" : string.Join(", ", AdminAccounts)),
                 "Последний запуск: " + (LastBootAt ?? "нет данных"),
                 "Наработка после запуска: " + (ActiveUptimeHours.HasValue ? ActiveUptimeHours.Value.ToString("N0") + " ч" : "нет данных"),
                 "CPU: " + (CpuName ?? "не определён") + " · " + (CpuPercent.HasValue && CpuPercent.Value > 0 ? (CpuPercent.Value < 1 ? "<1%" : CpuPercent.Value.ToString("N0") + "%") : "нет данных") +
@@ -128,6 +143,7 @@ namespace ITSeti.Maintenance.Win7
                 lines.Add("Тест диска: " + (Benchmark.State == "Completed"
                     ? string.Format("чтение {0:N1}, запись {1:N1} МБ/с", Benchmark.ReadMbps, Benchmark.WriteMbps)
                     : Benchmark.Error ?? Benchmark.State));
+            if (!string.IsNullOrWhiteSpace(CleanupSummary)) lines.Add("Очистка: " + CleanupSummary);
             lines.Add("Сеть: " + (Network.Count == 0 ? "нет активных адаптеров" : string.Join("; ", Network.Select(x => x.Name + " " + x.Addresses))));
             lines.Add("Процессы: " + Processes.Count);
             lines.Add("");
@@ -152,28 +168,59 @@ namespace ITSeti.Maintenance.Win7
 
         public static LegacySnapshot Collect(bool full = false, CancellationToken cancellationToken = default(CancellationToken), bool scheduled = false)
         {
+            return CollectCore(full, cancellationToken, scheduled, false, true, null, null);
+        }
+
+        public static LegacySnapshot CollectWithCleanup(bool full, CancellationToken cancellationToken, bool scheduled,
+            bool cleanupCurrentUser, string cleanupUserSid, IProgress<string> progress)
+        {
+            return CollectCore(full, cancellationToken, scheduled, true, cleanupCurrentUser, progress, cleanupUserSid);
+        }
+
+        private static LegacySnapshot CollectCore(bool full, CancellationToken cancellationToken, bool scheduled,
+            bool cleanupAfterBenchmark, bool cleanupCurrentUser, IProgress<string> progress, string cleanupUserSid)
+        {
             cancellationToken.ThrowIfCancellationRequested();
             var snapshot = new LegacySnapshot
             {
+                Id = Guid.NewGuid().ToString("D"),
+                StartedAt = DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture),
                 ComputerName = Environment.MachineName,
                 Kind = full ? "Полная" : "Быстрая",
                 CheckedAt = DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss")
             };
+            progress?.Report("Сбор сведений о Windows, памяти и администраторах");
             CollectSystem(snapshot);
             cancellationToken.ThrowIfCancellationRequested();
+            progress?.Report("Измерение загрузки процессора");
             CollectCpu(snapshot);
             cancellationToken.ThrowIfCancellationRequested();
+            progress?.Report("Обнаружение накопителей и разделов");
             CollectDisks(snapshot);
             cancellationToken.ThrowIfCancellationRequested();
+            progress?.Report("Сбор сети и пользовательских процессов");
             LegacyExtras.Collect(snapshot);
             cancellationToken.ThrowIfCancellationRequested();
+            progress?.Report("Сбор SMART через системную задачу");
             SmartTaskRunner.CollectInto(snapshot, cancellationToken, scheduled);
             cancellationToken.ThrowIfCancellationRequested();
+            MapPhysicalDisks(snapshot);
+            progress?.Report("Проверка журналов Windows");
             CollectEvents(snapshot, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            if (full) BenchmarkTaskRunner.CollectInto(snapshot, cancellationToken, scheduled);
+            if (full)
+            {
+                progress?.Report("Тест скорости системного диска DiskSpd");
+                BenchmarkTaskRunner.CollectInto(snapshot, cancellationToken, scheduled);
+            }
             else snapshot.Benchmark = new LegacyBenchmark { State = "Skipped", Error = "Быстрая проверка: тест скорости не запускался." };
             cancellationToken.ThrowIfCancellationRequested();
+            if (cleanupAfterBenchmark)
+            {
+                progress?.Report("Очистка профиля пользователя и системных категорий Windows");
+                var targetSid = cleanupUserSid ?? (cleanupCurrentUser ? UserProfileCleanupBridge.CurrentUserSid : null);
+                snapshot.CleanupSummary = LegacyMaintenance.CleanupAfterFullCheck(targetSid, cancellationToken);
+            }
             return snapshot;
         }
 
@@ -223,6 +270,52 @@ namespace ITSeti.Maintenance.Win7
                 }
             }
             catch (Exception ex) { result.Unavailable.Add("Серийный номер: " + ex.Message); }
+
+            try
+            {
+                using (var query = new ManagementObjectSearcher("root\\cimv2", "SELECT * FROM Win32_Group WHERE SID='S-1-5-32-544'"))
+                using (var groups = query.Get())
+                {
+                    var group = groups.Cast<ManagementObject>().FirstOrDefault();
+                    if (group == null) throw new InvalidOperationException("Локальная группа администраторов не найдена.");
+                    using (var members = group.GetRelated("Win32_Account"))
+                    {
+                        foreach (ManagementObject member in members)
+                        {
+                            var name = Convert.ToString(member["Name"]);
+                            var domain = Convert.ToString(member["Domain"]);
+                            if (!string.IsNullOrWhiteSpace(name))
+                                result.AdminAccounts.Add((string.IsNullOrWhiteSpace(domain) ? "" : domain + "\\") + name);
+                        }
+                    }
+                }
+                result.AdminAccounts = result.AdminAccounts.Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+            }
+            catch (Exception ex) { result.Unavailable.Add("Локальные администраторы: " + ex.Message); }
+        }
+
+        internal static string[] FindAdministratorCandidates()
+        {
+            var accounts = new List<string>();
+            using (var query = new ManagementObjectSearcher("root\\cimv2", "SELECT * FROM Win32_Group WHERE SID='S-1-5-32-544' AND LocalAccount=True"))
+            {
+                query.Options.Timeout = TimeSpan.FromSeconds(5);
+                using (var groups = query.Get())
+                foreach (ManagementObject group in groups)
+                using (group)
+                using (var members = group.GetRelated("Win32_UserAccount"))
+                foreach (ManagementObject member in members)
+                using (member)
+                {
+                    if (Convert.ToBoolean(member["Disabled"])) continue;
+                    var name = Convert.ToString(member["Name"]);
+                    var domain = Convert.ToString(member["Domain"]);
+                    if (!string.IsNullOrWhiteSpace(name))
+                        accounts.Add((string.IsNullOrWhiteSpace(domain) ? "" : domain + "\\") + name);
+                }
+            }
+            return accounts.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
         private static void CollectCpu(LegacySnapshot result)
@@ -249,7 +342,7 @@ namespace ITSeti.Maintenance.Win7
                         var free = Convert.ToInt64(volume["FreeSpace"] ?? 0);
                         var name = Convert.ToString(volume["DeviceID"]);
                         var isSystem = string.Equals(name, Path.GetPathRoot(Environment.SystemDirectory).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
-                        result.Disks.Add(new LegacyDisk { Name = name, TotalBytes = total, FreeBytes = free, IsSystem = isSystem });
+                            result.Disks.Add(new LegacyDisk { Name = name, TotalBytes = total, FreeBytes = free, IsSystem = isSystem });
                         if (total >= 50L * 1073741824 || isSystem)
                             if (free < 5L * 1073741824 || (total > 0 && free < total / 10))
                                 result.Findings.Add("Мало свободного места на " + name + ".");
@@ -260,6 +353,62 @@ namespace ITSeti.Maintenance.Win7
             }
             catch (Exception ex) { result.Unavailable.Add("Диски: " + ex.Message); }
         }
+
+        private static void MapPhysicalDisks(LegacySnapshot result)
+        {
+            try
+            {
+                using (var query = new ManagementObjectSearcher("root\\cimv2", "SELECT Model,MediaType,DeviceID,SerialNumber FROM Win32_DiskDrive"))
+                using (var drives = query.Get())
+                {
+                    foreach (ManagementObject drive in drives)
+                    {
+                        var model = Convert.ToString(drive["Model"]);
+                        if (string.IsNullOrWhiteSpace(model)) continue;
+                        var media = Convert.ToString(drive["MediaType"]);
+                        var letters = new List<string>();
+                        using (var partitions = drive.GetRelated("Win32_DiskPartition"))
+                        {
+                            foreach (ManagementObject partition in partitions)
+                            using (var logicalDisks = partition.GetRelated("Win32_LogicalDisk"))
+                            {
+                                foreach (ManagementObject logical in logicalDisks)
+                                {
+                                    var letter = Convert.ToString(logical["DeviceID"]);
+                                    if (!string.IsNullOrWhiteSpace(letter)) letters.Add(letter.TrimEnd('\\') + "\\");
+                                }
+                            }
+                        }
+                        var matching = result.Disks.Where(x => letters.Any(letter =>
+                            string.Equals(x.Name.TrimEnd('\\') + "\\", letter, StringComparison.OrdinalIgnoreCase))).ToArray();
+                        foreach (var volume in matching)
+                        {
+                            volume.PhysicalDiskModel = model.Trim();
+                            volume.MediaType = Regex.IsMatch(model + " " + media, "SSD|Solid State|NVMe", RegexOptions.IgnoreCase)
+                                ? "SSD" : Regex.IsMatch(media ?? "", "Fixed hard disk", RegexOptions.IgnoreCase) ? "HDD" : null;
+                        }
+                        var serial = NormalizeDiskSerial(Convert.ToString(drive["SerialNumber"]));
+                        var smart = !string.IsNullOrEmpty(serial)
+                            ? result.SmartDisks.FirstOrDefault(x => NormalizeDiskSerial(x.SerialNumber) == serial)
+                            : null;
+                        if (smart == null)
+                        {
+                            var sameModel = result.SmartDisks.Where(x => NormalizeDiskModel(x.Model) == NormalizeDiskModel(model)).ToArray();
+                            var matchingDriveCount = result.SmartDisks.Count(x => NormalizeDiskModel(x.Model) == NormalizeDiskModel(model));
+                            if (sameModel.Length == 1 && matchingDriveCount == 1) smart = sameModel[0];
+                        }
+                        if (smart != null && letters.Count > 0) smart.Letters = string.Join(", ", letters.Distinct(StringComparer.OrdinalIgnoreCase));
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is ManagementException || ex is UnauthorizedAccessException || ex is COMException)
+            {
+                result.Unavailable.Add("Сопоставление томов с физическими дисками: " + ex.Message);
+            }
+        }
+
+        private static string NormalizeDiskSerial(string value) => Regex.Replace(value ?? "", @"[^A-Za-z0-9]", "").ToUpperInvariant();
+        private static string NormalizeDiskModel(string value) => Regex.Replace(value ?? "", @"[^A-Za-z0-9]", "").ToUpperInvariant();
 
         internal static void CollectSmart(LegacySnapshot result, Func<bool> cancellationRequested = null)
         {
@@ -311,6 +460,7 @@ namespace ITSeti.Maintenance.Win7
                     if (!model.Success || !health.Success) continue;
                     var state = health.Groups[1].Value.Trim();
                     var disk = model.Groups[1].Value.Trim();
+                    var serial = Regex.Match(block, @"(?im)^\s*Serial Number\s*:\s*(.*)$").Groups[1].Value.Trim();
                     var letters = Regex.Match(block, @"(?m)^\s*Drive Letter\s*:\s*(.*)$").Groups[1].Value.Trim();
                     var transfer = Regex.Match(block, @"(?m)^\s*Transfer Mode\s*:\s*(.*)$").Groups[1].Value.Trim();
                     var rotation = Regex.Match(block, @"(?m)^\s*Rotation Rate\s*:\s*(.*)$").Groups[1].Value.Trim();
@@ -320,7 +470,7 @@ namespace ITSeti.Maintenance.Win7
                     var powerOnHours = long.TryParse(Regex.Replace(hoursText, @"\D", ""), out hours) ? (long?)hours : null;
                     var mediaType = Regex.IsMatch(rotation + interfaceName, "SSD|Solid State|NVMe|NVM Express", RegexOptions.IgnoreCase)
                         ? "SSD" : Regex.IsMatch(rotation, "RPM", RegexOptions.IgnoreCase) ? "HDD" : "Не определён";
-                    result.SmartDisks.Add(new LegacySmartDisk { Model = disk, Health = state, Letters = letters,
+                    result.SmartDisks.Add(new LegacySmartDisk { Model = disk, SerialNumber = serial, Health = state, Letters = letters,
                         MediaType = mediaType, TransferMode = transfer, PowerOnHours = powerOnHours });
                     disks.Add(disk + ": " + state);
                     if (Regex.IsMatch(state, "Caution|Bad|Тревога|Плохо", RegexOptions.IgnoreCase))
@@ -369,7 +519,6 @@ namespace ITSeti.Maintenance.Win7
                             var entry = log.Entries[i];
                             if (entry.TimeGenerated < cutoff) break;
                             count++;
-                            if (entry.EntryType != EventLogEntryType.Error && entry.EntryType != EventLogEntryType.FailureAudit) continue;
                             string message;
                             try { message = Regex.Replace(entry.Message ?? "", @"\s+", " ").Trim(); }
                             catch (Exception) { message = "Текст события недоступен."; }
@@ -377,6 +526,8 @@ namespace ITSeti.Maintenance.Win7
                             result.Events.Add(new LegacyEvent
                             {
                                 Log = name, Source = entry.Source, Id = entry.InstanceId & 0xffff,
+                                Level = entry.EntryType == EventLogEntryType.Error || entry.EntryType == EventLogEntryType.FailureAudit ? 2
+                                    : entry.EntryType == EventLogEntryType.Warning ? 3 : 4,
                                 Time = entry.TimeGenerated.ToString("yyyy-MM-dd HH:mm"), Message = message
                             });
                         }
@@ -386,7 +537,7 @@ namespace ITSeti.Maintenance.Win7
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { result.Unavailable.Add("Журнал " + name + ": " + ex.Message); }
             }
-            result.Events = result.Events.OrderByDescending(x => x.Time).Take(20).ToList();
+            result.Events = result.Events.OrderByDescending(x => x.Time).Take(100).ToList();
         }
     }
 }

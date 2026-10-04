@@ -49,7 +49,18 @@ public static class DiagnosticRules
     {
         var issues = new List<UserIssue>();
         var full = snapshot.Full;
-        if (full is not null) issues.AddRange(GetKernelPowerBugcheckIssues(full.Events));
+        if (full is not null)
+        {
+            issues.AddRange(GetKernelPowerBugcheckIssues(full.Events));
+            var powerLosses = full.Events.Where(IsKernelPower41WithZeroBugcheckCode).ToArray();
+            if (powerLosses.Length > 0)
+                issues.Add(new("Windows завершила работу некорректно",
+                    $"В журнале найдено неожиданных завершений работы: {powerLosses.Length}. Kernel-Power 41, BugcheckCode 0: причина не определена; это не подтверждённый синий экран. Проверьте питание и обстоятельства выключения компьютера.", "Warning"));
+            var otherCritical = full.Events.Count(item => item.Level == 1 && !item.Provider.Contains("Kernel-Power", StringComparison.OrdinalIgnoreCase));
+            if (otherCritical > 0)
+                issues.Add(new("В журнале Windows найдены критические события",
+                    $"Количество: {otherCritical}. Подробности доступны инженеру в разделе событий Windows.", "Critical"));
+        }
         if (snapshot.ActiveUptimeHours is >= 60)
             issues.Add(new("Компьютер долго работает без перезагрузки",
                 $"После последнего запуска компьютер проработал {snapshot.ActiveUptimeHours:N0} ч (сон и гибернация не учитываются). Сохраните открытые документы и перезагрузите компьютер, когда закончите работу.", "Warning"));

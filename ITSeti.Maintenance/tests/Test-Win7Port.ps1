@@ -9,13 +9,42 @@ $process = Start-Process -FilePath $exe -ArgumentList @('--diagnose', ('"' + $re
 if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $report)) { throw 'Win7 diagnostic worker failed.' }
 $snapshot = Get-Content -LiteralPath $report -Raw -Encoding UTF8 | ConvertFrom-Json
 if (!$snapshot.ComputerName -or !@($snapshot.Disks).Count -or !$snapshot.CheckedAt -or
+    !$snapshot.Id -or !$snapshot.StartedAt -or $null -eq $snapshot.AdminAccounts -or
     $null -eq $snapshot.CpuPercent -or $snapshot.CpuPercent -lt 0 -or $snapshot.CpuPercent -gt 100 -or
     $null -eq $snapshot.ActiveUptimeHours -or $snapshot.ActiveUptimeHours -lt 0) {
     throw 'Win7 diagnostic result is incomplete.'
 }
+$startedAt = [DateTimeOffset]::MinValue
+if ([guid]::Empty -eq [guid]$snapshot.Id -or ![DateTimeOffset]::TryParse($snapshot.StartedAt, [ref]$startedAt)) {
+    throw 'Win7 diagnostic report id or timestamp is invalid.'
+}
 
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 $assembly = [Reflection.Assembly]::LoadFrom($exe)
+$scheduled = $assembly.GetType('ITSeti.Maintenance.Win7.ScheduledCheckRunner',$true)
+$fullDue = $scheduled.GetMethod('IsFullDue',[Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic)
+$dueRoot = Join-Path $output 'full-due-fixture'
+New-Item -ItemType Directory -Path $dueRoot -Force | Out-Null
+$now = [DateTime]::UtcNow
+$dueArgs = [object[]]@($now.PSObject.BaseObject,$dueRoot.ToString())
+if($fullDue.Invoke($null,$dueArgs)){throw 'Missing baseline must not trigger immediate full maintenance.'}
+foreach($days in @(0,59,60)){
+    [IO.File]::WriteAllText((Join-Path $dueRoot 'full-check-baseline.txt'),$now.AddDays(-$days).ToString('o'))
+    if([bool]$fullDue.Invoke($null,$dueArgs) -ne ($days -ge 60)){throw 'Win7 60-day full maintenance gate failed.'}
+}
+[IO.File]::WriteAllText((Join-Path $dueRoot 'full-check-baseline.txt'),$now.ToString('o'))
+[IO.File]::WriteAllText((Join-Path $dueRoot 'scheduled-full-failure.txt'),'failure')
+if(!$fullDue.Invoke($null,$dueArgs)){throw 'Failed nightly full maintenance must remain eligible for retry.'}
+$taskInstaller = $assembly.GetType('ITSeti.Maintenance.Win7.SmartTaskInstaller', $true)
+$isMissing = $taskInstaller.GetMethod('IsMissingTask', [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic)
+$scheduler = New-Object -ComObject Schedule.Service
+$scheduler.Connect()
+$missingTaskException = $null
+try { $scheduler.GetFolder('\').GetTask('ITSeti-Test-Missing-Task-240104') | Out-Null }
+catch { $missingTaskException = $_.Exception }
+if (!$missingTaskException -or !$isMissing.Invoke($null, @($missingTaskException))) {
+    throw 'Missing Scheduled Task COM error is not treated as an absent task.'
+}
 $diagnostics = $assembly.GetType('ITSeti.Maintenance.Win7.LegacyDiagnostics', $true)
 $cancellation = $assembly.GetType('ITSeti.Maintenance.Win7.ManualTaskCancellation', $true)
 $ownerGone = $cancellation.GetMethod('OwnerGone', [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic)
@@ -68,15 +97,42 @@ if ($scheduledType.GetField('TaskName', $scheduledFlags).GetRawConstantValue() -
 }
 $source = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7\SmartTaskInstaller.cs') -Raw
 if ($source -notmatch 'ScheduledCheckRunner\.TaskName[^\r\n]+,\s*14\)' -or
-    $source -notmatch 'ScheduledCheckRunner\.FullTaskName[^\r\n]+,\s*60\)' -or
+    $source -notmatch 'ScheduledCheckRunner\.FullTaskName[^\r\n]+,\s*1\)' -or
+    $source -notmatch 'StartWhenAvailable = name != ScheduledCheckRunner.FullTaskName' -or
+    $source -notmatch 'ITSeti-Maintenance-Win7-Upload[^\r\n]+--upload-reports' -or
     $source -notmatch 'ITSeti-Maintenance-Win7-Update[^\r\n]+--update-application') {
-    throw '14/60-day and application update tasks are not registered.'
+    throw '14/60-day checks, report upload and application update tasks are not registered.'
+}
+$portProject = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7.Port\ITSeti.Maintenance.Win7.Port.csproj') -Raw
+if ($portProject -match 'SupportDialog\.xaml|MyTicketsDialog\.xaml') { throw 'Ticket creation UI must remain excluded from Windows 7.' }
+$packageBuilder = Get-Content -LiteralPath (Join-Path $Root 'Build-Win7Package.ps1') -Raw
+$installerSource = Get-Content -LiteralPath (Join-Path $Root 'Installer-Win7.iss') -Raw
+if ($packageBuilder -notmatch 'CrystalDiskMark9' -or $installerSource -notmatch 'Tools\\CrystalDiskMark9') {
+    throw 'CrystalDiskMark is missing from the Win7 package or installer.'
+}
+$benchmarkSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7\BenchmarkTaskRunner.cs') -Raw
+if ($benchmarkSource -notmatch 'TargetVolume = systemDisk' -or $benchmarkSource -notmatch 'TargetDiskModel = systemDisk') {
+    throw 'DiskSpd report must name the actual system volume and its physical disk model.'
 }
 $scheduledSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7\ScheduledCheckRunner.cs') -Raw
 if ($scheduledSource -notmatch 'RunWorker\(\)\s*\{\s*return RunWorker\(false\);\s*\}' -or
     $scheduledSource -notmatch 'LegacyDiagnostics\.Collect\(full,\s*scheduled:\s*true\)' -or
-    $scheduledSource -notmatch 'LegacyMaintenance\.RunSfc\(\)') {
+    $scheduledSource -notmatch 'LegacyMaintenance\.RunSfc\(\)' -or
+    $scheduledSource.IndexOf('LegacyMaintenance.RunSfc()') -gt $scheduledSource.IndexOf('LegacyMaintenance.CleanupAfterFullCheck(')) {
     throw 'Scheduled quick/full Win7 work is not separated as expected.'
+}
+$cleanupSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7\LegacyMaintenance.cs') -Raw
+$systemCleanupSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7\SystemCleanupTaskRunner.cs') -Raw
+$diagnosticSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7\LegacyDiagnostics.cs') -Raw
+$windowSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7.Port\MainWindow.xaml.cs') -Raw
+if (!$cleanupSource.Contains('thumbcache_*.db') -or $cleanupSource -notmatch 'Temporary Internet Files' -or
+    $cleanupSource -notmatch 'INetCache' -or $cleanupSource -notmatch 'D3DSCache' -or
+    $cleanupSource -notmatch 'SHEmptyRecycleBin' -or
+    $systemCleanupSource -notmatch 'Delivery Optimization Files' -or $systemCleanupSource -notmatch 'Update Cleanup' -or
+    $systemCleanupSource -notmatch 'Device Driver Packages' -or
+    $diagnosticSource -notmatch 'if \(cleanupAfterBenchmark\)' -or
+    $windowSource -notmatch 'CollectWithCleanup\(full, cancellation\.Token, false, true, cleanupUserSid, progress\)') {
+    throw 'Win7 cleanup must preserve user cache/thumbnails/recycle-bin and Windows update/driver categories for engineer checks.'
 }
 $workerResult = $updater.GetMethod('RunBackgroundWorker', [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::Public).Invoke($null, @())
 if ($workerResult -ne 2) { throw 'The background updater worker ran without SYSTEM credentials.' }

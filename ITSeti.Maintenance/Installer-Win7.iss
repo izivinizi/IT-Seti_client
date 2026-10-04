@@ -3,7 +3,7 @@
 [Setup]
 AppId={{9C83D41A-9753-4E64-8EC8-A9A324BD7D52}
 AppName=ИТ-Сети Обслуживание ПК (Windows 7 beta)
-AppVersion=1.2.2
+AppVersion=2.1.1
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance Win7
 DisableDirPage=yes
@@ -28,11 +28,14 @@ Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
 Source: "{#PackageRoot}\Prerequisites\NDP48-x86-x64-AllOS-ENU.exe"; Flags: dontcopy noencryption
 Source: "{#PackageRoot}\App\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PackageRoot}\Tools\CrystalDiskInfo\*"; DestDir: "{app}\Tools\CrystalDiskInfo"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PackageRoot}\Tools\CrystalDiskMark9\*"; DestDir: "{app}\Tools\CrystalDiskMark9"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PackageRoot}\Tools\DiskSpd\*"; DestDir: "{app}\Tools\DiskSpd"; Flags: ignoreversion
+Source: "Connect-Server.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\ИТ-Сети Обслуживание ПК (Windows 7)"; Filename: "{app}\ITSeti.Maintenance.Win7.Port.exe"
 Name: "{autodesktop}\ИТ-Сети Обслуживание ПК (Windows 7)"; Filename: "{app}\ITSeti.Maintenance.Win7.Port.exe"
+Name: "{autoprograms}\Подключить ПК к серверу ИТ-Сети"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-STA -NoProfile -ExecutionPolicy Bypass -File ""{app}\Connect-Server.ps1"""; IconFilename: "{app}\ITSeti.Maintenance.Win7.Port.exe"
 
 [Run]
 Filename: "{app}\ITSeti.Maintenance.Win7.Port.exe"; Description: "Запустить приложение"; Flags: nowait postinstall skipifsilent runasoriginaluser
@@ -111,12 +114,13 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ExitCode: Integer;
+  ConnectCode: Integer;
 begin
   if CurStep = ssInstall then
   begin
     if Trim(InventoryPage.Values[0]) <> '' then
     begin
-      if not CreateDir(ExpandConstant('{commonappdata}\ITSeti\Maintenance')) then
+      if not ForceDirectories(ExpandConstant('{commonappdata}\ITSeti\Maintenance')) then
         RaiseException('Не удалось создать каталог инвентарного номера.');
       if not SaveStringToFile(ExpandConstant('{commonappdata}\ITSeti\Maintenance\inventory.txt'),
         Trim(InventoryPage.Values[0]), False) then
@@ -127,4 +131,12 @@ begin
   ExitCode := -1;
   if not Exec(ExpandConstant('{app}\ITSeti.Maintenance.Win7.Port.exe'), '--register-smart-task', '', SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
     RaiseException('Не удалось зарегистрировать задачу SMART. Подробности: ' + ExpandConstant('{app}\SmartTaskSetup.error.txt'));
+  if not WizardSilent then
+  begin
+    ConnectCode := -1;
+    if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+      '-STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ExpandConstant('{app}\Connect-Server.ps1') + '"',
+      '', SW_SHOWNORMAL, ewWaitUntilTerminated, ConnectCode) or (ConnectCode <> 0) then
+      MsgBox('Подключение к серверу не удалось открыть. Приложение установлено; подключить ПК можно позже через меню «Пуск».', mbInformation, MB_OK);
+  end;
 end;

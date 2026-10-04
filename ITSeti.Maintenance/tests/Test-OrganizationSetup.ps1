@@ -41,8 +41,9 @@ try {
         throw 'The system worker must use packaged application files, not an external setup folder.'
     }
     $project=[IO.File]::ReadAllText((Join-Path $rootPath 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj'))
-    if($project -notmatch 'Setup\\ITSETI-Setup' -or $project -notmatch 'CopyToPublishDirectory') {throw 'ITSETI-Setup payload is not included in app publish output.'}
-    'PASS: modified packages rejected; installation payload is bundled with the app and no external folder is needed.'
+    if($project -notmatch 'Setup\\ITSETI-Setup' -or $project -notmatch '<CopyToPublishDirectory>Never</CopyToPublishDirectory>' -or
+       $iss -notmatch '\{tmp\}\\ITSeti-Package\\Setup\\ITSETI-Setup') {throw 'Offline payload must stay in the installer, not the installed application.'}
+    'PASS: modified packages rejected; offline payload remains in setup while enrolled clients use server software.'
     $global:LASTEXITCODE=0
 } finally {
     if(Test-Path -LiteralPath $testRoot){Remove-Item -LiteralPath $testRoot -Recurse -Force}

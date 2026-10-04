@@ -162,14 +162,53 @@ namespace ITSeti.Maintenance.Win7
         {
             try
             {
+                var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var publishers = new List<string>();
+                try
+                {
+                    var publisherFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"allowed-publishers.txt");
+                    if (File.Exists(publisherFile)) publishers.AddRange(File.ReadAllLines(publisherFile).Where(x => !string.IsNullOrWhiteSpace(x) && !x.StartsWith("#")));
+                    var policyPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance", "process-policy.json");
+                    if (!File.Exists(policyPath)) policyPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "allowed-processes.json");
+                    if (File.Exists(policyPath))
+                    {
+                        if (new FileInfo(policyPath).Length > 2 * 1024 * 1024) throw new InvalidDataException("Process policy exceeds 2 MB.");
+                        var policy = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(policyPath));
+                        if (policy != null && policy.TryGetValue("allowedPublishers",out var signerValues) && signerValues is System.Collections.IEnumerable signerEntries)
+                        {
+                            publishers.Clear();
+                            foreach (var entry in signerEntries) publishers.Add(Convert.ToString(entry));
+                        }
+                        if (policy != null && policy.TryGetValue("allowedNames", out var names) && names is System.Collections.IEnumerable entries)
+                            foreach (var entry in entries)
+                            {
+                                var name = Convert.ToString(entry).Trim();
+                                allowed.Add(name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name.Substring(0,name.Length-4) : name);
+                            }
+                    }
+                }
+                catch { }
+                var signatures = new Dictionary<string,Tuple<string,string>>(StringComparer.OrdinalIgnoreCase);
                 foreach (var process in Process.GetProcesses())
                 {
                     using (process)
                     {
                         try
                         {
+                            if (allowed.Contains(process.ProcessName)) continue;
+                            var path = ReadProcessPath(process);
+                            if (!signatures.TryGetValue(path,out var signature))
+                            {
+                                LegacyProcessTrust.Inspect(path,out var status,out var signer);
+                                signature = Tuple.Create(status,signer);
+                                signatures[path] = signature;
+                            }
+                            string Normalize(string value) => new string(value.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
+                            var normalizedSigner = Normalize(signature.Item2);
+                            if (signature.Item1 == "Valid" && publishers.Any(x => Normalize(x).Length > 0 &&
+                                (x.Trim().EndsWith("*") ? normalizedSigner.StartsWith(Normalize(x),StringComparison.Ordinal) : normalizedSigner == Normalize(x)))) continue;
                             snapshot.Processes.Add(new LegacyProcess { Name = process.ProcessName,
-                                MemoryBytes = process.WorkingSet64, Path = ReadProcessPath(process) });
+                                MemoryBytes = process.WorkingSet64, Path = path, Signature=signature.Item1, Signer=signature.Item2 });
                         }
                         catch (InvalidOperationException) { }
                         catch (System.ComponentModel.Win32Exception) { }

@@ -34,6 +34,14 @@ public static class OrganizationSetupRunner
     public static async Task<IReadOnlyList<string>> CheckAsync(string? component = null)
     {
         var problems = new List<string>();
+        if (File.Exists(Path.Combine(MaintenanceRoot,"server-device.json")))
+        {
+            var catalog = ServerSoftwareCatalog.Read();
+            if (catalog.Count == 0) return ["Каталог ПО сервера ещё не получен. Выполните проверку ПК и повторите установку."];
+            if (component is not null && !catalog.Any(x => x.Key.Equals(component,StringComparison.OrdinalIgnoreCase)))
+                return ["Выбранного компонента нет в актуальном каталоге сервера."];
+            return [];
+        }
         if (component is not null && BundledPackages.TryGetValue(component, out var bundled))
         {
             var bundledPath = Path.Combine(AppContext.BaseDirectory, "Tools", "Software", bundled.FileName);
@@ -191,7 +199,7 @@ public static class OrganizationSetupRunner
         if (component is null && operation != "Install") throw new InvalidOperationException("Для действия требуется выбрать компонент.");
         if (operation == "Install")
         {
-            if (component is null || !BundledPackages.ContainsKey(component))
+            if (!File.Exists(Path.Combine(MaintenanceRoot,"server-device.json")) && (component is null || !BundledPackages.ContainsKey(component)))
             {
                 if (OrganizationSoftwareAudit.FindBundledDirectory() is null)
                 throw new InvalidOperationException("Встроенный комплект ПО ИТ-Сети не найден.");

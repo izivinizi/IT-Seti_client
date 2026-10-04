@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Npgsql" Version="10.0.0" />
+    <ProjectReference Include="../ITSeti.Maintenance/src/ITSeti.Maintenance.Core/ITSeti.Maintenance.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Remove="publish/**;publish-candidate/**" />
+    <Content Include="../ITSeti.Maintenance/src/ITSeti.Maintenance.Infrastructure/Backend/allowed-processes.json" Link="policy-defaults/allowed-processes.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../ITSeti.Maintenance/src/ITSeti.Maintenance.Infrastructure/Backend/allowed-publishers.txt" Link="policy-defaults/allowed-publishers.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
