@@ -121,20 +121,22 @@ internal static class Program
             ((TextBlock)tickets.FindName("TicketHeader")).Text = "Не открывается рабочая программа";
             ((TextBlock)tickets.FindName("TicketState")).Text = "В работе · Okdesk #1042";
             ((ListBox)tickets.FindName("Messages")).ItemsSource = new[] {
-                new { Author = "Вы", Date = "05.10.2026 11:45", Content = "При запуске появляется ошибка. Прикрепил снимок экрана.", IsEngineer = false },
-                new { Author = "Поддержка", Date = "05.10.2026 11:57", Content = "Здравствуйте! Подключимся к компьютеру и проверим. Оставьте программу открытой, пожалуйста.", IsEngineer = true }
+                new { Author = "Вы", Date = "05.10.2026 11:45", Content = "При запуске появляется ошибка. Прикрепил снимок экрана.", IsEngineer = false,
+                    Attachments = new[] { new { FileName = "Снимок экрана ошибки.png" } } },
+                new { Author = "Поддержка", Date = "05.10.2026 11:57", Content = "Здравствуйте! Подключимся к компьютеру и проверим. Оставьте программу открытой, пожалуйста.", IsEngineer = true,
+                    Attachments = Array.Empty<object>().Select(_ => new { FileName = "" }).ToArray() }
             };
             foreach (var name in new[] { "ReplyBody", "AttachButton", "SendButton" })
                 ((Control)tickets.FindName(name)).IsEnabled = true;
             Render(tickets, 940, 640, "tickets-redesign", "SendButton");
             Render(tickets, 720, 460, "tickets-redesign-small", "SendButton");
-            ((FrameworkElement)tickets.FindName("ReceivedFiles")).Visibility = Visibility.Visible;
-            ((ComboBox)tickets.FindName("AttachmentPicker")).ItemsSource = new[] { new { FileName = "Снимок экрана ошибки.png" } };
-            ((ComboBox)tickets.FindName("AttachmentPicker")).SelectedIndex = 0;
             Render(tickets, 940, 640, "tickets-redesign-attachments", "SendButton");
-            if (!ContainsText((ComboBox)tickets.FindName("AttachmentPicker"), "Снимок экрана ошибки.png"))
-                throw new Exception("Attachment selector does not display the file name");
-            Console.WriteLine("PASS: service and attachment selectors render friendly labels");
+            var messageList = (ListBox)tickets.FindName("Messages");
+            var firstMessage = (DependencyObject)messageList.ItemContainerGenerator.ContainerFromIndex(0);
+            var secondMessage = (DependencyObject)messageList.ItemContainerGenerator.ContainerFromIndex(1);
+            if (!ContainsText(firstMessage, "Снимок экрана ошибки.png") || ContainsText(secondMessage, "Снимок экрана ошибки.png"))
+                throw new Exception("Attachment is not rendered exclusively inside its own message");
+            Console.WriteLine("PASS: attachment download button rendered inside its own message only");
             ticketReviewApp.Shutdown();
             return 0;
         }

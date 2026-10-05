@@ -12,9 +12,9 @@ namespace ITSeti.Maintenance.App;
 
 public partial class MyTicketsDialog : Window
 {
-    private sealed record Ticket(Guid Id, string Title, string State, long? IssueId, string Description, DateTime? CreatedAt)
+    private sealed record Ticket(Guid Id, string Title, string State, long? IssueId, string Description, DateTime? CreatedAt, string? RemoteStatus = null)
     {
-        public string StateLabel => State switch
+        public string StateLabel => RemoteStatus ?? (State switch
         {
             "queued" => "Принята · ожидает отправки в Okdesk",
             "sent" or "created" => "Передана в Okdesk",
@@ -26,16 +26,15 @@ public partial class MyTicketsDialog : Window
             "cancelled" or "canceled" => "Отменена",
             "failed" => "Принята · ошибка отправки в Okdesk",
             _ => "Принята"
-        };
+        });
     }
-    private sealed record Message(string Author, string Date, string Content, bool IsEngineer);
-    private sealed record Attachment(Guid Id, string FileName);
+    private sealed record Message(string Author, string Date, string Content, bool IsEngineer, IReadOnlyList<Attachment> Attachments);
+    private sealed record Attachment(Guid Id, string FileName, Guid? MessageId);
     private sealed record OutgoingFile(string FileName, string ContentBase64);
     private readonly List<OutgoingFile> files = [];
     private int selectionRequest;
     private int refreshRequest;
     private Guid? draftTicket;
-    private List<Attachment> attachments = [];
     private readonly System.Windows.Threading.DispatcherTimer refreshTimer = new() { Interval = TimeSpan.FromSeconds(30) };
 
     public MyTicketsDialog()
@@ -64,7 +63,8 @@ public partial class MyTicketsDialog : Window
                     ? workflow.GetString()! : item.GetProperty("status").GetString() ?? "", item.GetProperty("issueId").ValueKind == JsonValueKind.Null
                     ? null : item.GetProperty("issueId").GetInt64(),
                 item.TryGetProperty("description", out var description) ? description.GetString() ?? "" : "",
-                item.TryGetProperty("createdAt", out var created) ? created.GetDateTime() : null)).ToArray();
+                item.TryGetProperty("createdAt", out var created) ? created.GetDateTime() : null,
+                item.TryGetProperty("remoteStatus", out var remote) ? remote.GetString() : null)).ToArray();
             var tickets = (Ticket[])Tickets.ItemsSource;
             EmptyTickets.Visibility = tickets.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
             Tickets.SelectedItem = tickets.FirstOrDefault(t => t.Id == selected) ?? tickets.FirstOrDefault();
@@ -77,9 +77,6 @@ public partial class MyTicketsDialog : Window
     {
         var request = ++selectionRequest;
         Messages.ItemsSource = null;
-        attachments.Clear();
-        AttachmentPicker.ItemsSource = null;
-        ReceivedFiles.Visibility = Visibility.Collapsed;
         ReplyBody.IsEnabled = AttachButton.IsEnabled = SendButton.IsEnabled = Tickets.SelectedItem is Ticket;
         if (Tickets.SelectedItem is not Ticket ticket) { TicketHeader.Text = "Выберите заявку"; TicketState.Text = ""; return; }
         if (draftTicket != ticket.Id)
@@ -94,20 +91,21 @@ public partial class MyTicketsDialog : Window
             using var client = ServerSupportClient.Open() ?? throw new InvalidOperationException("Компьютер не подключён к серверу.");
             using var data = await client.GetAsync($"/api/v1/tickets/{ticket.Id}/messages");
             if (request != selectionRequest) return;
+            var attachments = data.RootElement.GetProperty("attachments").EnumerateArray().Select(item => new Attachment(
+                item.GetProperty("id").GetGuid(), item.GetProperty("fileName").GetString() ?? "файл",
+                item.TryGetProperty("messageId", out var messageId) && messageId.ValueKind != JsonValueKind.Null
+                    ? messageId.GetGuid() : null)).ToArray();
             var messages = data.RootElement.GetProperty("messages").EnumerateArray().Select(item => new Message(
                 item.GetProperty("direction").GetString() == "engineer" ? "Поддержка" : "Вы",
                 item.GetProperty("createdAt").GetDateTime().ToLocalTime().ToString("dd.MM.yyyy HH:mm"),
                 PlainText(item.GetProperty("content").GetString() ?? ""),
-                item.GetProperty("direction").GetString() == "engineer")).ToArray();
-            Messages.ItemsSource = string.IsNullOrWhiteSpace(ticket.Description) ? messages :
+                item.GetProperty("direction").GetString() == "engineer",
+                attachments.Where(file => file.MessageId == item.GetProperty("id").GetGuid()).ToArray())).ToArray();
+            var initialFiles = attachments.Where(file => file.MessageId is null).ToArray();
+            Messages.ItemsSource = string.IsNullOrWhiteSpace(ticket.Description) && initialFiles.Length == 0 ? messages :
                 messages.Prepend(new Message("Вы · заявка", ticket.CreatedAt?.ToLocalTime().ToString("dd.MM.yyyy HH:mm") ?? "",
-                    PlainText(ticket.Description), false)).ToArray();
+                    PlainText(ticket.Description), false, initialFiles)).ToArray();
             if (Messages.Items.Count > 0) Messages.ScrollIntoView(Messages.Items[Messages.Items.Count - 1]);
-            attachments = data.RootElement.GetProperty("attachments").EnumerateArray().Select(item => new Attachment(
-                item.GetProperty("id").GetGuid(), item.GetProperty("fileName").GetString() ?? "файл")).ToList();
-            AttachmentPicker.ItemsSource = attachments;
-            AttachmentPicker.SelectedIndex = attachments.Count > 0 ? 0 : -1;
-            ReceivedFiles.Visibility = attachments.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             StatusText.Text = "";
         }
         catch (Exception ex) { if (request == selectionRequest) StatusText.Text = ex.Message; }
@@ -177,8 +175,7 @@ public partial class MyTicketsDialog : Window
 
     private async void Download_Click(object sender, RoutedEventArgs e)
     {
-        if (Tickets.SelectedItem is not Ticket ticket || attachments.Count == 0) return;
-        if (AttachmentPicker.SelectedItem is not Attachment file) return;
+        if (Tickets.SelectedItem is not Ticket ticket || sender is not Button { Tag: Attachment file }) return;
         var dialog = new SaveFileDialog { FileName = file.FileName };
         if (dialog.ShowDialog(this) != true) return;
         try

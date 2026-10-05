@@ -80,9 +80,12 @@ public static class Database
             CREATE UNIQUE INDEX IF NOT EXISTS ix_ticket_messages_remote ON ticket_messages(request_id,okdesk_comment_id) WHERE okdesk_comment_id IS NOT NULL;
             ALTER TABLE ticket_messages ADD COLUMN IF NOT EXISTS payload_hash text;
             ALTER TABLE ticket_messages ADD COLUMN IF NOT EXISTS is_public boolean NOT NULL DEFAULT true;
+            ALTER TABLE ticket_messages ADD COLUMN IF NOT EXISTS okdesk_created_at timestamptz;
             CREATE INDEX IF NOT EXISTS ix_ticket_messages_public_created ON ticket_messages(request_id,created_at,id)
                 WHERE is_public AND direction='engineer';
             ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS workflow_state text NOT NULL DEFAULT 'opened';
+            ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS okdesk_status_name text;
+            ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS okdesk_synced_at timestamptz;
             CREATE TABLE IF NOT EXISTS ticket_actions (
                 id uuid PRIMARY KEY, request_id uuid NOT NULL REFERENCES ticket_requests(request_id) ON DELETE CASCADE,
                 target text NOT NULL CHECK(target IN ('completed','cancelled')), state text NOT NULL DEFAULT 'queued',
@@ -99,6 +102,9 @@ public static class Database
                 created_at timestamptz NOT NULL DEFAULT now()
             );
             CREATE INDEX IF NOT EXISTS ix_ticket_attachments_request ON ticket_attachments(request_id,message_id);
+            ALTER TABLE ticket_attachments ADD COLUMN IF NOT EXISTS okdesk_attachment_id bigint;
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_ticket_attachments_remote ON ticket_attachments(request_id,okdesk_attachment_id)
+                WHERE okdesk_attachment_id IS NOT NULL;
             CREATE TABLE IF NOT EXISTS check_runs (
                 id uuid PRIMARY KEY,
                 device_id uuid NOT NULL REFERENCES devices(id) ON DELETE CASCADE,

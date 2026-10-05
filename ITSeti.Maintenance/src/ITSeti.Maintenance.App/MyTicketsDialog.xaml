@@ -98,6 +98,18 @@
                     <TextBlock Text="{Binding Author}" FontWeight="SemiBold" FontSize="13" />
                   </DockPanel>
                   <TextBlock Text="{Binding Content}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                  <ItemsControl ItemsSource="{Binding Attachments}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Button Click="Download_Click" Tag="{Binding}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Margin="0,8,0,0" ToolTip="Скачать вложение">
+                          <DockPanel LastChildFill="True">
+                            <TextBlock Text="&#xE896;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" />
+                            <TextBlock Text="{Binding FileName}" TextWrapping="Wrap" />
+                          </DockPanel>
+                        </Button>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
                 </StackPanel>
               </Border>
               <DataTemplate.Triggers>
@@ -109,10 +121,6 @@
             </DataTemplate>
           </ListBox.ItemTemplate>
         </ListBox>
-        <DockPanel x:Name="ReceivedFiles" Grid.Row="2" Margin="0,10,0,0" Visibility="Collapsed">
-          <Button DockPanel.Dock="Right" Click="Download_Click" ToolTip="Скачать вложение" AutomationProperties.Name="Скачать вложение" Margin="8,0,0,0"><TextBlock Text="&#xE896;" FontFamily="Segoe MDL2 Assets" /></Button>
-          <ComboBox x:Name="AttachmentPicker" DisplayMemberPath="FileName" ToolTip="Вложения заявки" />
-        </DockPanel>
         <StackPanel Grid.Row="3" Margin="0,12,0,0">
           <TextBlock Text="Ответ" Style="{StaticResource FieldLabel}" />
           <TextBox x:Name="ReplyBody" AcceptsReturn="True" MaxLength="5000" TextWrapping="Wrap" Height="86" VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto" PreviewKeyDown="ReplyBody_PreviewKeyDown" IsEnabled="False" />

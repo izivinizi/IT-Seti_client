@@ -110,6 +110,11 @@ public sealed class OkdeskApiClient : IOkdeskClient
         using var response = await SendAsync(HttpMethod.Post, $"/api/v1/issues/{issueId}/statuses", null, content, cancellationToken);
     }
 
+    public Task<OkdeskIssueStatus?> GetIssueStatusAsync(long issueId, CancellationToken cancellationToken) =>
+        Task.FromResult<OkdeskIssueStatus?>(null);
+    public Task<byte[]> DownloadAttachmentAsync(long issueId, OkdeskRemoteAttachment attachment, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("API attachment import is not configured.");
+
     private static MultipartFormDataContent BuildIssueMultipart(OkdeskIssue issue, IReadOnlyList<TicketAttachment> attachments)
     {
         var content = new MultipartFormDataContent();
@@ -170,7 +175,8 @@ public sealed class OkdeskApiException(int statusCode) : Exception
 {
     public int StatusCode { get; } = statusCode;
 }
-public sealed record OkdeskComment(long Id, string Content, string AuthorType, long? AuthorId);
+public sealed record OkdeskComment(long Id, string Content, string AuthorType, long? AuthorId,
+    IReadOnlyList<OkdeskRemoteAttachment>? Attachments = null, DateTimeOffset? CreatedAt = null);
 
 public sealed record OkdeskIssue(
     [property: JsonPropertyName("title")] string Title,

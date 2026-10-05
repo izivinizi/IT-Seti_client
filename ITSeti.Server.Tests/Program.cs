@@ -5,18 +5,33 @@ using System.Net;
 using System.Text;
 using ITSeti.Maintenance.Core;
 
-if (args.Contains("--okdesk-web-live") || args.Contains("--okdesk-ticket-live"))
+if (args.Contains("--okdesk-web-live") || args.Contains("--okdesk-ticket-live") || args.Contains("--okdesk-sync-live"))
 {
     var liveConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
     {
         ["OkdeskBaseUrl"] = Environment.GetEnvironmentVariable("OKDESK_BASE_URL"),
         ["OkdeskLogin"] = Environment.GetEnvironmentVariable("OKDESK_LOGIN"),
         ["OkdeskPassword"] = Environment.GetEnvironmentVariable("OKDESK_PASSWORD"),
-        ["OkdeskWebTicketDeliveryEnabled"] = args.Contains("--okdesk-ticket-live") ? "true" : "false"
+        ["OkdeskWebTicketDeliveryEnabled"] = args.Contains("--okdesk-ticket-live") || args.Contains("--okdesk-sync-live") ? "true" : "false"
     }).Build();
     using var live = new OkdeskWebClient(liveConfig);
     if (!live.Configured) throw new InvalidOperationException("Live credentials are missing.");
     using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+    if (args.Contains("--okdesk-sync-live"))
+    {
+        var id = long.Parse(Environment.GetEnvironmentVariable("ITSETI_TEST_ISSUE_ID") ?? throw new Exception("Read-only test issue is required."));
+        var comments = await live.GetCommentsAsync(id, timeout.Token);
+        typeof(OkdeskWebClient).GetField("authenticatedUntil", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.SetValue(live, DateTimeOffset.MinValue);
+        var refreshedComments = await live.GetCommentsAsync(id, timeout.Token);
+        if (comments.Count != refreshedComments.Count || comments.Any(c => c.Content.Contains("Тестовый скрытый комментарий"))) throw new Exception("Refresh or privacy boundary failed.");
+        var status = await live.GetIssueStatusAsync(id, timeout.Token);
+        Console.WriteLine($"PASS read-only live sync: {comments.Count} public replies; status={status?.Name}; session refresh succeeded");
+        var file = comments.SelectMany(c => c.Attachments ?? []).First();
+        var bytes = await live.DownloadAttachmentAsync(id, file, timeout.Token);
+        if (bytes.Length != file.Size) throw new Exception("Download size mismatch");
+        Console.WriteLine($"PASS live public attachment downloaded: {bytes.Length} bytes");
+        return;
+    }
     var companies = await live.GetAllAsync("/api/v1/companies/list", timeout.Token);
     if (args.Contains("--okdesk-ticket-live"))
     {
@@ -73,6 +88,13 @@ using (var web = new OkdeskWebClient(new ConfigurationBuilder().AddInMemoryColle
         "nested web comment response confirms public delivery");
     Check((await web.GetCommentsAsync(731, CancellationToken.None)).Select(x => x.Id).SequenceEqual([42L]),
         "web history pagination excludes private replies");
+    typeof(OkdeskWebClient).GetField("authenticatedUntil", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.SetValue(web, DateTimeOffset.MinValue);
+    await web.GetCommentsAsync(731, CancellationToken.None);
+    Check(webFixture.LoginCount == 1, "expired local auth cache reuses valid web session without visiting login again");
+    Check((await web.GetIssueStatusAsync(731, CancellationToken.None))!.WorkflowState == "cancelled", "incoming web cancellation status is parsed independently of comments");
+    var file = (await web.GetCommentsAsync(731, CancellationToken.None)).Single().Attachments!.Single();
+    Check(file.Id == 77 && (await web.DownloadAttachmentAsync(731, file, CancellationToken.None)).Length == 4,
+        "public attachment metadata and bounded download are supported; private attachments are excluded");
 }
 
 var identity = DeviceIdentity.CreateFingerprint("  SN-1234 ", "11111111-1111-1111-1111-111111111111");
@@ -247,6 +269,7 @@ sealed class CommentApiHandler : HttpMessageHandler
 
 sealed class WebTicketHandler : HttpMessageHandler
 {
+    public int LoginCount { get; private set; }
     public JsonElement Issue { get; private set; }
     public bool PublicReply { get; private set; }
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
@@ -256,7 +279,7 @@ sealed class WebTicketHandler : HttpMessageHandler
         switch (path)
         {
             case "/web_api/layouts/auth": json = """{"csrfToken":"fixture"}"""; break;
-            case "/web_api/sessions": json = "{}"; break;
+            case "/web_api/sessions": LoginCount++; json = "{}"; break;
             case "/web_api/layouts/app": json = """{"csrfToken":"fixture","currentUser":{"id":10,"email":"fixture@example.test"}}"""; break;
             case "/issues/create_forms/new":
                 json = JsonSerializer.Serialize(new { html_content = new { append = new Dictionary<string,string> { ["form"] = "<div collection_url='/collections/assignees?option_id=fixture' selected_text='Support'></div>" } }, options = new {type_id=1,priority_id=2} }); break;
@@ -271,7 +294,11 @@ sealed class WebTicketHandler : HttpMessageHandler
             case "/issues/731/history_events":
                 json = """{"isLastPage":false,"historyEvents":[{"record":{"id":101,"commentId":43,"type":"AddCommentEvent","state":"published","isPublic":false}}]}"""; break;
             case "/issues/731/history_events?event_id=101":
-                json = """{"isLastPage":true,"historyEvents":[{"record":{"id":100,"commentId":42,"type":"AddCommentEvent","state":"published","isPublic":true,"content":"answer","author":{"type":"Employee","id":10}}}]}"""; break;
+                json = """{"isLastPage":true,"historyEvents":[{"record":{"id":100,"commentId":42,"type":"AddCommentEvent","state":"published","isPublic":true,"content":"answer","author":{"type":"Employee","id":10},"attachments":[{"record":{"id":77,"isPublic":true,"fileName":"note.txt","contentType":"text/plain","size":4}},{"record":{"id":78,"isPublic":false}}]}}]}"""; break;
+            case "/issues/731/statuses?activity_source=card&status_holder_id=itseti-sync":
+                json = JsonSerializer.Serialize(new { html_content = new { html = new Dictionary<string,string> { ["current"] = "<a class='current-status'><span class='status-text'>Отменена</span></a><span class='status-text'>Открыть</span>" } } }); break;
+            case "/issues/731/history_events/attachments/77/downloads":
+                return new(HttpStatusCode.OK) { Content = new ByteArrayContent(Encoding.UTF8.GetBytes("test")) };
             default: throw new Exception("Unexpected web endpoint: " + path);
         }
         return new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };

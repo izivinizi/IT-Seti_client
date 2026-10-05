@@ -336,7 +336,7 @@ app.MapGet("/api/v1/tickets", async (HttpRequest request, NpgsqlDataSource db) =
         !Guid.TryParse(request.Headers[DeviceKeys.IdHeader].ToString(), out var deviceId)) return Results.Unauthorized();
     await using var connection = await db.OpenConnectionAsync();
     await using var command = new NpgsqlCommand("""
-        SELECT request_id,title,description,service_code,state,okdesk_issue_id,created_at,last_error,workflow_state
+        SELECT request_id,title,description,service_code,state,okdesk_issue_id,created_at,last_error,workflow_state,okdesk_status_name
         FROM ticket_requests WHERE device_id=@device ORDER BY created_at DESC LIMIT 100
         """, connection);
     command.Parameters.AddWithValue("device", deviceId);
@@ -347,7 +347,8 @@ app.MapGet("/api/v1/tickets", async (HttpRequest request, NpgsqlDataSource db) =
         requestId = reader.GetGuid(0), title = reader.GetString(1), description = reader.GetString(2),
         service = TicketServices.Names.GetValueOrDefault(reader.GetString(3), reader.GetString(3)),
         status = reader.GetString(4), issueId = reader.IsDBNull(5) ? (long?)null : reader.GetInt64(5),
-        createdAt = reader.GetDateTime(6), error = reader.IsDBNull(7) ? null : reader.GetString(7), workflowState = reader.GetString(8)
+        createdAt = reader.GetDateTime(6), error = reader.IsDBNull(7) ? null : reader.GetString(7), workflowState = reader.GetString(8),
+        remoteStatus = reader.IsDBNull(9) ? null : reader.GetString(9)
     });
     return Results.Ok(rows);
 });
@@ -362,8 +363,8 @@ app.MapGet("/api/v1/tickets/{requestId:guid}/messages", async (Guid requestId, H
     ownership.Parameters.AddWithValue("device", deviceId);
     if (await ownership.ExecuteScalarAsync() is null) return Results.NotFound();
     await using var messagesQuery = new NpgsqlCommand("""
-        SELECT id,direction,content,state,created_at,last_error FROM ticket_messages
-        WHERE request_id=@id AND is_public ORDER BY created_at,id LIMIT 500
+        SELECT id,direction,content,state,COALESCE(okdesk_created_at,created_at),last_error FROM ticket_messages
+        WHERE request_id=@id AND is_public ORDER BY COALESCE(okdesk_created_at,created_at),id LIMIT 500
         """, connection);
     messagesQuery.Parameters.AddWithValue("id", requestId);
     await using var reader = await messagesQuery.ExecuteReaderAsync();

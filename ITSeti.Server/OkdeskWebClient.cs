@@ -76,6 +76,16 @@ public sealed class OkdeskWebClient : IOkdeskClient, IDisposable
     private async Task AuthenticateAsync(CancellationToken ct)
     {
         if (authenticatedUntil > DateTimeOffset.UtcNow) return;
+        // An authenticated /auth response contains a redirect, not a CSRF token.
+        if (csrf is not null)
+        {
+            try
+            {
+                using var current = await SendAsync(HttpMethod.Get, "/web_api/layouts/app", null, ct);
+                if (AcceptAuthenticatedLayout(current.RootElement)) return;
+            }
+            catch (OkdeskApiException ex) when (ex.StatusCode is 401 or 403 or 302 or 303) { }
+        }
         using var auth = await SendAsync(HttpMethod.Get, "/web_api/layouts/auth", null, ct);
         csrf = auth.RootElement.GetProperty("csrfToken").GetString() ?? throw new JsonException("Missing CSRF token.");
         using var credentials = JsonContent.Create(new { user = new
@@ -84,13 +94,18 @@ public sealed class OkdeskWebClient : IOkdeskClient, IDisposable
         } });
         using var login = await SendAsync(HttpMethod.Post, "/web_api/sessions", credentials, ct);
         using var app = await SendAsync(HttpMethod.Get, "/web_api/layouts/app", null, ct);
-        var user = app.RootElement.GetProperty("currentUser");
-        if (user.ValueKind != JsonValueKind.Object ||
-            !string.Equals(JsonRead.String(user, "email"), configuration["OkdeskLogin"], StringComparison.OrdinalIgnoreCase))
+        if (!AcceptAuthenticatedLayout(app.RootElement))
             throw new InvalidOperationException("Okdesk did not authenticate the expected account.");
-        csrf = JsonRead.String(app.RootElement, "csrfToken") ?? csrf;
+    }
+
+    private bool AcceptAuthenticatedLayout(JsonElement layout)
+    {
+        if (!layout.TryGetProperty("currentUser", out var user) || user.ValueKind != JsonValueKind.Object ||
+            !string.Equals(JsonRead.String(user, "email"), configuration["OkdeskLogin"], StringComparison.OrdinalIgnoreCase)) return false;
+        csrf = JsonRead.String(layout, "csrfToken") ?? csrf;
         CommentAuthorId = ReadId(user.GetProperty("id"));
         authenticatedUntil = DateTimeOffset.UtcNow.AddMinutes(10);
+        return true;
     }
 
     private async Task<long> GetWorkspaceAsync(string entity, CancellationToken ct)
@@ -267,8 +282,93 @@ public sealed class OkdeskWebClient : IOkdeskClient, IDisposable
             JsonRead.String(record, "state") != "published" || JsonRead.String(record, "type") != "AddCommentEvent")
             throw new JsonException("Private or unpublished comment.");
         var author = record.GetProperty("author");
+        var files = new List<OkdeskRemoteAttachment>();
+        if (record.TryGetProperty("attachments", out var attachments))
+            foreach (var entry in attachments.EnumerateArray())
+            {
+                var file = entry.GetProperty("record");
+                if (JsonRead.Property(file, "isPublic")?.ValueKind != JsonValueKind.True) continue;
+                var size = file.GetProperty("size").GetInt64();
+                if (size is < 1 or > 5 * 1024 * 1024 || files.Count >= 10) continue;
+                files.Add(new(ReadId(file.GetProperty("id")), JsonRead.String(file, "fileName") ?? "file",
+                    JsonRead.String(file, "contentType") ?? "application/octet-stream", size));
+            }
         return new(ReadId(record.GetProperty("commentId")), JsonRead.String(record, "content") ?? "",
-            JsonRead.String(author, "type") ?? "", ReadId(author.GetProperty("id")));
+            JsonRead.String(author, "type") ?? "", ReadId(author.GetProperty("id")), files, JsonRead.Date(record, "createdAt"));
+    }
+
+    public async Task<OkdeskIssueStatus?> GetIssueStatusAsync(long id, CancellationToken ct)
+    {
+        if (!CanReadComments || id <= 0) throw new InvalidOperationException("Web sync is disabled.");
+        await gate.WaitAsync(ct);
+        try
+        {
+            await AuthenticateAsync(ct);
+            using var response = await SendAsync(HttpMethod.Get, $"/issues/{id}/statuses?activity_source=card&status_holder_id=itseti-sync", null, ct);
+            return ReadIssueStatus(response.RootElement);
+        }
+        finally { gate.Release(); }
+    }
+
+    public static OkdeskIssueStatus ReadIssueStatus(JsonElement response)
+    {
+        var html = string.Join("", response.GetProperty("html_content").GetProperty("html").EnumerateObject().Select(p => p.Value.GetString()));
+        using var document = new HtmlParser().ParseDocument(html);
+        var text = document.QuerySelector(".current-status .status-text")?.TextContent.Trim();
+        if (string.IsNullOrWhiteSpace(text)) throw new JsonException("Missing current issue status.");
+        var state = text.ToLowerInvariant() switch
+        {
+            "отменена" or "отменён" or "отменен" or "cancelled" or "canceled" => "cancelled",
+            "выполнена" or "решена" or "закрыта" or "closed" or "completed" or "resolved" => "completed",
+            _ => "opened"
+        };
+        return new(state, text);
+    }
+
+    public async Task<byte[]> DownloadAttachmentAsync(long issueId, OkdeskRemoteAttachment file, CancellationToken ct)
+    {
+        if (!CanReadComments || issueId <= 0 || file.Id <= 0 || file.Size is < 1 or > 5 * 1024 * 1024)
+            throw new ArgumentException("Invalid remote attachment.");
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
+        ct = deadline.Token;
+        await gate.WaitAsync(ct);
+        try
+        {
+            await AuthenticateAsync(ct);
+            var origin = new Uri(configuration["OkdeskBaseUrl"] ?? "https://it-seti.okdesk.ru");
+            using var response = await client.GetAsync(new Uri(origin, $"/issues/{issueId}/history_events/attachments/{file.Id}/downloads"), HttpCompletionOption.ResponseHeadersRead, ct);
+            if (response.StatusCode is HttpStatusCode.Redirect or HttpStatusCode.SeeOther)
+            {
+                var location = response.Headers.Location;
+                if (location is null || !location.IsAbsoluteUri || location.Scheme != "https" ||
+                    location.Host != "okdesk.storage.yandexcloud.net" || !location.IsDefaultPort || location.UserInfo.Length > 0)
+                    throw new InvalidOperationException("Unexpected attachment download origin.");
+                // Never forward the tenant session or credentials to object storage.
+                using var storage = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }) { Timeout = TimeSpan.FromSeconds(35) };
+                using var downloaded = await storage.GetAsync(location, HttpCompletionOption.ResponseHeadersRead, ct);
+                return await ReadAttachmentBytesAsync(downloaded, file.Size, ct);
+            }
+            return await ReadAttachmentBytesAsync(response, file.Size, ct);
+        }
+        finally { gate.Release(); }
+    }
+
+    private static async Task<byte[]> ReadAttachmentBytesAsync(HttpResponseMessage response, long expected, CancellationToken ct)
+    {
+        response.EnsureSuccessStatusCode();
+        if (response.Content.Headers.ContentLength > 5 * 1024 * 1024) throw new InvalidDataException("Attachment too large.");
+        await using var input = await response.Content.ReadAsStreamAsync(ct);
+        using var output = new MemoryStream();
+        var block = new byte[8192];
+        int read;
+        while ((read = await input.ReadAsync(block, ct)) > 0)
+        {
+            if (output.Length + read > 5 * 1024 * 1024) throw new InvalidDataException("Attachment too large.");
+            output.Write(block, 0, read);
+        }
+        if (output.Length != expected) throw new InvalidDataException("Attachment size mismatch.");
+        return output.ToArray();
     }
 
     public static long ReadCreatedIssueId(JsonElement response)
