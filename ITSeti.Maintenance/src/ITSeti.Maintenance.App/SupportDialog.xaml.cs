@@ -25,11 +25,10 @@ public partial class SupportDialog : Window
     public SupportDialog(string? inventoryNumber, string? rmsId, string? anyDeskId)
     {
         InitializeComponent();
-        Width = Math.Min(680, SystemParameters.WorkArea.Width - 32);
-        Height = Math.Min(640, SystemParameters.WorkArea.Height - 32);
+        Width = Math.Min(940, SystemParameters.WorkArea.Width - 32);
+        Height = Math.Min(780, SystemParameters.WorkArea.Height - 32);
         MinWidth = Math.Min(540, Width);
         MinHeight = Math.Min(480, Height);
-        MaxHeight = SystemParameters.WorkArea.Height - 16;
         identity = $"Инв. номер: {inventoryNumber ?? "не указан"}{Environment.NewLine}RMS: {rmsId ?? "не найден"}{Environment.NewLine}AnyDesk: {anyDeskId ?? "не найден"}";
         TicketService.ItemsSource = new[] {
             new Service("517", "1С"), new Service("518", "Сетевая инфраструктура"),

@@ -98,6 +98,14 @@ internal static class Program
             }
             var support = new SupportDialog();
             ((TextBox)support.FindName("TicketTitle")).Text = "Не открывается рабочая программа";
+            if (support.ResizeMode != ResizeMode.CanResize || support.Width < 900 || support.Height < 750)
+                throw new Exception("Ticket window must be large, resizable and maximizable");
+            Render(support, 940, 740, "support-redesign-large", "SubmitTicket");
+            var defaultBodyHeight = ((TextBox)support.FindName("TicketBody")).ActualHeight;
+            Render(support, 1440, 900, "support-redesign-maximized", "SubmitTicket");
+            if (((TextBox)support.FindName("TicketBody")).ActualHeight <= defaultBodyHeight + 100)
+                throw new Exception("Ticket body does not expand with the window");
+            Console.WriteLine("PASS: ticket window supports resizing/maximizing; body expands with viewport");
             Render(support, 680, 600, "support-redesign", "SubmitTicket");
             if (!ContainsText((ComboBox)support.FindName("TicketService"), "Другое"))
                 throw new Exception("Service selector does not display its friendly name");
