@@ -21,6 +21,12 @@ if ([guid]::Empty -eq [guid]$snapshot.Id -or ![DateTimeOffset]::TryParse($snapsh
 
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 $assembly = [Reflection.Assembly]::LoadFrom($exe)
+$adminAudit = $assembly.GetType('ITSeti.Maintenance.App.LegacyAdminAccountAudit',$true)
+$allowedAdmin = $adminAudit.GetMethod('IsAllowedLocalAccount',[Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic)
+foreach($name in @('Admin','it-seti','Administrator',([string][char]0x410+[char]0x434+[char]0x43C+[char]0x438+[char]0x43D+[char]0x438+[char]0x441+[char]0x442+[char]0x440+[char]0x430+[char]0x442+[char]0x43E+[char]0x440))){
+    if(!$allowedAdmin.Invoke($null,@($env:COMPUTERNAME+'\'+$name))){throw 'Designated Win7 administrator incorrectly flagged.'}
+}
+if($allowedAdmin.Invoke($null,@('OTHER-DOMAIN\Administrator'))){throw 'Win7 local admin exception must not hide domain members.'}
 $scheduled = $assembly.GetType('ITSeti.Maintenance.Win7.ScheduledCheckRunner',$true)
 $fullDue = $scheduled.GetMethod('IsFullDue',[Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic)
 $dueRoot = Join-Path $output 'full-due-fixture'

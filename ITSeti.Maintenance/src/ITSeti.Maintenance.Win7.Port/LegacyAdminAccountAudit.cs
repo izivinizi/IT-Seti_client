@@ -58,7 +58,8 @@ namespace ITSeti.Maintenance.App
             var name = account.Substring(slash + 1);
             return name.Equals("Admin", StringComparison.OrdinalIgnoreCase)
                 || name.Equals("it-seti", StringComparison.OrdinalIgnoreCase)
-                || name.Equals("Administrator", StringComparison.OrdinalIgnoreCase);
+                || name.Equals("Administrator", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("Администратор", StringComparison.OrdinalIgnoreCase);
         }
 
         [StructLayout(LayoutKind.Sequential)]

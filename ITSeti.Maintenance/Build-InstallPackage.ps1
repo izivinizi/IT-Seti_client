@@ -1,14 +1,15 @@
 ﻿param([string]$ToolsRoot=(Join-Path $PSScriptRoot 'Tools'),[string]$OutputRoot=(Join-Path $PSScriptRoot 'dist\ITSeti-Maintenance'),[switch]$SkipReleaseManifest)
 $ErrorActionPreference='Stop'
-$testBuild=$env:ITSETI_TEST_BUILD -eq '1'
+$buildProject=New-Object System.Xml.XmlDocument
+$buildProject.Load((Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj'))
+$buildVersion=[string]$buildProject.SelectSingleNode('/Project/PropertyGroup/Version').InnerText
+$parsedVersion=[Version]$buildVersion
+$testBuild=$env:ITSETI_TEST_BUILD -eq '1' -or $parsedVersion.Major -ge 2
+$betaSeries='{0}.{1}' -f $parsedVersion.Major,$parsedVersion.Minor
 $installerBaseName='ITSeti-Maintenance-Setup'
 if($testBuild){
-    $testBuildLabel=if($env:ITSETI_TEST_BUILD_LABEL){$env:ITSETI_TEST_BUILD_LABEL}else{'2.1.1-test'}
-    if($testBuildLabel -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'){throw 'Invalid test build label.'}
-    $OutputRoot=Join-Path $PSScriptRoot ('dist\ITSeti-Maintenance-'+$testBuildLabel)
-    $installerBaseName='ITSeti-Maintenance-Setup-'+$testBuildLabel
-    if(Test-Path -LiteralPath $OutputRoot){throw "Test package already exists; it was left untouched: $OutputRoot"}
-    if(Test-Path -LiteralPath (Join-Path $PSScriptRoot "dist\$installerBaseName.exe")){throw 'Test installer already exists; it was left untouched.'}
+    $OutputRoot=Join-Path $PSScriptRoot "dist\ITSeti-Maintenance-$betaSeries"
+    $installerBaseName="ITSeti-Maintenance-Setup-$betaSeries"
 }
 & (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'tests\Test-PowerShellCompatibility.ps1') -Root $PSScriptRoot
 if($LASTEXITCODE -ne 0){throw 'Windows PowerShell compatibility check failed.'}
@@ -56,11 +57,13 @@ if($testBuild){
     $issText=[IO.File]::ReadAllText($issPath)
     $issText=$issText.Replace('#define PackageRoot "dist\ITSeti-Maintenance"',('#define PackageRoot "{0}"' -f [IO.Path]::GetFullPath($OutputRoot)))
     $issText=[Text.RegularExpressions.Regex]::Replace($issText,'(?m)^OutputBaseFilename=.+$',("OutputBaseFilename=$installerBaseName"))
+    $issText=[Text.RegularExpressions.Regex]::Replace($issText,'(?m)^OutputDir=.+$',("OutputDir=$([IO.Path]::GetFullPath($OutputRoot))"))
     $temporaryIss=Join-Path $PSScriptRoot ('.Installer-test-{0}.iss' -f [Guid]::NewGuid().ToString('N'))
     [IO.File]::WriteAllText($temporaryIss,$issText,(New-Object System.Text.UTF8Encoding -ArgumentList $false))
     try {
         & $compiler $temporaryIss
         if($LASTEXITCODE -ne 0){throw 'Installer compilation failed.'}
+        Copy-Item -LiteralPath (Join-Path $OutputRoot "$installerBaseName.exe") -Destination (Join-Path $PSScriptRoot "dist\$installerBaseName.exe") -Force
     } finally {
         Remove-Item -LiteralPath $temporaryIss -Force -ErrorAction SilentlyContinue
     }
@@ -73,7 +76,7 @@ foreach($name in @('Install-ITSeti.ps1','Install-ITSeti-Admin.ps1','Install-ITSe
 }
 $installerPath=Join-Path $PSScriptRoot "dist\$installerBaseName.exe"
 Write-Host "Installer ready: $installerPath"
-if(!$SkipReleaseManifest){
+if(!$SkipReleaseManifest -and !$testBuild){
     $project=New-Object System.Xml.XmlDocument
     $project.Load((Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj'))
     $version=[string]$project.SelectSingleNode('/Project/PropertyGroup/Version').InnerText

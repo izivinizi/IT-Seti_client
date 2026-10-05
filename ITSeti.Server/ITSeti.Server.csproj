@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Npgsql" Version="10.0.0" />
+    <PackageReference Include="AngleSharp" Version="1.7.0" />
     <ProjectReference Include="../ITSeti.Maintenance/src/ITSeti.Maintenance.Core/ITSeti.Maintenance.Core.csproj" />
   </ItemGroup>
   <ItemGroup>

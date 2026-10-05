@@ -12,21 +12,41 @@ namespace ITSeti.Maintenance.App;
 
 public partial class MyTicketsDialog : Window
 {
-    private sealed record Ticket(Guid Id, string Title, string State, long? IssueId)
+    private sealed record Ticket(Guid Id, string Title, string State, long? IssueId, string Description, DateTime? CreatedAt)
     {
-        public string Label => $"{Title}\n{(IssueId.HasValue ? $"Okdesk #{IssueId}" : State)}";
+        public string StateLabel => State switch
+        {
+            "queued" => "Принята · ожидает отправки в Okdesk",
+            "sent" or "created" => "Передана в Okdesk",
+            "open" => "В работе",
+            "sending" => "Отправляется в Okdesk",
+            "rejected" => "Принята · Okdesk отклонил отправку",
+            "unknown" => "Принята · отправка в Okdesk не подтверждена",
+            "completed" or "resolved" or "closed" => "Выполнена",
+            "cancelled" or "canceled" => "Отменена",
+            "failed" => "Принята · ошибка отправки в Okdesk",
+            _ => "Принята"
+        };
     }
-    private sealed record Message(string Header, string Content);
+    private sealed record Message(string Author, string Date, string Content, bool IsEngineer);
     private sealed record Attachment(Guid Id, string FileName);
     private sealed record OutgoingFile(string FileName, string ContentBase64);
     private readonly List<OutgoingFile> files = [];
     private int selectionRequest;
     private int refreshRequest;
+    private Guid? draftTicket;
     private List<Attachment> attachments = [];
+    private readonly System.Windows.Threading.DispatcherTimer refreshTimer = new() { Interval = TimeSpan.FromSeconds(30) };
 
-    public MyTicketsDialog() => InitializeComponent();
+    public MyTicketsDialog()
+    {
+        InitializeComponent();
+        refreshTimer.Tick += async (_, _) => { if (Tickets.IsEnabled) await RefreshAsync(); };
+        Closed += (_, _) => { isClosed = true; refreshTimer.Stop(); refreshRequest++; selectionRequest++; };
+    }
 
-    private async void Window_Loaded(object sender, RoutedEventArgs e) => await RefreshAsync();
+    private bool isClosed;
+    private async void Window_Loaded(object sender, RoutedEventArgs e) { await RefreshAsync(); if (!isClosed) refreshTimer.Start(); }
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
 
     private async Task RefreshAsync()
@@ -40,9 +60,14 @@ public partial class MyTicketsDialog : Window
             var selected = (Tickets.SelectedItem as Ticket)?.Id;
             Tickets.ItemsSource = data.RootElement.EnumerateArray().Select(item => new Ticket(
                 item.GetProperty("requestId").GetGuid(), item.GetProperty("title").GetString() ?? "",
-                item.GetProperty("status").GetString() ?? "", item.GetProperty("issueId").ValueKind == JsonValueKind.Null
-                    ? null : item.GetProperty("issueId").GetInt64())).ToArray();
-            Tickets.SelectedItem = (Tickets.ItemsSource as Ticket[])?.FirstOrDefault(t => t.Id == selected);
+                item.TryGetProperty("workflowState", out var workflow) && workflow.GetString() is "completed" or "cancelled"
+                    ? workflow.GetString()! : item.GetProperty("status").GetString() ?? "", item.GetProperty("issueId").ValueKind == JsonValueKind.Null
+                    ? null : item.GetProperty("issueId").GetInt64(),
+                item.TryGetProperty("description", out var description) ? description.GetString() ?? "" : "",
+                item.TryGetProperty("createdAt", out var created) ? created.GetDateTime() : null)).ToArray();
+            var tickets = (Ticket[])Tickets.ItemsSource;
+            EmptyTickets.Visibility = tickets.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+            Tickets.SelectedItem = tickets.FirstOrDefault(t => t.Id == selected) ?? tickets.FirstOrDefault();
             StatusText.Text = "";
         }
         catch (Exception ex) { if (request == refreshRequest) StatusText.Text = ex.Message; }
@@ -54,20 +79,35 @@ public partial class MyTicketsDialog : Window
         Messages.ItemsSource = null;
         attachments.Clear();
         AttachmentPicker.ItemsSource = null;
-        if (Tickets.SelectedItem is not Ticket ticket) { TicketHeader.Text = ""; return; }
+        ReceivedFiles.Visibility = Visibility.Collapsed;
+        ReplyBody.IsEnabled = AttachButton.IsEnabled = SendButton.IsEnabled = Tickets.SelectedItem is Ticket;
+        if (Tickets.SelectedItem is not Ticket ticket) { TicketHeader.Text = "Выберите заявку"; TicketState.Text = ""; return; }
+        if (draftTicket != ticket.Id)
+        {
+            ReplyBody.Clear(); files.Clear(); AttachmentLabel.Text = "";
+            draftTicket = ticket.Id;
+        }
         try
         {
-            TicketHeader.Text = $"{ticket.Title} · {ticket.State}";
+            TicketHeader.Text = ticket.Title;
+            TicketState.Text = ticket.StateLabel + (ticket.IssueId.HasValue ? $" · Okdesk #{ticket.IssueId}" : "");
             using var client = ServerSupportClient.Open() ?? throw new InvalidOperationException("Компьютер не подключён к серверу.");
             using var data = await client.GetAsync($"/api/v1/tickets/{ticket.Id}/messages");
             if (request != selectionRequest) return;
-            Messages.ItemsSource = data.RootElement.GetProperty("messages").EnumerateArray().Select(item => new Message(
-                $"{(item.GetProperty("direction").GetString() == "engineer" ? "Поддержка" : "Пользователь")} · {item.GetProperty("createdAt").GetDateTime().ToLocalTime():dd.MM.yyyy HH:mm} · {item.GetProperty("status").GetString()}",
-                PlainText(item.GetProperty("content").GetString() ?? ""))).ToArray();
+            var messages = data.RootElement.GetProperty("messages").EnumerateArray().Select(item => new Message(
+                item.GetProperty("direction").GetString() == "engineer" ? "Поддержка" : "Вы",
+                item.GetProperty("createdAt").GetDateTime().ToLocalTime().ToString("dd.MM.yyyy HH:mm"),
+                PlainText(item.GetProperty("content").GetString() ?? ""),
+                item.GetProperty("direction").GetString() == "engineer")).ToArray();
+            Messages.ItemsSource = string.IsNullOrWhiteSpace(ticket.Description) ? messages :
+                messages.Prepend(new Message("Вы · заявка", ticket.CreatedAt?.ToLocalTime().ToString("dd.MM.yyyy HH:mm") ?? "",
+                    PlainText(ticket.Description), false)).ToArray();
+            if (Messages.Items.Count > 0) Messages.ScrollIntoView(Messages.Items[Messages.Items.Count - 1]);
             attachments = data.RootElement.GetProperty("attachments").EnumerateArray().Select(item => new Attachment(
                 item.GetProperty("id").GetGuid(), item.GetProperty("fileName").GetString() ?? "файл")).ToList();
             AttachmentPicker.ItemsSource = attachments;
             AttachmentPicker.SelectedIndex = attachments.Count > 0 ? 0 : -1;
+            ReceivedFiles.Visibility = attachments.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             StatusText.Text = "";
         }
         catch (Exception ex) { if (request == selectionRequest) StatusText.Text = ex.Message; }
@@ -78,6 +118,7 @@ public partial class MyTicketsDialog : Window
         if (Tickets.SelectedItem is not Ticket ticket || string.IsNullOrWhiteSpace(ReplyBody.Text)) return;
         SendButton.IsEnabled = false;
         Tickets.IsEnabled = false;
+        RefreshButton.IsEnabled = ReplyBody.IsEnabled = AttachButton.IsEnabled = false;
         try
         {
             using var client = ServerSupportClient.Open()!;
@@ -89,7 +130,11 @@ public partial class MyTicketsDialog : Window
             Tickets_SelectionChanged(this, null!);
         }
         catch (Exception ex) { StatusText.Text = ex.Message; }
-        finally { SendButton.IsEnabled = true; Tickets.IsEnabled = true; }
+        finally
+        {
+            Tickets.IsEnabled = RefreshButton.IsEnabled = true;
+            SendButton.IsEnabled = ReplyBody.IsEnabled = AttachButton.IsEnabled = Tickets.SelectedItem is Ticket;
+        }
     }
 
     private void Attach_Click(object sender, RoutedEventArgs e)

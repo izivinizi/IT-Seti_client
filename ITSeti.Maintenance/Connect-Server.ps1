@@ -8,7 +8,7 @@ $script:serializer = New-Object System.Web.Script.Serialization.JavaScriptSerial
 if ($SkipIfConnected -and (Test-Path -LiteralPath $deviceFile)) {
     try {
         $saved = $script:serializer.DeserializeObject([IO.File]::ReadAllText($deviceFile))
-        if ($saved.serverUrl -eq $serverUrl -and $saved.deviceId -and $saved.deviceKey) { exit 0 }
+        if ($saved.serverUrl -eq $serverUrl -and $saved.deviceId -and $saved.deviceKey -and $saved.companyId -gt 0) { exit 0 }
     } catch { }
 }
 
@@ -85,6 +85,8 @@ function Format-ServerError([Net.WebException]$exception) {
             }
         } finally { $reader.Dispose() }
     } catch { }
+    $requestId = $response.Headers['X-Request-Id']
+    if ($requestId) { $detail += ' Код обращения: ' + $requestId }
     if ($detail) { return ('HTTP {0}: {1}' -f [int]$response.StatusCode, $detail) }
     return ('Сервер вернул HTTP {0} ({1}).' -f [int]$response.StatusCode, $response.StatusDescription)
 }
@@ -460,6 +462,14 @@ $connectButton.Add_Click({
     }
     catch {
         $status.Text = 'Подключение не завершено: ' + $_.Exception.Message
+        try {
+            $diagnostic = @{ time=[DateTimeOffset]::Now.ToString('O'); error=$_.Exception.Message
+                companyId=$companyId; siteId=$siteId; computerName=$env:COMPUTERNAME
+                hasSerial=![string]::IsNullOrWhiteSpace($serialNumber)
+                hasHardwareUuid=![string]::IsNullOrWhiteSpace($hardwareUuid) }
+            [IO.File]::WriteAllText((Join-Path (Split-Path $deviceFile -Parent) 'server-connect-error.json'),
+                $script:serializer.Serialize($diagnostic), (New-Object Text.UTF8Encoding($false)))
+        } catch { }
         $connectButton.Enabled = $true
     }
 })

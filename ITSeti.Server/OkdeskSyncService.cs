@@ -6,7 +6,7 @@ namespace ITSeti.Server;
 
 public sealed record OkdeskSyncResult(bool Success, int Companies, int Sites, DateTimeOffset? CompletedAt, string? Error);
 
-public sealed class OkdeskSyncService(NpgsqlDataSource dataSource, OkdeskApiClient okdesk, ILogger<OkdeskSyncService> logger) : BackgroundService
+public sealed class OkdeskSyncService(NpgsqlDataSource dataSource, IOkdeskClient okdesk, ILogger<OkdeskSyncService> logger) : BackgroundService
 {
     private static readonly TimeSpan CatalogRefreshInterval = TimeSpan.FromDays(3);
     private static readonly TimeSpan RetryInterval = TimeSpan.FromHours(6);
@@ -59,25 +59,38 @@ public sealed class OkdeskSyncService(NpgsqlDataSource dataSource, OkdeskApiClie
 
     public async Task<OkdeskSyncResult> SyncOnceAsync(CancellationToken cancellationToken = default)
     {
-        if (!okdesk.Configured) return new(false, 0, 0, null, "API-ключ Okdesk не настроен.");
+        if (!okdesk.Configured) return new(false, 0, 0, null, "Подключение Okdesk не настроено.");
         try
         {
             var companies = await okdesk.GetAllAsync("/api/v1/companies/list", cancellationToken);
             var sites = await okdesk.GetAllAsync("/api/v1/maintenance_entities/list", cancellationToken);
             if (companies.Count == 0) throw new JsonException("Okdesk returned an empty company catalog.");
-            await SaveCatalogAsync(companies, sites, cancellationToken);
+            // Objects can reference companies omitted from the accessible company list.
+            // Retain those relationships without offering these owners for new enrollment.
+            var completeCompanies = companies.ToList();
+            var ownerIds = companies.Select(x => ReadLong(x, "id") ?? throw new JsonException("Missing company ID.")).ToHashSet();
+            foreach (var site in sites)
+            {
+                var owner = ReadLong(site, "company_id", "companyId") ?? throw new JsonException("Missing object owner.");
+                if (ownerIds.Add(owner))
+                    completeCompanies.Add(JsonSerializer.SerializeToElement(new
+                    {
+                        id = owner, name = JsonRead.String(site, "company_name") ?? "Недоступная компания", active = false
+                    }));
+            }
+            await SaveCatalogAsync(completeCompanies, sites, cancellationToken);
             return new(true, companies.Count, sites.Count, DateTimeOffset.UtcNow, null);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (OkdeskApiException ex)
         {
             logger.LogWarning("Okdesk API catalog request failed with HTTP {StatusCode}.", ex.StatusCode);
-            return new(false, 0, 0, null, $"Okdesk API вернул HTTP {ex.StatusCode}. Проверьте ключ и права на каталоги.");
+            return new(false, 0, 0, null, $"Okdesk вернул HTTP {ex.StatusCode}. Проверьте настройки входа и права на каталоги.");
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or NpgsqlException or InvalidOperationException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or NpgsqlException or InvalidOperationException or KeyNotFoundException)
         {
             logger.LogWarning("Okdesk API catalog sync failed: {ErrorType}.", ex.GetType().Name);
-            return new(false, 0, 0, null, "Okdesk API не ответил или вернул неожиданные данные.");
+            return new(false, 0, 0, null, "Okdesk не ответил или вернул неожиданные данные. Существующий каталог сохранён.");
         }
     }
 

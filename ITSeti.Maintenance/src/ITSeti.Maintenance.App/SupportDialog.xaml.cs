@@ -25,8 +25,8 @@ public partial class SupportDialog : Window
     public SupportDialog(string? inventoryNumber, string? rmsId, string? anyDeskId)
     {
         InitializeComponent();
-        Width = Math.Min(720, SystemParameters.WorkArea.Width - 32);
-        Height = Math.Min(760, SystemParameters.WorkArea.Height - 32);
+        Width = Math.Min(680, SystemParameters.WorkArea.Width - 32);
+        Height = Math.Min(640, SystemParameters.WorkArea.Height - 32);
         MinWidth = Math.Min(540, Width);
         MinHeight = Math.Min(480, Height);
         MaxHeight = SystemParameters.WorkArea.Height - 16;

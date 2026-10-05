@@ -2,7 +2,7 @@ using Npgsql;
 
 namespace ITSeti.Server;
 
-public sealed class TicketDispatchService(NpgsqlDataSource database, OkdeskApiClient okdesk,
+public sealed class TicketDispatchService(NpgsqlDataSource database, IOkdeskClient okdesk,
     ILogger<TicketDispatchService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -21,8 +21,8 @@ public sealed class TicketDispatchService(NpgsqlDataSource database, OkdeskApiCl
         {
             try
             {
-                if (okdesk.Configured && await SendNextAsync(stoppingToken)) continue;
-                if (okdesk.Configured && okdesk.CommentAuthorId.HasValue && await SendNextMessageAsync(stoppingToken)) continue;
+                if (okdesk.CanSendTickets && await SendNextAsync(stoppingToken)) continue;
+                if (okdesk.CanSendComments && await SendNextMessageAsync(stoppingToken)) continue;
                 await Task.Delay(TimeSpan.FromSeconds(20), stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }

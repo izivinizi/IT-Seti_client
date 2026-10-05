@@ -9,7 +9,8 @@ internal sealed class ServerSupportClient : IDisposable
 {
     private readonly HttpClient client;
 
-    private ServerSupportClient(HttpClient client) => this.client = client;
+    public string DeviceId { get; }
+    internal ServerSupportClient(HttpClient client, string deviceId) { this.client = client; DeviceId = deviceId; }
 
     public static ServerSupportClient? Open()
     {
@@ -24,12 +25,12 @@ internal sealed class ServerSupportClient : IDisposable
         var http = new HttpClient { BaseAddress = uri, Timeout = TimeSpan.FromSeconds(30) };
         http.DefaultRequestHeaders.Add("X-Device-Id", root.GetProperty("deviceId").GetString());
         http.DefaultRequestHeaders.Add("X-Support-Key", root.GetProperty("supportKey").GetString());
-        return new ServerSupportClient(http);
+        return new ServerSupportClient(http, root.GetProperty("deviceId").GetString()!);
     }
 
-    public async Task<JsonDocument> GetAsync(string path)
+    public async Task<JsonDocument> GetAsync(string path, CancellationToken cancellationToken = default)
     {
-        using var response = await client.GetAsync(path);
+        using var response = await client.GetAsync(path, cancellationToken);
         await EnsureSuccessAsync(response);
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync());
     }

@@ -34,6 +34,10 @@ services:
       RegistrationPasswordHash: ${REGISTRATION_PASSWORD_HASH:-}
       OkdeskBaseUrl: ${OKDESK_BASE_URL:-https://it-seti.okdesk.ru}
       OkdeskApiToken: ${OKDESK_API_TOKEN:-}
+      OkdeskTransport: ${OKDESK_TRANSPORT:-api}
+      OkdeskLogin: ${OKDESK_LOGIN:-}
+      OkdeskPassword: ${OKDESK_PASSWORD:-}
+      OkdeskWebTicketDeliveryEnabled: ${OKDESK_WEB_TICKET_DELIVERY_ENABLED:-false}
       OkdeskCommentAuthorId: ${OKDESK_COMMENT_AUTHOR_ID:-}
       DataRoot: /data
     depends_on:

@@ -8,6 +8,16 @@
     }
     return $false
 }
+function Get-WindowsVersionDetails($OperatingSystem,$WindowsKey) {
+    $edition=[string]$OperatingSystem.Caption
+    if(!$edition){$edition=[string]$WindowsKey.ProductName}
+    $release=[string]$(if($WindowsKey.DisplayVersion){$WindowsKey.DisplayVersion}else{$WindowsKey.ReleaseId})
+    $buildText=[string]$(if($OperatingSystem.BuildNumber){$OperatingSystem.BuildNumber}elseif($WindowsKey.CurrentBuildNumber){$WindowsKey.CurrentBuildNumber}else{$WindowsKey.CurrentBuild})
+    $build=0; $number=$null
+    if([int]::TryParse($buildText,[ref]$build)){$number=$build}
+    if($OperatingSystem.ProductType -eq 1 -and $build -ge 22000){$edition=$edition -replace 'Windows 10','Windows 11'}
+    return [pscustomobject]@{Edition=$edition;Release=$release;Build=$number}
+}
 function Test-TrustedProcess([string]$SignatureStatus,[string]$Signer) {
     return $SignatureStatus -eq 'Valid' -and (Test-AllowedPublisher $Signer)
 }
@@ -121,11 +131,10 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
         } catch {}
         $os=Get-WmiObject Win32_OperatingSystem -ErrorAction Stop
         $windowsKey=Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue
-        $s.WindowsEdition=[string]$windowsKey.ProductName
-        $s.WindowsRelease=[string]$(if($windowsKey.DisplayVersion){$windowsKey.DisplayVersion}else{$windowsKey.ReleaseId})
-        $buildText=[string]$(if($windowsKey.CurrentBuildNumber){$windowsKey.CurrentBuildNumber}else{$windowsKey.CurrentBuild})
-        $buildNumber=0
-        if([int]::TryParse($buildText,[ref]$buildNumber)){$s.WindowsBuild=$buildNumber}
+        $windows=Get-WindowsVersionDetails $os $windowsKey
+        $s.WindowsEdition=$windows.Edition
+        $s.WindowsRelease=$windows.Release
+        $s.WindowsBuild=$windows.Build
         try {$s.LastBootAt=([DateTimeOffset]([Management.ManagementDateTimeConverter]::ToDateTime($os.LastBootUpTime))).ToString('o')} catch {$s.Notes+=('Время последней загрузки: '+$_.Exception.Message)}
         $s.ActiveUptimeHours=Get-ActiveUptimeHours
         $s.TotalRAM=[double]$os.TotalVisibleMemorySize/1MB

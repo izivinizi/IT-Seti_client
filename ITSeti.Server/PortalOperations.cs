@@ -94,7 +94,7 @@ public static class PortalOperations
 public sealed record ReplyRequest(Guid Id, string Content, bool IsPublic);
 public sealed record ActionRequest(Guid Id, string Target);
 
-public sealed class TicketActionDispatcher(NpgsqlDataSource db, OkdeskApiClient okdesk, ILogger<TicketActionDispatcher> logger) : BackgroundService
+public sealed class TicketActionDispatcher(NpgsqlDataSource db, IOkdeskClient okdesk, ILogger<TicketActionDispatcher> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken cancellationToken)
     {
@@ -103,7 +103,7 @@ public sealed class TicketActionDispatcher(NpgsqlDataSource db, OkdeskApiClient 
             await reset.ExecuteNonQueryAsync(cancellationToken);
         while (!cancellationToken.IsCancellationRequested)
         {
-            try { if (okdesk.Configured) await DispatchAsync(cancellationToken); }
+            try { if (okdesk.CanChangeStatus) await DispatchAsync(cancellationToken); }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
             catch (Exception ex) { logger.LogWarning("Ticket action failed: {Type}", ex.GetType().Name); }
             try { await Task.Delay(TimeSpan.FromSeconds(20), cancellationToken); }

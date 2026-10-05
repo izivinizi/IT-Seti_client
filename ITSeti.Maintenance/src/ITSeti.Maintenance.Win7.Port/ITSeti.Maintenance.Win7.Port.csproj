@@ -4,9 +4,9 @@
     <TargetFramework>net48</TargetFramework>
     <UseWPF>true</UseWPF>
     <AssemblyName>ITSeti.Maintenance.Win7.Port</AssemblyName>
-    <Version>2.1.1-beta</Version>
-    <AssemblyVersion>2.1.1.0</AssemblyVersion>
-    <FileVersion>2.1.1.0</FileVersion>
+    <Version>2.2.0-beta</Version>
+    <AssemblyVersion>2.2.0.0</AssemblyVersion>
+    <FileVersion>2.2.0.0</FileVersion>
     <RootNamespace>ITSeti.Maintenance.App</RootNamespace>
     <ApplicationIcon>../ITSeti.Maintenance.App/Assets/favicon.ico</ApplicationIcon>
     <LangVersion>latest</LangVersion>

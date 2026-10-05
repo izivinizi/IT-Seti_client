@@ -49,7 +49,7 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
         }
         var physicalDisks = includeDiskHealth ? await ReadDiskHealthAsync(cancellationToken) : [];
         if (includeDiskHealth && physicalDisks.Count == 0) notes.Add("Состояние накопителей через Windows определить не удалось. Для подробной проверки запустите полную диагностику.");
-        var windows = ReadWindowsDetails();
+        var windows = WindowsVersionInfo.Read();
         var temperature = readTemperature
             ? await CpuTemperatureCache.RequestFreshAsync(TimeSpan.FromSeconds(5), cancellationToken)
             : CpuTemperatureCache.ReadFresh(maxAge: TimeSpan.FromSeconds(45));
@@ -61,20 +61,6 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
             CpuTemperatureC: temperature.TemperatureC, CpuTemperatureStatus: temperature.Status,
             ActiveUptimeHours: ReadActiveUptimeHours());
     }, cancellationToken);
-
-    private static (string? Edition, string? Release, int? Build) ReadWindowsDetails()
-    {
-        try
-        {
-            using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
-            var edition = key?.GetValue("ProductName")?.ToString();
-            var release = (key?.GetValue("DisplayVersion") ?? key?.GetValue("ReleaseId"))?.ToString();
-            var buildText = (key?.GetValue("CurrentBuildNumber") ?? key?.GetValue("CurrentBuild"))?.ToString();
-            return (edition, release, int.TryParse(buildText, out var build) ? build : null);
-        }
-        catch (System.Security.SecurityException) { return (null, null, null); }
-        catch (IOException) { return (null, null, null); }
-    }
 
     private static async Task<List<PhysicalDiskDetails>> ReadDiskHealthAsync(CancellationToken cancellationToken)
     {

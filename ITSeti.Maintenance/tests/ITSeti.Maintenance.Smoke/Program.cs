@@ -19,6 +19,141 @@ internal static class Program
     private static int Main(string[] args)
     {
         Environment.SetEnvironmentVariable("ITSETI_DISABLE_REPORT_UPLOAD", "1");
+        if (args.Contains("--ticket-polling"))
+        {
+            var path = Path.Combine(Path.GetTempPath(), "itseti-poll-" + Guid.NewGuid().ToString("N"), "state.json");
+            var device = Guid.NewGuid().ToString();
+            var message = Guid.NewGuid();
+            var handler = new TicketPollHandler();
+            var notifications = new List<string>();
+            ServerSupportClient Client() => new(new HttpClient(handler, false) { BaseAddress = new Uri("https://it-seti.nylenz.ru") }, device);
+            string Batch(bool include, bool active = true, bool more = false) => JsonSerializer.Serialize(new {
+                activeCount = active ? 1 : 0, cursor = DateTimeOffset.UtcNow.AddSeconds(-30), cursorId = Guid.Empty, hasMore = more,
+                messages = include ? new[] { new { id = message, requestId = Guid.NewGuid(), title = "Fixture reply", createdAt = DateTimeOffset.UtcNow } } : []
+            });
+            try
+            {
+                handler.Response = Batch(false);
+                using (var poller = new TicketMessagePoller(new Window(), () => {}, Client, notifications.Add, path))
+                {
+                    poller.PollAsync().GetAwaiter().GetResult();
+                    if (!poller.HasActiveTickets || notifications.Count != 0) throw new Exception("Initial poll did not establish silent baseline");
+                    handler.Response = Batch(true);
+                    poller.PollAsync().GetAwaiter().GetResult();
+                    poller.PollAsync().GetAwaiter().GetResult();
+                    if (notifications.Count != 1 || !handler.LastPath.Contains("since=") || !handler.LastPath.Contains("afterId="))
+                        throw new Exception("New reply notification or duplicate suppression failed");
+                    var saved = File.ReadAllText(path);
+                    handler.Response = "{}";
+                    poller.PollAsync().GetAwaiter().GetResult();
+                    if (File.ReadAllText(path) != saved) throw new Exception("Malformed poll advanced the saved cursor");
+                    handler.Response = Batch(true);
+                }
+                using (var restarted = new TicketMessagePoller(new Window(), () => {}, Client, notifications.Add, path))
+                {
+                    restarted.PollAsync().GetAwaiter().GetResult();
+                    if (notifications.Count != 1) throw new Exception("Restart repeated a notification");
+                    handler.Response = Batch(false, false);
+                    restarted.PollAsync().GetAwaiter().GetResult();
+                    if (restarted.HasActiveTickets) throw new Exception("Completed ticket kept polling in active mode");
+                }
+                File.WriteAllText(path, JsonSerializer.Serialize(new { DeviceId=device,Cursor=DateTimeOffset.UtcNow,CursorId=Guid.Empty,Seen=(Guid[]?)null }));
+                using (var damaged = new TicketMessagePoller(new Window(), () => {}, Client, notifications.Add, path))
+                    damaged.PollAsync().GetAwaiter().GetResult();
+                Console.WriteLine("PASS: silent baseline, active ticket, new reply, duplicate suppression, restart, completion and damaged saved state");
+            }
+            finally { if (Directory.Exists(Path.GetDirectoryName(path))) Directory.Delete(Path.GetDirectoryName(path)!, true); }
+            return 0;
+        }
+        if (args.Contains("--ticket-ui-review"))
+        {
+            var ticketReviewApp = new ITSeti.Maintenance.App.App();
+            ticketReviewApp.InitializeComponent();
+            Directory.CreateDirectory("artifacts");
+            static bool ContainsText(DependencyObject root, string text)
+            {
+                if (root is TextBlock block && block.Text == text) return true;
+                for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+                    if (ContainsText(VisualTreeHelper.GetChild(root, index), text)) return true;
+                return false;
+            }
+            static void Render(Window window, int width, int height, string name, string action)
+            {
+                var content = (FrameworkElement)window.Content;
+                content.Measure(new Size(width, height));
+                content.Arrange(new Rect(0, 0, width, height));
+                content.UpdateLayout();
+                var button = (Button)window.FindName(action);
+                var position = button.TranslatePoint(new Point(), content);
+                if (button.ActualHeight < 30 || position.X < 0 || position.Y < 0 ||
+                    position.X + button.ActualWidth > width + 1 || position.Y + button.ActualHeight > height + 1)
+                    throw new Exception("Primary action is outside the viewport: " + name);
+                var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+                bitmap.Render(content);
+                var encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                using var stream = File.Create("artifacts/" + name + ".png");
+                encoder.Save(stream);
+                Console.WriteLine("PASS: " + name + " primary action visible; rendered " + width + "x" + height);
+            }
+            var support = new SupportDialog();
+            ((TextBox)support.FindName("TicketTitle")).Text = "Не открывается рабочая программа";
+            Render(support, 680, 600, "support-redesign", "SubmitTicket");
+            if (!ContainsText((ComboBox)support.FindName("TicketService"), "Другое"))
+                throw new Exception("Service selector does not display its friendly name");
+            Render(support, 540, 440, "support-redesign-small", "SubmitTicket");
+            var addFile = typeof(SupportDialog).GetMethod("AddFile", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            addFile.Invoke(support, new object[] { "Снимок-экрана.png", new byte[] { 1, 2, 3 } });
+            if (((ListBox)support.FindName("TicketFiles")).Items.Count != 1 ||
+                !((Button)support.FindName("RemoveAttachment")).IsEnabled)
+                throw new Exception("Attachment was not displayed or cannot be removed");
+            typeof(SupportDialog).GetMethod("RemoveFile_Click", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(support, new object[] { support, new RoutedEventArgs() });
+            if (((ListBox)support.FindName("TicketFiles")).Items.Count != 0 ||
+                ((Button)support.FindName("RemoveAttachment")).IsEnabled)
+                throw new Exception("Attachment removal did not restore the empty state");
+            Console.WriteLine("PASS: attachment list and removal state");
+            var tickets = new MyTicketsDialog();
+            ((ListBox)tickets.FindName("Tickets")).ItemsSource = new[] {
+                new { Title = "Не открывается рабочая программа", StateLabel = "В работе · Okdesk #1042" },
+                new { Title = "Настройка почты", StateLabel = "Выполнена" }
+            };
+            ((TextBlock)tickets.FindName("TicketHeader")).Text = "Не открывается рабочая программа";
+            ((TextBlock)tickets.FindName("TicketState")).Text = "В работе · Okdesk #1042";
+            ((ListBox)tickets.FindName("Messages")).ItemsSource = new[] {
+                new { Author = "Вы", Date = "05.10.2026 11:45", Content = "При запуске появляется ошибка. Прикрепил снимок экрана.", IsEngineer = false },
+                new { Author = "Поддержка", Date = "05.10.2026 11:57", Content = "Здравствуйте! Подключимся к компьютеру и проверим. Оставьте программу открытой, пожалуйста.", IsEngineer = true }
+            };
+            foreach (var name in new[] { "ReplyBody", "AttachButton", "SendButton" })
+                ((Control)tickets.FindName(name)).IsEnabled = true;
+            Render(tickets, 940, 640, "tickets-redesign", "SendButton");
+            Render(tickets, 720, 460, "tickets-redesign-small", "SendButton");
+            ((FrameworkElement)tickets.FindName("ReceivedFiles")).Visibility = Visibility.Visible;
+            ((ComboBox)tickets.FindName("AttachmentPicker")).ItemsSource = new[] { new { FileName = "Снимок экрана ошибки.png" } };
+            ((ComboBox)tickets.FindName("AttachmentPicker")).SelectedIndex = 0;
+            Render(tickets, 940, 640, "tickets-redesign-attachments", "SendButton");
+            if (!ContainsText((ComboBox)tickets.FindName("AttachmentPicker"), "Снимок экрана ошибки.png"))
+                throw new Exception("Attachment selector does not display the file name");
+            Console.WriteLine("PASS: service and attachment selectors render friendly labels");
+            ticketReviewApp.Shutdown();
+            return 0;
+        }
+        if (args.Contains("--windows-version-contract"))
+        {
+            static void Require(bool value, string message)
+            {
+                if (!value) throw new Exception(message);
+                Console.WriteLine("PASS " + message);
+            }
+            Require(WindowsVersionInfo.NormalizeEdition("Windows 10 Pro", 26200, true) == "Windows 11 Pro", "stale registry name is corrected on Windows 11");
+            Require(WindowsVersionInfo.NormalizeEdition("Windows 10 Pro", 19045, true) == "Windows 10 Pro", "Windows 10 is not renamed");
+            Require(WindowsVersionInfo.NormalizeEdition("Windows Server 2025", 26100, false) == "Windows Server 2025", "server edition is not treated as Windows 11");
+            Require(WindowsVersionInfo.NormalizeEdition("Windows 7 Professional", 7601, true) == "Windows 7 Professional", "legacy Windows name is preserved");
+            var actual = WindowsVersionInfo.Read();
+            Require(actual.Build > 0 && !string.IsNullOrWhiteSpace(actual.Edition), "native OS identity is available");
+            Console.WriteLine($"Windows identity: {actual.Edition} | {actual.Release} | {actual.Build}");
+            return 0;
+        }
         if (args.Contains("--sidebar-style-contract"))
         {
             var sidebarApp = new ITSeti.Maintenance.App.App();
@@ -200,6 +335,12 @@ internal static class Program
                 Capture(contacts, Path.Combine(output, "contacts.png"));
                 contacts.Close();
                 support.Close();
+                if (args.Contains("--support-ui-contract"))
+                {
+                    Console.WriteLine("PASS: ticket composer at compact and normal heights, default PC data, services, tickets action and contacts identifiers.");
+                    window.Close();
+                    return;
+                }
                 while (!window.ViewModel.CanRun) await Task.Delay(50);
                 while (window.ViewModel.UserMemoryLabel == "—") await Task.Delay(50);
                 if (window.ViewModel.UserDiskDetail == "Нет данных о диске")
@@ -398,8 +539,11 @@ internal static class Program
                 if (window.ViewModel.FilteredEvents.Cast<EventDetails>().Count() != 3) throw new Exception("All-event filter failed");
                 window.ViewModel.EventFilterLevel = 1;
                 window.ViewModel.Selected = first;
-                if (window.ViewModel.SetupComponents.Count != 6) throw new Exception("Organization software audit missing components");
-                if (window.ViewModel.SetupComponents.Select(component => component.InstallKey).Distinct().Count() != 6)
+                var expectedComponents = OrganizationSoftwareAudit.Inspect(OrganizationSoftwareAudit.FindBundledDirectory());
+                if (!window.ViewModel.SetupComponents.Select(component => component.InstallKey)
+                    .SequenceEqual(expectedComponents.Select(component => component.InstallKey)))
+                    throw new Exception("Organization software rows do not match the available catalog");
+                if (window.ViewModel.SetupComponents.Select(component => component.InstallKey).Distinct().Count() != window.ViewModel.SetupComponents.Count)
                     throw new Exception("Per-component install actions are missing");
                 if (window.ViewModel.SystemTools.Count != 8 || window.ViewModel.SystemTools.All(tool => tool.Key != "security"))
                     throw new Exception("System application shortcuts are incomplete");
@@ -411,10 +555,12 @@ internal static class Program
                     throw new Exception("Disk utilities must launch in the current user session without UAC");
                 var detectedSetup = OrganizationSoftwareAudit.FindBundledDirectory();
                 var expectedSetup = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "Setup", "ITSETI-Setup"));
-                if (detectedSetup is null || !string.Equals(Path.GetFullPath(detectedSetup), expectedSetup, StringComparison.OrdinalIgnoreCase))
-                    throw new Exception("Organization software must be bundled in the application directory");
-                await AssertSetupSignatureCheck();
-                foreach (var name in new[] { "InstallSetupButton", "CreateAdminAccountButton", "RefreshSetupAuditButton", "LaunchDiskInfoButton", "LaunchDiskMarkButton", "LaunchTreeSizeButton" })
+                if (detectedSetup is not null && !string.Equals(Path.GetFullPath(detectedSetup), expectedSetup, StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("Bundled software resolved outside the application directory");
+                if (window.ViewModel.HasBundledSetup) await AssertSetupSignatureCheck();
+                if (((Button)window.FindName("InstallSetupButton")!).IsEnabled != window.ViewModel.CanInstallSetup)
+                    throw new Exception("Install-all availability does not match available server or offline packages");
+                foreach (var name in new[] { "CreateAdminAccountButton", "RefreshSetupAuditButton", "LaunchDiskInfoButton", "LaunchDiskMarkButton", "LaunchTreeSizeButton" })
                     if (window.FindName(name) is not Button { IsEnabled: true }) throw new Exception($"ПО action is unavailable: {name}");
                 AssertDiskToolResolution(output);
                 typeof(MainViewModel).GetField("identity", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
@@ -748,9 +894,12 @@ internal static class Program
                 .Any(finding => finding.Contains("Критических событий", StringComparison.Ordinal)))
             throw new Exception("One or two Kernel-Power 41 events with BugcheckCode 0 must not count as errors");
         var frequentKernelPower = kernelPowerNoise.Append(kernelPowerNoise[0] with { RecordId = 103 }).ToArray();
-        if (!DiagnosticRules.GetUserIssues(snapshot with { Full = full with { Events = kernelPowerNoise.ToList() } })
+        if (DiagnosticRules.GetUserIssues(snapshot with { Full = full with { Events = kernelPowerNoise.ToList() } })
             .Any(issue => issue.Severity == "Warning" && issue.Title.Contains("некорректно")))
-            throw new Exception("Zero-code power loss must remain visible without claiming a BSOD");
+            throw new Exception("Fewer than three zero-code power losses must not appear in the user summary");
+        if (!DiagnosticRules.GetUserIssues(snapshot with { Full = full with { Events = frequentKernelPower.ToList() } })
+            .Any(issue => issue.Severity == "Warning" && issue.Title.Contains("некорректно")))
+            throw new Exception("Three zero-code power losses must appear as a warning");
         if (DiagnosticRules.GetActionableEvents(frequentKernelPower).Count != 3
             || !DiagnosticRules.GetFindings(snapshot with { Full = full with { Events = frequentKernelPower.ToList() } })
                 .Any(finding => finding.Contains("Критических событий в доступной выборке: 3", StringComparison.Ordinal)))
@@ -1143,6 +1292,14 @@ internal static class Program
 
     private static void AssertEngineerAccountParsing()
     {
+        var allowed = typeof(WindowsAdminAccountDiscovery).GetMethod("IsDesignatedLocalAdmin",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        foreach (var name in new[] { "Admin", "it-seti", "Administrator", "Администратор" })
+            if (!(bool)allowed.Invoke(null, [Environment.MachineName + "\\" + name])!)
+                throw new Exception("Designated local administrator incorrectly flagged: " + name);
+        if ((bool)allowed.Invoke(null, [Environment.MachineName + "\\other-user"])!
+            || (bool)allowed.Invoke(null, ["OTHER-DOMAIN\\Administrator"])!)
+            throw new Exception("Administrator exception must not hide other local accounts or domain groups");
         var local = EngineerWindowLauncher.ParseAccountCandidates(".\\  tech ");
         if (local.Count != 1 || local[0].UserName != "tech"
             || !string.Equals(local[0].Domain, Environment.MachineName, StringComparison.OrdinalIgnoreCase))
@@ -1206,5 +1363,16 @@ internal static class Program
         Capture(window, path);
         foreach (var (label, _) in labels)
             BindingOperations.GetBindingExpression(label, TextBlock.TextProperty)?.UpdateTarget();
+    }
+}
+
+internal sealed class TicketPollHandler : HttpMessageHandler
+{
+    public string Response { get; set; } = "{}";
+    public string LastPath { get; private set; } = "";
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        LastPath = request.RequestUri!.PathAndQuery;
+        return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(Response, Encoding.UTF8, "application/json") });
     }
 }

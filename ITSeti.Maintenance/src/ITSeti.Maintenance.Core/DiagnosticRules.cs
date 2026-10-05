@@ -53,7 +53,7 @@ public static class DiagnosticRules
         {
             issues.AddRange(GetKernelPowerBugcheckIssues(full.Events));
             var powerLosses = full.Events.Where(IsKernelPower41WithZeroBugcheckCode).ToArray();
-            if (powerLosses.Length > 0)
+            if (powerLosses.Length >= 3)
                 issues.Add(new("Windows завершила работу некорректно",
                     $"В журнале найдено неожиданных завершений работы: {powerLosses.Length}. Kernel-Power 41, BugcheckCode 0: причина не определена; это не подтверждённый синий экран. Проверьте питание и обстоятельства выключения компьютера.", "Warning"));
             var otherCritical = full.Events.Count(item => item.Level == 1 && !item.Provider.Contains("Kernel-Power", StringComparison.OrdinalIgnoreCase));

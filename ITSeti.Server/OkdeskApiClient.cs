@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.WebUtilities;
 
 namespace ITSeti.Server;
 
-public sealed class OkdeskApiClient
+public sealed class OkdeskApiClient : IOkdeskClient
 {
     private static readonly HttpClient SharedClient = new(new SocketsHttpHandler
     {
@@ -27,6 +27,10 @@ public sealed class OkdeskApiClient
     }
 
     public bool Configured => !string.IsNullOrWhiteSpace(configuration["OkdeskApiToken"]);
+    public bool CanSendTickets => Configured;
+    public bool CanSendComments => Configured && CommentAuthorId.HasValue;
+    public bool CanReadComments => Configured;
+    public bool CanChangeStatus => Configured;
     public long? CommentAuthorId => long.TryParse(configuration["OkdeskCommentAuthorId"], out var id) && id > 0 ? id : null;
 
     public async Task<IReadOnlyList<JsonElement>> GetAllAsync(string path, CancellationToken cancellationToken)

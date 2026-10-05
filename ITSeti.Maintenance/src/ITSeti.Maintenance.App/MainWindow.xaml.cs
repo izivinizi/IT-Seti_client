@@ -30,6 +30,7 @@ public partial class MainWindow : Window
     private bool refreshingSoftware;
     private DateTime catalogWriteTime;
     private readonly DispatcherTimer liveMetricsTimer = new() { Interval = TimeSpan.FromSeconds(10) };
+    private readonly TicketMessagePoller? ticketPoller;
     public MainWindow() : this(DefaultHistoryDatabasePath(), false) { }
 
     public MainWindow(string databasePath) : this(databasePath, false) { }
@@ -39,6 +40,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         historyDatabasePath = Path.GetFullPath(databasePath);
         this.engineerOnly = engineerOnly;
+        if (!engineerOnly && Environment.GetEnvironmentVariable("ITSETI_DISABLE_REPORT_UPLOAD") != "1")
+            ticketPoller = new TicketMessagePoller(this, OpenMyTickets);
         AdminAccount.Text = Environment.MachineName + "\\" + Environment.UserName;
         if (!engineerOnly) ConfigureUserShellSize();
         ViewModel = new MainViewModel(new WindowsDiagnosticsRunner(), new SqliteHistoryStore(historyDatabasePath),
@@ -59,12 +62,14 @@ public partial class MainWindow : Window
             var changed = File.GetLastWriteTimeUtc(ServerSoftwareCatalog.CachePath);
             if (changed != catalogWriteTime) { catalogWriteTime = changed; ViewModel.RefreshSetupAudit(); }
         };
-        Closed += (_, _) => { closed = true; liveMetricsTimer.Stop(); progressScroll?.Abort(); };
+        Closed += (_, _) => { closed = true; ticketPoller?.Dispose(); liveMetricsTimer.Stop(); progressScroll?.Abort(); };
         Loaded += async (_, _) =>
         {
             await ViewModel.InitializeAsync();
             await ViewModel.RefreshLiveStatusAsync();
+            if (closed) return;
             liveMetricsTimer.Start();
+            ticketPoller?.Start();
             if (this.engineerOnly)
             {
                 ViewModel.RefreshSetupAudit();
@@ -92,6 +97,11 @@ public partial class MainWindow : Window
             {
                 e.Cancel = true;
                 closeAfterMaintenance = true;
+                Hide();
+            }
+            else if (!exitForUpdate && ticketPoller is { HasActiveTickets: true, ExitRequested: false })
+            {
+                e.Cancel = true;
                 Hide();
             }
         };
@@ -181,8 +191,20 @@ public partial class MainWindow : Window
         try { Process.Start(new ProcessStartInfo("notepad.exe") { UseShellExecute = false, ArgumentList = { path } }); }
         catch (Exception ex) { MessageBox.Show(this, ex.Message, "Не удалось открыть журнал", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
-    private void ShowSupport_Click(object sender, RoutedEventArgs e) => new SupportDialog(ViewModel.InventoryNumber, ViewModel.RmsId, ViewModel.AnyDeskId) { Owner = this }.ShowDialog();
-    private void ShowMyTickets_Click(object sender, RoutedEventArgs e) => new MyTicketsDialog { Owner = this }.ShowDialog();
+    private void ShowSupport_Click(object sender, RoutedEventArgs e)
+    {
+        new SupportDialog(ViewModel.InventoryNumber, ViewModel.RmsId, ViewModel.AnyDeskId) { Owner = this }.ShowDialog();
+        ticketPoller?.RefreshSoon();
+    }
+    private MyTicketsDialog? ticketsDialog;
+    private void OpenMyTickets()
+    {
+        if (ticketsDialog is not null) { ticketsDialog.Activate(); return; }
+        ticketsDialog = new MyTicketsDialog { Owner = this };
+        try { ticketsDialog.ShowDialog(); }
+        finally { ticketsDialog = null; ticketPoller?.RefreshSoon(); }
+    }
+    private void ShowMyTickets_Click(object sender, RoutedEventArgs e) => OpenMyTickets();
     private void ShowContacts_Click(object sender, RoutedEventArgs e) => new ContactsDialog(
         $"Инв. номер: {ViewModel.InventoryNumber}\nRMS: {ViewModel.RmsId}\nAnyDesk: {ViewModel.AnyDeskId}") { Owner = this }.ShowDialog();
     private void CopyInventory_Click(object sender, RoutedEventArgs e) => CopyIdentity(ViewModel.InventoryNumber, "инвентарный номер");

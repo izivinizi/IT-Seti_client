@@ -80,6 +80,8 @@ public static class Database
             CREATE UNIQUE INDEX IF NOT EXISTS ix_ticket_messages_remote ON ticket_messages(request_id,okdesk_comment_id) WHERE okdesk_comment_id IS NOT NULL;
             ALTER TABLE ticket_messages ADD COLUMN IF NOT EXISTS payload_hash text;
             ALTER TABLE ticket_messages ADD COLUMN IF NOT EXISTS is_public boolean NOT NULL DEFAULT true;
+            CREATE INDEX IF NOT EXISTS ix_ticket_messages_public_created ON ticket_messages(request_id,created_at,id)
+                WHERE is_public AND direction='engineer';
             ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS workflow_state text NOT NULL DEFAULT 'opened';
             CREATE TABLE IF NOT EXISTS ticket_actions (
                 id uuid PRIMARY KEY, request_id uuid NOT NULL REFERENCES ticket_requests(request_id) ON DELETE CASCADE,
