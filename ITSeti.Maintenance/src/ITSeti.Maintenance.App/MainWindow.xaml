@@ -65,8 +65,12 @@
      <Button x:Name="SupportButton" Style="{StaticResource UserSecondaryButton}" Height="72" Margin="0,10,0,0" Click="ShowSupport_Click" ToolTip="Создать заявку в поддержку">
       <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE8F2;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Оставить заявку" FontSize="16" FontWeight="SemiBold" Foreground="#14419E" VerticalAlignment="Center"/></Grid>
      </Button>
-     <Button x:Name="MyTicketsButton" Height="42" Margin="0,10,0,0" Click="ShowMyTickets_Click" Content="Мои заявки"/>
-     <Button x:Name="ContactsButton" Height="42" Margin="0,8,0,0" Click="ShowContacts_Click" Content="Контакты"/>
+     <Button x:Name="MyTicketsButton" Style="{StaticResource UserSecondaryButton}" Height="72" Margin="0,10,0,0" Click="ShowMyTickets_Click">
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Мои заявки" FontSize="16" FontWeight="SemiBold" Foreground="#14419E" VerticalAlignment="Center"/></Grid>
+     </Button>
+     <Button x:Name="ContactsButton" Style="{StaticResource UserSecondaryButton}" Height="72" Margin="0,10,0,0" Click="ShowContacts_Click">
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE77B;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Контакты" FontSize="16" FontWeight="SemiBold" Foreground="#14419E" VerticalAlignment="Center"/></Grid>
+     </Button>
     </StackPanel>
     <Border Grid.Column="2" Background="White" BorderBrush="#E1EAF0" BorderThickness="1" CornerRadius="6" Padding="24,20">
       <StackPanel>
@@ -267,7 +271,7 @@
        <StackPanel x:Name="SetupInstallSection">
        <TextBlock Text="Установка программ" Style="{StaticResource SectionHeading}" Margin="0,0,0,8"/>
        <WrapPanel>
-         <Button x:Name="InstallSetupButton" Click="InstallSetup_Click" IsEnabled="{Binding CanInstallSetup}" Padding="12,8" Margin="0,0,8,8" Background="#326EFF" Foreground="White" BorderThickness="0" Cursor="Hand" Content="Установить всё" ToolTip="AnyDesk, RMS, OCS и панель ИТ-Сети"/>
+         <Button x:Name="InstallSetupButton" Click="InstallSetup_Click" IsEnabled="{Binding CanInstallSetup}" Padding="12,8" Margin="0,0,8,8" Background="#326EFF" Foreground="White" BorderThickness="0" Cursor="Hand" Content="Установить всё" ToolTip="Доступные AnyDesk, RMS, OCS и панель ИТ-Сети; без WinRAR и Яндекса"/>
          <Button x:Name="CreateAdminAccountButton" Click="CreateAdminAccount_Click" Padding="12,8" Margin="0,0,8,8" Cursor="Hand" Content="Создать учётку администратора" ToolTip="Admin, а если она уже есть — it-seti"/>
        </WrapPanel>
        <TextBlock Text="{Binding SoftwareActionStatus}" Foreground="#354A5E" TextWrapping="Wrap" Margin="0,3,0,8"/>

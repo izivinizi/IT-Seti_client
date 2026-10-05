@@ -61,9 +61,11 @@ try {
     } finally { $response.Dispose() }
     $catalog = @($json | ConvertFrom-Json)
     $cache = Join-Path $root 'software-catalog.json'
-    $temporary = $cache + '.pending'
-    [IO.File]::WriteAllText($temporary,$json,[Text.Encoding]::UTF8)
-    Move-Item -LiteralPath $temporary -Destination $cache -Force
+    $temporary = $cache + '.' + [Guid]::NewGuid().ToString('N') + '.pending'
+    try {
+        [IO.File]::WriteAllText($temporary,$json,[Text.Encoding]::UTF8)
+        Move-Item -LiteralPath $temporary -Destination $cache -Force
+    } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
     if ($CatalogOnly) { exit 0 }
     $selected = @($catalog | Where-Object { $_.platform -in @('windows','any') -and $_.key -ne 'application' })
     if ($Component) { $selected = @($selected | Where-Object { $_.key -eq $Component }) }

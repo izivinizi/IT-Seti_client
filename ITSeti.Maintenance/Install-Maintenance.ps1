@@ -112,6 +112,7 @@ $installStage='Регистрация системных задач'
 $taskName='ITSeti-Maintenance-Full'
 $temperatureTaskName='ITSeti-Maintenance-Temperature'
 $uploadTaskName='ITSeti-Maintenance-Upload'
+$catalogTaskName='ITSeti-Maintenance-Catalog'
 $reportQueue=Join-Path $data 'ReportQueue'
 New-Item -ItemType Directory -Path $reportQueue -Force | Out-Null
 & icacls.exe $reportQueue /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
@@ -131,7 +132,7 @@ try {
     if(!(Test-Path -LiteralPath $powershell -PathType Leaf)){throw "PowerShell не найден: $powershell"}
     $scheduler=New-Object -ComObject Schedule.Service
     $scheduler.Connect()
-    foreach($name in @($taskName,'ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoQuick','ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair','ITSeti-Maintenance-Cleanup','ITSeti-Maintenance-OrganizationSetup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates','ITSeti-Maintenance-Update',$temperatureTaskName,$uploadTaskName)){
+    foreach($name in @($taskName,'ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoQuick','ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair','ITSeti-Maintenance-Cleanup','ITSeti-Maintenance-OrganizationSetup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates','ITSeti-Maintenance-Update',$temperatureTaskName,$uploadTaskName,$catalogTaskName)){
         $installStage="Регистрация задачи $name"
         $isTemperatureTask=$name -eq $temperatureTaskName
         if($isTemperatureTask){
@@ -139,6 +140,10 @@ try {
         }else{
             $script=if($name -eq $uploadTaskName){Join-Path $install 'Backend\Upload-Reports.ps1'}elseif($name -eq 'ITSeti-Maintenance-Repair'){Join-Path $install 'Backend\InstalledRepair.ps1'}elseif($name -eq 'ITSeti-Maintenance-Cleanup'){Join-Path $install 'Backend\InstalledCleanup.ps1'}elseif($name -eq 'ITSeti-Maintenance-OrganizationSetup'){Join-Path $install 'Backend\InstalledOrganizationSetup.ps1'}elseif($name -eq 'ITSeti-Maintenance-Update'){Join-Path $install 'Backend\Update-Application.ps1'}elseif($name -match 'Updates$'){Join-Path $install 'Backend\Set-WindowsAutomaticUpdates.ps1'}else{$worker}
             $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$script+'"'
+            if($name -eq $catalogTaskName){
+                $script=Join-Path $install 'Backend\ServerSoftware.ps1'
+                $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$script+'" -CatalogOnly'
+            }
             if($name -in @('ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoQuick')){$arguments+=' -Quick'}
             if($name -eq 'ITSeti-Maintenance-AutoQuick'){$arguments+=' -ScheduledQuick'}
             if($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$arguments+=' -StartRepair'}

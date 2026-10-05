@@ -27,6 +27,8 @@ public partial class MainWindow : Window
     private bool syncingAdminPassword;
     private DispatcherOperation? progressScroll;
     private bool closed;
+    private bool refreshingSoftware;
+    private DateTime catalogWriteTime;
     private readonly DispatcherTimer liveMetricsTimer = new() { Interval = TimeSpan.FromSeconds(10) };
     public MainWindow() : this(DefaultHistoryDatabasePath(), false) { }
 
@@ -51,7 +53,12 @@ public partial class MainWindow : Window
         };
         ViewModel.CheckProgressEntries.CollectionChanged += (_, _) => QueueProgressScroll();
         CheckProgressList.IsVisibleChanged += (_, _) => QueueProgressScroll();
-        liveMetricsTimer.Tick += async (_, _) => await ViewModel.RefreshLiveStatusAsync();
+        liveMetricsTimer.Tick += async (_, _) =>
+        {
+            await ViewModel.RefreshLiveStatusAsync();
+            var changed = File.GetLastWriteTimeUtc(ServerSoftwareCatalog.CachePath);
+            if (changed != catalogWriteTime) { catalogWriteTime = changed; ViewModel.RefreshSetupAudit(); }
+        };
         Closed += (_, _) => { closed = true; liveMetricsTimer.Stop(); progressScroll?.Abort(); };
         Loaded += async (_, _) =>
         {
@@ -66,6 +73,7 @@ public partial class MainWindow : Window
             }
             _ = ViewModel.RefreshWindowsDefenderStatusAsync();
             initializationCompleted.TrySetResult();
+            _ = RefreshSoftwareCatalogAsync();
         };
         Closing += (_, e) =>
         {
@@ -510,7 +518,24 @@ public partial class MainWindow : Window
             ViewModel.EventFilterLevel = EventLevelSelector.SelectedIndex + 1;
     }
 
-    private void RefreshSetupAudit_Click(object sender, RoutedEventArgs e) => ViewModel.RefreshSetupAudit();
+    private async void RefreshSetupAudit_Click(object sender, RoutedEventArgs e) => await RefreshSoftwareCatalogAsync();
+    private async Task RefreshSoftwareCatalogAsync()
+    {
+        if (refreshingSoftware || closed) return;
+        refreshingSoftware = true;
+        try
+        {
+            if (ServerSoftwareCatalog.IsConnected)
+            {
+                ViewModel.SetSetupStatus("Получаем актуальное ПО с сервера...");
+                await ServerSoftwareCatalog.RefreshAsync();
+                if (!closed) ViewModel.SetSetupStatus("Список ПО обновлён с сервера.");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        { if (!closed) ViewModel.SetSetupStatus(ex.Message); }
+        finally { refreshingSoftware = false; if (!closed) ViewModel.RefreshSetupAudit(); }
+    }
     private async void CheckAppUpdates_Click(object sender, RoutedEventArgs e) => await ViewModel.CheckApplicationUpdatesAsync();
 
     private async void InstallAppUpdate_Click(object sender, RoutedEventArgs e)
@@ -695,7 +720,8 @@ public partial class MainWindow : Window
                 MessageBox.Show(this, string.Join(Environment.NewLine, problems), "Установка остановлена проверкой комплекта", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            var confirmation = component is null ? "Установить AnyDesk, RMS, OCS и панель ИТ-Сети?" : $"Установить компонент {component}?";
+            var selectedNames = ViewModel.SetupComponents.Where(row => row.CanInstall && row.InstallKey is "AnyDesk" or "RMS" or "OCS" or "Panel").Select(row => row.Name);
+            var confirmation = component is null ? $"Установить: {string.Join(", ", selectedNames)}?" : $"Установить компонент {component}?";
             if (MessageBox.Show(this, confirmation, "Установка ПО", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
 
             ViewModel.SetSetupStatus(component is null ? "Установка комплекта выполняется…" : $"Установка {component} выполняется…");

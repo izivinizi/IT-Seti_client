@@ -1,11 +1,17 @@
-﻿param([switch]$VerifyOnly)
+﻿param([switch]$VerifyOnly, [switch]$SkipIfConnected)
 $ErrorActionPreference = 'Stop'
 $serverUrl = 'https://it-seti.nylenz.ru'
 $deviceFile = Join-Path $env:ProgramData 'ITSeti\Maintenance\server-device.json'
 $supportFile = Join-Path $env:ProgramData 'ITSeti\Maintenance\server-support.json'
-
 Add-Type -AssemblyName System.Web.Extensions
 $script:serializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+if ($SkipIfConnected -and (Test-Path -LiteralPath $deviceFile)) {
+    try {
+        $saved = $script:serializer.DeserializeObject([IO.File]::ReadAllText($deviceFile))
+        if ($saved.serverUrl -eq $serverUrl -and $saved.deviceId -and $saved.deviceKey) { exit 0 }
+    } catch { }
+}
+
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 function Invoke-ServerRequest([string]$path, [string]$password, [object]$body) {
@@ -33,25 +39,35 @@ function Invoke-ServerRequest([string]$path, [string]$password, [object]$body) {
 }
 
 function Invoke-DeviceRequest([string]$path, [string]$method, [object]$body) {
-    $device = Get-Content -LiteralPath $deviceFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    $device = $script:serializer.DeserializeObject([IO.File]::ReadAllText($deviceFile))
     $request = [Net.HttpWebRequest][Net.WebRequest]::Create($serverUrl + $path)
     $request.Method = $method
     $request.AllowAutoRedirect = $false
     $request.Timeout = 15000
+    $request.ReadWriteTimeout = 15000
     $request.ContentType = 'application/json; charset=utf-8'
     $request.Headers.Add('X-Device-Id', [string]$device.deviceId)
     $request.Headers.Add('X-Device-Key', [string]$device.deviceKey)
-    $bytes = [Text.Encoding]::UTF8.GetBytes($script:serializer.Serialize($body))
-    $request.ContentLength = $bytes.Length
-    $stream = $request.GetRequestStream()
-    try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+    if ($method -ne 'GET') {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($script:serializer.Serialize($body))
+        $request.ContentLength = $bytes.Length
+        $stream = $request.GetRequestStream()
+        try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+    }
     try { $response = [Net.HttpWebResponse]$request.GetResponse() }
     catch [Net.WebException] { throw (New-Object InvalidOperationException((Format-ServerError $_.Exception))) }
     try {
         if ($response.StatusCode -ne [Net.HttpStatusCode]::OK) { throw 'Неожиданный ответ сервера.' }
         $reader = New-Object IO.StreamReader($response.GetResponseStream(), [Text.Encoding]::UTF8)
-        try { return $script:serializer.DeserializeObject($reader.ReadToEnd()) }
-        finally { $reader.Dispose() }
+        try {
+            $text = New-Object Text.StringBuilder
+            $buffer = New-Object char[] 4096
+            while (($count = $reader.Read($buffer,0,$buffer.Length)) -gt 0) {
+                if ($text.Length + $count -gt 2MB) { throw 'Server response exceeds 2 MB.' }
+                [void]$text.Append($buffer,0,$count)
+            }
+            return $script:serializer.DeserializeObject($text.ToString())
+        } finally { $reader.Dispose() }
     } finally { $response.Dispose() }
 }
 
@@ -155,7 +171,7 @@ public static class AssignmentConsole {
 '@
 [void][AssignmentConsole]::ShowWindow([AssignmentConsole]::GetConsoleWindow(), 0)
 $script:existing = Test-Path -LiteralPath $deviceFile -PathType Leaf
-$script:currentDevice = if ($script:existing) { Get-Content -LiteralPath $deviceFile -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
+$script:currentDevice = if ($script:existing) { $script:serializer.DeserializeObject([IO.File]::ReadAllText($deviceFile)) } else { $null }
 
 $form = New-Object Windows.Forms.Form
 $form.Text = if ($script:existing) { 'Компания и объект ПК' } else { 'Подключение к серверу ИТ-Сети' }
@@ -191,35 +207,23 @@ $loadButton.Size = New-Object Drawing.Size(148, 30)
 $form.Controls.Add($loadButton)
 
 Add-Label 'Компания' 20 91 600
-$companySearch = New-Object Windows.Forms.TextBox
-$companySearch.Location = New-Object Drawing.Point(20, 116)
-$companySearch.Size = New-Object Drawing.Size(180, 28)
-$companySearch.BorderStyle = 'FixedSingle'
-$companySearch.Enabled = $false
-$companySearch.AccessibleName = 'Поиск по названию компании'
-$form.Controls.Add($companySearch)
 $companyBox = New-Object Windows.Forms.ComboBox
-$companyBox.DropDownStyle = 'DropDownList'
-$companyBox.Location = New-Object Drawing.Point(210, 116)
-$companyBox.Size = New-Object Drawing.Size(410, 28)
+$companyBox.DropDownStyle = 'DropDown'
+$companyBox.Location = New-Object Drawing.Point(20, 116)
+$companyBox.Size = New-Object Drawing.Size(600, 28)
+$companyBox.AccessibleName = 'Компания: поиск по названию'
 $companyBox.Enabled = $false
 $form.Controls.Add($companyBox)
 
 Add-Label 'Объект обслуживания' 20 160 600
-$siteSearch = New-Object Windows.Forms.TextBox
-$siteSearch.Location = New-Object Drawing.Point(20, 185)
-$siteSearch.Size = New-Object Drawing.Size(180, 28)
-$siteSearch.BorderStyle = 'FixedSingle'
-$siteSearch.Enabled = $false
-$siteSearch.AccessibleName = 'Поиск по объекту или адресу'
-$form.Controls.Add($siteSearch)
 $searchTips = New-Object Windows.Forms.ToolTip
-$searchTips.SetToolTip($companySearch, 'Поиск по названию компании')
-$searchTips.SetToolTip($siteSearch, 'Поиск по названию объекта или адресу')
+$searchTips.SetToolTip($companyBox, 'Введите название компании или выберите из списка')
 $siteBox = New-Object Windows.Forms.ComboBox
-$siteBox.DropDownStyle = 'DropDownList'
-$siteBox.Location = New-Object Drawing.Point(210, 185)
-$siteBox.Size = New-Object Drawing.Size(410, 28)
+$siteBox.DropDownStyle = 'DropDown'
+$siteBox.Location = New-Object Drawing.Point(20, 185)
+$siteBox.Size = New-Object Drawing.Size(600, 28)
+$siteBox.AccessibleName = 'Объект: поиск по названию или адресу'
+$searchTips.SetToolTip($siteBox, 'Введите название объекта или адрес')
 $siteBox.Enabled = $false
 $form.Controls.Add($siteBox)
 
@@ -310,11 +314,38 @@ function Update-SiteList([string]$query) {
 }
 
 $companyBox.Add_SelectedIndexChanged({
-    Update-SiteList $siteSearch.Text
+    if ($script:filtering) { return }
+    Update-SiteList ''
+    $siteBox.Enabled = $script:catalogLoaded -and $companyBox.SelectedIndex -ge 0
 })
-$companySearch.Add_TextChanged({ Update-CompanyList $companySearch.Text })
-$siteSearch.Add_TextChanged({ Update-SiteList $siteSearch.Text })
+$companyBox.Add_TextUpdate({
+    $query = $companyBox.Text
+    $script:filtering = $true
+    try {
+        Update-CompanyList $query
+        $companyBox.DroppedDown = $true
+        $companyBox.SelectedIndex = -1
+        $companyBox.Text = $query
+        $companyBox.SelectionStart = $query.Length
+        $siteBox.Items.Clear()
+        $siteBox.Enabled = $false
+        $connectButton.Enabled = $false
+    } finally { $script:filtering = $false }
+})
+$siteBox.Add_TextUpdate({
+    $query = $siteBox.Text
+    $script:filtering = $true
+    try {
+        Update-SiteList $query
+        $siteBox.DroppedDown = $true
+        $siteBox.SelectedIndex = -1
+        $siteBox.Text = $query
+        $siteBox.SelectionStart = $query.Length
+        $connectButton.Enabled = $false
+    } finally { $script:filtering = $false }
+})
 $siteBox.Add_SelectedIndexChanged({
+    if ($script:filtering) { return }
     $connectButton.Enabled = $script:catalogLoaded -and $companyBox.SelectedIndex -ge 0 -and $siteBox.SelectedIndex -ge 0
 })
 
@@ -332,11 +363,9 @@ $loadButton.Add_Click({
         $script:companies = @($catalog['companies'])
         $script:sites = @($catalog['sites'])
         $script:catalogLoaded = $script:companies.Count -gt 0
-        $companySearch.Enabled = $script:catalogLoaded
-        $siteSearch.Enabled = $script:catalogLoaded
         $companyBox.Enabled = $script:catalogLoaded
         $siteBox.Enabled = $script:catalogLoaded
-        Update-CompanyList $companySearch.Text
+        Update-CompanyList ''
         if ($script:existing) {
             for ($i=0; $i -lt $script:visibleCompanies.Count; $i++) {
                 if ([long]$script:visibleCompanies[$i]['id'] -eq [long]$script:currentDevice.companyId) { $companyBox.SelectedIndex=$i; break }
@@ -414,6 +443,17 @@ $connectButton.Add_Click({
             $result = Invoke-ServerRequest '/api/v1/enroll' $passwordBox.Text $body
             Save-DeviceKey $result $companyId $siteId
             Save-SupportKey $result
+        }
+        try {
+            $packages = Invoke-DeviceRequest '/api/v1/updates' 'GET' $null
+            $catalogPath = Join-Path (Split-Path $deviceFile -Parent) 'software-catalog.json'
+            $temporaryCatalog = $catalogPath + '.' + [Guid]::NewGuid().ToString('N') + '.pending'
+            try {
+                [IO.File]::WriteAllText($temporaryCatalog, $script:serializer.Serialize(@($packages)), (New-Object Text.UTF8Encoding($false)))
+                Move-Item -LiteralPath $temporaryCatalog -Destination $catalogPath -Force
+            } finally { if (Test-Path -LiteralPath $temporaryCatalog) { Remove-Item -LiteralPath $temporaryCatalog -Force } }
+        } catch {
+            [IO.File]::WriteAllText((Join-Path (Split-Path $deviceFile -Parent) 'server-software-error.txt'), $_.Exception.Message, [Text.Encoding]::UTF8)
         }
         $passwordBox.Clear()
         $form.Close()

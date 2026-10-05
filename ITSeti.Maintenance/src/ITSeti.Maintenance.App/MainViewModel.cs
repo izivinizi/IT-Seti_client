@@ -122,7 +122,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private bool applicationUpdateCheckRunning;
     private bool applicationUpdateRunning;
     private string applicationUpdateStatus = ApplicationUpdateRunner.ReadLastStatus() ?? "Проверка обновлений ещё не выполнялась";
-    public bool HasBundledSetup => bundledSetupDirectory is not null;
+    public bool HasBundledSetup => bundledSetupDirectory is not null && !ServerSoftwareCatalog.IsConnected;
     public bool CanInstallSetup => !setupInstallRunning && (HasBundledSetup || SetupComponents.Any(component => component.Package == "На сервере" && component.CanInstall && component.InstallKey is not "WinRAR" and not "Yandex"));
     public bool CanManageSetup => !setupInstallRunning;
     public bool CanLaunchDiskTools => fullRunner is FullDiagnosticsRunner;

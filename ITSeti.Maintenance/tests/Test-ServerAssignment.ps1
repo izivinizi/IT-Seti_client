@@ -14,7 +14,7 @@ if ($connect -match '\$script:companies\[\$companyBox\.SelectedIndex\]' -or
 if ($connect -notmatch '\$script:visibleSites\[\$siteBox\.SelectedIndex\]') {
     throw 'Selected site must resolve from the filtered, company-specific list.'
 }
-if ($connect -notmatch 'companySearch\.Add_TextChanged' -or $connect -notmatch 'siteSearch\.Add_TextChanged' -or
+if ($connect -notmatch 'companyBox\.Add_TextUpdate' -or $connect -notmatch 'siteBox\.Add_TextUpdate' -or
     $connect -notmatch '\$script:sites\s*=\s*@\(\$catalog\[''sites''\]\)') {
     throw 'Company/object catalog search is incomplete.'
 }
@@ -32,9 +32,8 @@ if ($installer -notmatch 'Source: "Connect-Server\.ps1"' -or
     throw 'The assignment script is not packaged or its engineer-mode button is not wired.'
 }
 foreach ($setup in @($installer, $win7Installer)) {
-    if ($setup -notmatch 'if not WizardSilent then' -or $setup -notmatch 'SW_SHOWNORMAL' -or
-        $setup -match 'not FileExists\(ExpandConstant\(\x27\{commonappdata\}\\ITSeti\\Maintenance\\server-device\.json') {
-        throw 'Interactive setup must show company/object selection even for an already enrolled PC.'
+    if ($setup -notmatch 'if not WizardSilent then' -or $setup -notmatch 'SW_SHOWNORMAL' -or $setup -notmatch '-SkipIfConnected') {
+        throw 'Setup must skip enrollment for a connected PC while retaining first-install assignment.'
     }
 }
 if ($connect -notmatch 'AssignmentConsole.*ShowWindow' -or
@@ -62,4 +61,4 @@ if ($database -notmatch 'DROP INDEX IF EXISTS ix_devices_hardware_fingerprint' -
     $database -notmatch 'UPDATE ticket_requests child' -or $database -notmatch 'UPDATE check_runs child') {
     throw 'Startup migration must re-key duplicate serials and preserve their report/ticket history.'
 }
-Write-Output 'PASS: setup prompts visibly for assignment, the server UI uses company/object/serial selectors, and duplicate serial migrations retain linked history.'
+Write-Output 'PASS: setup preserves enrollment, inline assignment search and serial-based server identity.'

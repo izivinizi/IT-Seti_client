@@ -135,7 +135,7 @@ begin
   begin
     ConnectCode := -1;
     if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-      '-STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ExpandConstant('{app}\Connect-Server.ps1') + '"',
+      '-STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ExpandConstant('{app}\Connect-Server.ps1') + '" -SkipIfConnected',
       '', SW_SHOWNORMAL, ewWaitUntilTerminated, ConnectCode) or (ConnectCode <> 0) then
       MsgBox('Подключение к серверу не удалось открыть. Приложение установлено; подключить ПК можно позже через меню «Пуск».', mbInformation, MB_OK);
   end;

@@ -19,6 +19,55 @@ internal static class Program
     private static int Main(string[] args)
     {
         Environment.SetEnvironmentVariable("ITSETI_DISABLE_REPORT_UPLOAD", "1");
+        if (args.Contains("--sidebar-style-contract"))
+        {
+            var sidebarApp = new ITSeti.Maintenance.App.App();
+            sidebarApp.InitializeComponent();
+            var sidebarWindow = new MainWindow(Path.Combine(Path.GetTempPath(),Guid.NewGuid().ToString("N")+".db"));
+            var style = sidebarWindow.FindResource("UserSecondaryButton");
+            foreach (var name in new[] { "SupportButton", "MyTicketsButton", "ContactsButton" })
+            {
+                var button = (Button)sidebarWindow.FindName(name);
+                if (!ReferenceEquals(button.Style,style) || button.Height != 72 || button.Content is not Grid)
+                    throw new Exception("Sidebar action differs from the shared style: " + name);
+            }
+            var content = (FrameworkElement)sidebarWindow.Content;
+            content.Measure(new Size(940,820));
+            content.Arrange(new Rect(0,0,940,820));
+            content.UpdateLayout();
+            Directory.CreateDirectory("artifacts");
+            var bitmap = new RenderTargetBitmap(940,820,96,96,PixelFormats.Pbgra32);
+            bitmap.Render(content);
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(bitmap));
+            using (var stream = File.Create("artifacts/sidebar-style.png")) encoder.Save(stream);
+            Console.WriteLine("PASS: shared sidebar button style, equal action heights, icons and rendered layout.");
+            sidebarApp.Shutdown();
+            return 0;
+        }
+        if (args.Contains("--server-catalog-contract"))
+        {
+            var file = Path.Combine(Path.GetTempPath(), "ITSeti-catalog-" + Guid.NewGuid().ToString("N") + ".json");
+            try
+            {
+                var id = Guid.NewGuid();
+                File.WriteAllText(file, JsonSerializer.Serialize(new[] {
+                    new ServerSoftwarePackage(id,"rms","7.7.3","any",new string('a',64),123,"rms.msi"),
+                    new ServerSoftwarePackage(id,"RMS","7.7.4","windows",new string('a',64),123,"rms.msi"),
+                    new ServerSoftwarePackage(id,"rms","7.7.2","win7",new string('a',64),123,"rms.msi"),
+                    new ServerSoftwarePackage(id,"application","2.1.1","windows",new string('a',64),123,"app.exe")
+                }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+                var rows = ServerSoftwareCatalog.Read(file);
+                if (rows.Count != 1 || rows[0].Version != "7.7.4") throw new Exception("Catalog must prefer the current platform and exclude application/Win7 packages.");
+                File.WriteAllText(file,"{broken");
+                if (ServerSoftwareCatalog.Read(file).Count != 0) throw new Exception("Damaged catalog must not crash the UI.");
+                File.WriteAllText(file,new string(' ',2*1024*1024+1));
+                if (ServerSoftwareCatalog.Read(file).Count != 0) throw new Exception("Oversized catalog accepted.");
+                Console.WriteLine("PASS: actual catalog JSON, platform precedence, malformed and oversized caches.");
+                return 0;
+            }
+            finally { File.Delete(file); }
+        }
         if (args.Contains("--diagnostic-rules-contract"))
         {
             AssertRules();

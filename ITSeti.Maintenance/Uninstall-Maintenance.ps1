@@ -17,6 +17,7 @@ if(Test-Path -LiteralPath $updatePolicy){try {& $updatePolicy -Action Restore | 
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-RestoreUpdates' /F | Out-Null
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-Update' /F | Out-Null
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-Upload' /F | Out-Null
+& schtasks.exe /Delete /TN 'ITSeti-Maintenance-Catalog' /F | Out-Null
 Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'ITSeti-Maintenance-Quick' -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'ITSeti-Maintenance-Status' -ErrorAction SilentlyContinue
 $data=Join-Path $env:ProgramData 'ITSeti\Maintenance'

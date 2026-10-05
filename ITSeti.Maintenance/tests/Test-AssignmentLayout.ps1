@@ -18,11 +18,12 @@ foreach ($statement in $statements) {
 }
 try {
     if ($form.ClientSize.Height -gt 360) { throw 'Assignment dialog is unnecessarily tall.' }
-    if ($companySearch.Top -ne $companyBox.Top -or $siteSearch.Top -ne $siteBox.Top) { throw 'Search and list must share a row.' }
+    if ($companyBox.DropDownStyle -ne 'DropDown' -or $siteBox.DropDownStyle -ne 'DropDown') { throw 'Search must be inside the editable list.' }
+    if ($companyBox.Width -ne 600 -or $siteBox.Width -ne 600 -or @($form.Controls | Where-Object { $_ -is [Windows.Forms.TextBox] }).Count -ne 1) { throw 'Separate search fields must not exist.' }
     foreach ($control in $form.Controls) {
         if ($control.Right -gt $form.ClientSize.Width -or $control.Bottom -gt $form.ClientSize.Height) { throw ('Clipped control: ' + $control.Text) }
     }
-    $companySearch.Enabled = $companyBox.Enabled = $siteSearch.Enabled = $siteBox.Enabled = $true
+    $companyBox.Enabled = $siteBox.Enabled = $true
     [void]$companyBox.Items.Add('IT-Seti Group')
     $companyBox.SelectedIndex = 0
     [void]$siteBox.Items.Add('No site')
@@ -36,5 +37,5 @@ try {
             $bitmap.Save($Output, [Drawing.Imaging.ImageFormat]::Png)
         } finally { $bitmap.Dispose() }
     }
-    Write-Output 'PASS: compact assignment dialog, aligned searches and no clipped controls.'
+    Write-Output 'PASS: compact assignment dialog, inline editable search and no clipped controls.'
 } finally { $form.Dispose() }
