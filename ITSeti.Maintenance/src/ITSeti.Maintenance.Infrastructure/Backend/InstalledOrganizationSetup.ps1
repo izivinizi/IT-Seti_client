@@ -68,7 +68,12 @@ try {
         $arguments = '-NoProfile -ExecutionPolicy Bypass -File "'+$serverWorker+'"'
         if ($component) { $arguments += ' -Component "'+$component.Trim()+'"' }
         $process = Start-Process -FilePath $powershell -ArgumentList $arguments -WindowStyle Hidden -PassThru -Wait
-        if ($process.ExitCode -ne 0) { throw 'Server software installation failed. Inspect server-software-error.txt.' }
+        if ($process.ExitCode -ne 0) {
+            $errorFile = Join-Path $base 'server-software-error.txt'
+            $detail = if (Test-Path -LiteralPath $errorFile) { [IO.File]::ReadAllText($errorFile,[Text.Encoding]::UTF8).Trim() } else { '' }
+            if (!$detail) { $detail = "Системный worker завершился с кодом $($process.ExitCode)." }
+            throw "Установка ПО с сервера не выполнена: $detail"
+        }
         [IO.File]::WriteAllText($temporary,'OK',[Text.UTF8Encoding]::new($false))
         Move-Item -LiteralPath $temporary -Destination $result -Force
         return

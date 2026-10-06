@@ -50,6 +50,9 @@ try {
     if ((Normalize-ComponentKey ' OCS Inventory ') -ne 'ocs') { throw 'OCS display name was not normalized.' }
     if ((Normalize-ComponentKey 'RMS Host') -ne 'rms') { throw 'RMS display name was not normalized.' }
     $script:package=$package
+    $componentCatalog=@($package,[pscustomobject]@{key='ocs';platform='windows'})
+    $filtered=@($componentCatalog | Where-Object { (Normalize-ComponentKey ([string]$_.key)) -eq 'rms' })
+    if($filtered.Count -ne 1 -or $filtered[0].key -ne 'rms'){throw 'Component catalog filtering selected the wrong package.'}
     $mutex=New-FixtureMutex
     & $worker
     if($script:installCalls -ne 1){throw 'Verified manual package did not reach the mocked installer.'}

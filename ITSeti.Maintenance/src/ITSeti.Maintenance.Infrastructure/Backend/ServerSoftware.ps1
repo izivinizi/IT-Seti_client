@@ -82,7 +82,7 @@ try {
     } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
     if ($CatalogOnly) { exit 0 }
     $selected = @($catalog | Where-Object { $_.platform -in @('windows','any') -and ([string]$_.key).Trim().ToLowerInvariant() -ne 'application' })
-    if ($componentKey) { $selected = @($selected | Where-Object { Normalize-ComponentKey ([string]$_.key) -eq $componentKey }) }
+    if ($componentKey) { $selected = @($selected | Where-Object { (Normalize-ComponentKey ([string]$_.key)) -eq $componentKey }) }
     elseif (!$AutoUpdate) { $selected = @($selected | Where-Object { $_.key -notin @('winrar','yandex') -and $_.key -in @('rms','anydesk','ocs','panel') }) }
     # A platform-specific package takes precedence over a generic package.
     $selected = @($selected | Group-Object { Normalize-ComponentKey ([string]$_.key) } | ForEach-Object { $_.Group | Sort-Object @{Expression={if($_.platform -eq 'windows'){0}else{1}}} | Select-Object -First 1 })
