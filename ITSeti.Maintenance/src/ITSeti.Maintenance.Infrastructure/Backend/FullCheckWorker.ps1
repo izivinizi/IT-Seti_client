@@ -146,6 +146,7 @@ try {
         try {
             $diskArguments='-NoProfile -ExecutionPolicy Bypass -File "'+$diskWorker+'" -ScriptRoot "'+$RunRoot+'" -ToolsRoot "'+$ToolsRoot+'"'
             if($SkipDiskBenchmark){$diskArguments+=' -SkipBenchmark'}
+            if($UserMode){$diskArguments+=' -UserMode'}
             $script:DiskWorker=Start-Process powershell.exe -WindowStyle Hidden -WorkingDirectory $RunRoot -ArgumentList $diskArguments -PassThru -ErrorAction Stop
             $script:DiskWorkerStarted=Get-Date
         } catch {$script:DiskFailure='Запуск SMART/DiskSpd: '+$_.Exception.Message}

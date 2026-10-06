@@ -586,6 +586,7 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
     var inventory = JsonRead.String(report.RootElement, "InventoryNumber", "inventoryNumber");
     var rmsId = JsonRead.String(report.RootElement, "RmsId", "rmsId");
     var anyDeskId = JsonRead.String(report.RootElement, "AnyDeskId", "anyDeskId");
+    var ocsPresent = JsonRead.Bool(report.RootElement, "OcsPresent", "ocsPresent") ?? false;
     var administrators = JsonRead.StringList(report.RootElement, "AdminAccounts", "adminAccounts");
     var kind = JsonRead.String(report.RootElement, "KindLabel", "Kind", "kind") ?? "Проверка";
     var summary = JsonSerializer.Serialize(new
@@ -594,7 +595,7 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
         cpuPercent = JsonRead.Number(report.RootElement, "CpuPercent", "cpuPercent"),
         cpuTemperatureC = JsonRead.Number(report.RootElement, "CpuTemperatureC", "cpuTemperatureC"),
         memoryUsedPercent = JsonRead.Number(report.RootElement, "MemoryUsedPercent", "memoryUsedPercent"),
-        inventory, rmsId, anyDeskId, administrators, findings,
+        inventory, rmsId, anyDeskId, ocsPresent, administrators, findings,
         findingCount = findings.Length,
         result = findings.Length == 0 ? "Без замечаний" : $"Требует внимания: {findings.Length}"
     });
@@ -617,7 +618,9 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
         await reader.ReadAsync();
         using var previousReport = reader.IsDBNull(0) ? null : JsonDocument.Parse(reader.GetString(0));
         using var previousEvents = reader.IsDBNull(1) ? null : JsonDocument.Parse(reader.GetString(1));
-        newIssues = Monitoring.NewIssues(report.RootElement, previousReport?.RootElement, previousEvents?.RootElement, includeWarnings: true);
+        // The report keeps warnings for the detailed PC view. The monitoring feed
+        // is intentionally reserved for newly detected critical issues.
+        newIssues = Monitoring.NewIssues(report.RootElement, previousReport?.RootElement, previousEvents?.RootElement, includeWarnings: false);
     }
     int inserted;
     await using (var insert = new NpgsqlCommand("""
@@ -822,6 +825,8 @@ admin.MapGet("/devices", async (NpgsqlDataSource db, string? q, long? companyId,
     {
         using var report = reader.IsDBNull(11) ? null : JsonDocument.Parse(reader.GetString(11));
         var issues = report is null ? null : Monitoring.CurrentIssues(report.RootElement);
+        var rmsPresent = report is not null && !string.IsNullOrWhiteSpace(JsonRead.String(report.RootElement, "RmsId", "rmsId"));
+        var ocsPresent = report is not null && (JsonRead.Bool(report.RootElement, "OcsPresent", "ocsPresent") ?? false);
         rows.Add(new {
         id = reader.GetGuid(0), serial = reader.IsDBNull(1) ? null : reader.GetString(1),
         inventory = reader.IsDBNull(2) ? null : reader.GetString(2), os = reader.IsDBNull(3) ? null : reader.GetString(3),
@@ -829,7 +834,8 @@ admin.MapGet("/devices", async (NpgsqlDataSource db, string? q, long? companyId,
         company = reader.IsDBNull(6) ? null : reader.GetString(6), site = reader.IsDBNull(7) ? null : reader.GetString(7),
         companyId = reader.IsDBNull(8) ? (long?)null : reader.GetInt64(8), siteId = reader.IsDBNull(9) ? (long?)null : reader.GetInt64(9),
         lastCheck = reader.IsDBNull(10) ? (DateTime?)null : reader.GetDateTime(10),
-        health = issues is null ? "unknown" : issues.Any(i => i.Severity == 1) ? "critical" : issues.Count > 0 ? "warning" : "normal"
+        health = issues is null ? "unknown" : issues.Any(i => i.Severity == 1) ? "critical" : issues.Count > 0 ? "warning" : "normal",
+        rmsPresent, ocsPresent, remoteAttention = report is not null && (!rmsPresent || !ocsPresent)
         });
     }
     return Results.Ok(new { items = rows.Take(100), hasMore = rows.Count > 100, page = offset / 100 });
@@ -866,6 +872,36 @@ admin.MapGet("/monitoring", async (NpgsqlDataSource db, int? days, long? company
         company = reader.IsDBNull(10) ? null : reader.GetString(10), site = reader.IsDBNull(11) ? null : reader.GetString(11)
     });
     return Results.Ok(new { items = rows.Take(100), hasMore = rows.Count > 100, page = offset / 100 });
+});
+admin.MapGet("/new-connections", async (NpgsqlDataSource db, int? days, long? companyId, long? siteId) =>
+{
+    var since = DateTime.UtcNow.AddDays(-Math.Clamp(days ?? 7, 1, 90));
+    await using var connection = await db.OpenConnectionAsync();
+    await using var command = new NpgsqlCommand("""
+        SELECT d.id,d.created_at,d.serial_number,d.inventory_number,c.name,s.name,d.os_name,d.os_version
+        FROM devices d
+        LEFT JOIN companies c ON c.id=d.company_id
+        LEFT JOIN service_objects s ON s.id=d.service_object_id
+        WHERE d.created_at>=@since AND (@company IS NULL OR d.company_id=@company)
+          AND (@site IS NULL OR d.service_object_id=@site)
+        ORDER BY d.created_at DESC,d.id LIMIT 100
+        """, connection);
+    command.Parameters.AddWithValue("since", since);
+    command.Parameters.Add("company", NpgsqlDbType.Bigint).Value = (object?)companyId ?? DBNull.Value;
+    command.Parameters.Add("site", NpgsqlDbType.Bigint).Value = (object?)siteId ?? DBNull.Value;
+    await using var reader = await command.ExecuteReaderAsync();
+    var rows = new List<object>();
+    while (await reader.ReadAsync()) rows.Add(new
+    {
+        deviceId = reader.GetGuid(0), createdAt = reader.GetDateTime(1),
+        serial = reader.IsDBNull(2) ? null : reader.GetString(2),
+        inventory = reader.IsDBNull(3) ? null : reader.GetString(3),
+        company = reader.IsDBNull(4) ? null : reader.GetString(4),
+        site = reader.IsDBNull(5) ? null : reader.GetString(5),
+        os = reader.IsDBNull(6) ? null : reader.GetString(6),
+        osVersion = reader.IsDBNull(7) ? null : reader.GetString(7)
+    });
+    return Results.Ok(new { items = rows });
 });
 admin.MapGet("/devices/{id:guid}/runs", async (Guid id, NpgsqlDataSource db) =>
 {

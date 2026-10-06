@@ -1308,8 +1308,10 @@ internal static class Program
             if (!(bool)allowed.Invoke(null, [Environment.MachineName + "\\" + name])!)
                 throw new Exception("Designated local administrator incorrectly flagged: " + name);
         if ((bool)allowed.Invoke(null, [Environment.MachineName + "\\other-user"])!
-            || (bool)allowed.Invoke(null, ["OTHER-DOMAIN\\Administrator"])!)
-            throw new Exception("Administrator exception must not hide other local accounts or domain groups");
+            || (bool)allowed.Invoke(null, ["OTHER-DOMAIN\\other-user"])!
+            || !(bool)allowed.Invoke(null, ["OTHER-DOMAIN\\Administrator"])!
+            || !(bool)allowed.Invoke(null, ["OTHER-DOMAIN\\Администратор"])!)
+            throw new Exception("Built-in administrator exception or other-account detection is incorrect");
         var local = EngineerWindowLauncher.ParseAccountCandidates(".\\  tech ");
         if (local.Count != 1 || local[0].UserName != "tech"
             || !string.Equals(local[0].Domain, Environment.MachineName, StringComparison.OrdinalIgnoreCase))

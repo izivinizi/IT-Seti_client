@@ -1,4 +1,4 @@
-﻿param([string]$ScriptRoot,[string]$ToolsRoot,[switch]$SkipBenchmark)
+﻿param([string]$ScriptRoot,[string]$ToolsRoot,[switch]$SkipBenchmark,[switch]$UserMode)
 $ErrorActionPreference='Stop'
 $BenchmarkReadyFile=Join-Path $ScriptRoot 'benchmark-ready.signal'
 $script:Snapshot=@{Smart=@();Notes=@()}
@@ -85,9 +85,15 @@ try {
     Start-Transcript -Path (Join-Path $ScriptRoot 'disk-worker.log') -Force | Out-Null
     Assert-DiskCheckNotCancelled
     . ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $ScriptRoot 'Summary.ps1'),[Text.Encoding]::UTF8)))
-    Write-DiskProgress 'CrystalDiskInfo: SMART export started'
-    $info=Join-Path $ToolsRoot 'CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe'
-    try {
+    if($UserMode) {
+        # CrystalDiskInfo requests elevation on some builds. User checks must not
+        # turn that into a credentials/UAC prompt; SMART remains an engineer detail.
+        $script:Snapshot.Notes+='SMART: пропущено в пользовательской проверке без запроса прав администратора.'
+        Write-DiskProgress 'CrystalDiskInfo: пропущено в пользовательской проверке'
+    } else {
+        Write-DiskProgress 'CrystalDiskInfo: SMART export started'
+        $info=Join-Path $ToolsRoot 'CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe'
+        try {
         if(!(Test-Path -LiteralPath $info -PathType Leaf)){throw 'CrystalDiskInfo is missing.'}
         $report=Join-Path (Split-Path $info) 'DiskInfo.txt'
         $started=Get-Date
@@ -105,7 +111,8 @@ try {
         $script:Snapshot.Smart=@(ConvertFrom-CdiReport ([IO.File]::ReadAllText($report)))
         if(!$script:Snapshot.Smart.Count){throw 'SMART report could not be parsed.'}
         Write-DiskProgress "CrystalDiskInfo: SMART data received for $($script:Snapshot.Smart.Count) drive(s)"
-    } catch {$script:Snapshot.Notes+=('SMART: '+$_.Exception.Message);Write-DiskProgress ('CrystalDiskInfo: '+$_.Exception.Message)}
+        } catch {$script:Snapshot.Notes+=('SMART: '+$_.Exception.Message);Write-DiskProgress ('CrystalDiskInfo: '+$_.Exception.Message)}
+    }
     if($SkipBenchmark){Write-DiskProgress 'DiskSpd: пропущено быстрой проверкой';return}
     if($BenchmarkReadyFile) {
         Write-DiskProgress 'DiskSpd: ожидание окончания выборки нагрузки'

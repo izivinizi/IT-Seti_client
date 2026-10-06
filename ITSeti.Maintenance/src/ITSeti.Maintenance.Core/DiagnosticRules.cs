@@ -139,7 +139,7 @@ public static class DiagnosticRules
         return issues.OrderByDescending(i => i.Priority).ToArray();
     }
 
-    public static IReadOnlyList<string> GetFindings(DiagnosticSnapshot snapshot)
+    public static IReadOnlyList<string> GetFindings(DiagnosticSnapshot snapshot, bool includeDiskLinkWarnings = true)
     {
         var findings = new List<string>();
         if (snapshot.ActiveUptimeHours is >= 60)
@@ -173,7 +173,7 @@ public static class DiagnosticRules
                 findings.Add($"SMART {disk.Model}: {disk.Status}{(string.IsNullOrWhiteSpace(disk.SmartWarnings) ? "" : "; " + disk.SmartWarnings)}");
             if (DiskLifetime.ExceedsWarning(disk.PowerOnHours))
                 findings.Add($"Наработка {disk.Model}: {DiskLifetime.Format(disk.PowerOnHours)}. Порог предупреждения — более 60 000 ч.");
-            if (disk.MediaType == "SSD" && IsLinkLimited(disk.TransferMode)) findings.Add($"Ограничение интерфейса {disk.Model}: {disk.TransferMode}. Поддержка порта/слота ПК не подтверждена.");
+            if (includeDiskLinkWarnings && disk.MediaType == "SSD" && IsLinkLimited(disk.TransferMode)) findings.Add($"Ограничение интерфейса {disk.Model}: {disk.TransferMode}. Поддержка порта/слота ПК не подтверждена.");
         }
         foreach (var disk in full.PhysicalDisks.Where(d => DiskLifetime.ExceedsWarning(d.PowerOnHours)
                      && !full.SmartDisks.Any(s => string.Equals(s.Model, d.Model, StringComparison.OrdinalIgnoreCase)

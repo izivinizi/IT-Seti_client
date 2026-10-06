@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Net.NetworkInformation;
 using System.Security.Principal;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows.Data;
 using System.Windows.Media;
@@ -185,6 +186,26 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public string? AnyDeskId => identity.AnyDeskId;
     public string AdminRmsLabel => identity.RmsId ?? "Не найден";
     public string AdminAnyDeskLabel => identity.AnyDeskId ?? "Не найден";
+    private static string ServerDevicePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance", "server-device.json");
+    public bool IsServerAssignmentConfigured
+    {
+        get
+        {
+            try
+            {
+                if (!File.Exists(ServerDevicePath)) return false;
+                using var document = JsonDocument.Parse(File.ReadAllText(ServerDevicePath));
+                var root = document.RootElement;
+                return root.TryGetProperty("deviceId", out var deviceId) && !string.IsNullOrWhiteSpace(deviceId.GetString())
+                    && root.TryGetProperty("deviceKey", out var deviceKey) && !string.IsNullOrWhiteSpace(deviceKey.GetString())
+                    && root.TryGetProperty("companyId", out var companyId) && companyId.GetInt64() > 0
+                    && root.TryGetProperty("siteId", out var siteId) && siteId.GetInt64() > 0;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException) { return false; }
+        }
+    }
+    public string ServerAssignmentLabel => IsServerAssignmentConfigured ? "Компания и объект: настроены" : "Компания и объект: не настроены";
+    public string ServerConnectionLabel => IsServerAssignmentConfigured ? "Сервер: подключён" : "Сервер: не подключён";
     public bool HasInventoryNumber => identity.InventoryNumber is not null;
     public bool HasRmsId => identity.RmsId is not null;
     public bool HasAnyDeskId => identity.AnyDeskId is not null;
@@ -745,7 +766,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                     ? string.Join(Environment.NewLine, quickIssues.Select(i => $"{i.Title}. {i.Detail}"))
                     : "По проверенным показателям причин замедления не найдено. Это короткая проверка, а не оценка всего компьютера.";
             }
-            var lines = DiagnosticRules.GetFindings(Selected).ToList();
+            var lines = DiagnosticRules.GetFindings(Selected, includeDiskLinkWarnings: false).ToList();
             lines.AddRange(Selected.Notes.Where(note => !note.StartsWith("Без доступа к исполняемому файлу процессов", StringComparison.OrdinalIgnoreCase)));
             if (Selected.Full?.Benchmark is { State: "Failed" } test) lines.Add("Тест диска: " + test.Error);
             return lines.Count > 0 ? string.Join(Environment.NewLine, lines) : "По измеренным показателям замечаний нет";

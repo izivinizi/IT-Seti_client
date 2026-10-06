@@ -13,10 +13,16 @@ function Get-Identity {
     $inventory = $null
     $rms = $null
     $anyDesk = $null
+    $ocsPresent = $false
     $admins = @()
     try {
         $value = [IO.File]::ReadAllText((Join-Path $root 'inventory.txt')).Trim()
         if ($value -match '^\d{4}$') { $inventory = $value }
+    } catch {}
+    try {
+        $ocsPresent = [bool](Get-Service -Name 'OCS Inventory Service' -ErrorAction SilentlyContinue)
+        if (!$ocsPresent) { $ocsPresent = Test-Path -LiteralPath (Join-Path ${env:ProgramFiles} 'OCS Inventory Agent\OcsService.exe') }
+        if (!$ocsPresent -and ${env:ProgramFiles(x86)}) { $ocsPresent = Test-Path -LiteralPath (Join-Path ${env:ProgramFiles(x86)} 'OCS Inventory Agent\OcsService.exe') }
     } catch {}
     foreach ($path in @('SOFTWARE\TektonIT\RMS Host\Host\Parameters','SOFTWARE\WOW6432Node\TektonIT\RMS Host\Host\Parameters')) {
         try {
@@ -44,7 +50,7 @@ function Get-Identity {
                 Where-Object { $_ } | Sort-Object -Unique)
         }
     } catch {}
-    return @{ InventoryNumber = $inventory; RmsId = $rms; AnyDeskId = $anyDesk; AdminAccounts = $admins }
+    return @{ InventoryNumber = $inventory; RmsId = $rms; AnyDeskId = $anyDesk; OcsPresent = $ocsPresent; AdminAccounts = $admins }
 }
 
 function Send-Report([string]$path, [hashtable]$identity) {

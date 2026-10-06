@@ -8,7 +8,8 @@ $script:serializer = New-Object System.Web.Script.Serialization.JavaScriptSerial
 if ($SkipIfConnected -and (Test-Path -LiteralPath $deviceFile)) {
     try {
         $saved = $script:serializer.DeserializeObject([IO.File]::ReadAllText($deviceFile))
-        if ($saved.serverUrl -eq $serverUrl -and $saved.deviceId -and $saved.deviceKey -and $saved.companyId -gt 0) { exit 0 }
+        if ($saved.serverUrl -eq $serverUrl -and $saved.deviceId -and $saved.deviceKey -and
+            $saved.companyId -gt 0 -and $saved.siteId -gt 0) { exit 0 }
     } catch { }
 }
 
@@ -303,6 +304,8 @@ function Update-SiteList([string]$query) {
         }
     } finally { $siteBox.EndUpdate() }
     $siteBox.SelectedIndex = 0
+    $realSiteCount = $script:visibleSites.Count - 1
+    if ($realSiteCount -eq 1) { $siteBox.SelectedIndex = 1 }
     if ($null -ne $selectedId) {
         for ($i=1; $i -lt $script:visibleSites.Count; $i++) {
             if ([long]$script:visibleSites[$i]['id'] -eq $selectedId) { $siteBox.SelectedIndex=$i; break }

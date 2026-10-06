@@ -195,6 +195,7 @@ async function loadDevices() {
       const serial = node('td'); serial.append(node('span', serialLabel, 'cell-main'));
       const health = node('td', {normal:'Норма',warning:'Требует внимания',critical:'Критическое',unknown:'Нет проверки'}[device.health] || 'Нет проверки',
         {normal:'signal-ok',warning:'signal-warn',critical:'signal-error'}[device.health] || 'muted');
+      if (device.remoteAttention) health.append(node('span', 'Нет RMS/OCS', 'meta signal-warn'));
       row.append(serial, health, node('td', date(device.lastCheck)));
       row.addEventListener('click', () => selectDevice(device));
       row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectDevice(device); } });
@@ -340,8 +341,32 @@ async function loadMonitoring() {
   const requestId = ++state.monitorRequest;
   status('monitor-status', 'Загружаю события…');
   try {
-    const result = await api('/api/admin/monitoring?' + monitoringParameters());
+    const params = monitoringParameters();
+    const connectionsParams = new URLSearchParams({ days: $('monitor-days').value });
+    if ($('monitor-company').value) connectionsParams.set('companyId', $('monitor-company').value);
+    if ($('monitor-site').value) connectionsParams.set('siteId', $('monitor-site').value);
+    const [result, connections] = await Promise.all([
+      api('/api/admin/monitoring?' + params),
+      api('/api/admin/new-connections?' + connectionsParams)
+    ]);
     if (requestId !== state.monitorRequest) return;
+    const connectionContainer = $('monitor-connections'); connectionContainer.replaceChildren();
+    for (const item of connections.items || []) {
+      const row = node('div', undefined, 'monitor-connection-row');
+      const title = node('strong', item.inventory ? 'Инв. № ' + item.inventory : 'Инвентарник не указан');
+      const place = node('span', [item.company, item.site].filter(Boolean).join(' · ') || 'Компания/объект не указаны');
+      const serial = node('span', item.serial ? 'S/N ' + item.serial : 'Серийный номер не передан', 'meta');
+      const when = node('span', date(item.createdAt), 'when');
+      const button = node('button', 'Открыть ПК', 'secondary compact');
+      button.type = 'button';
+      button.addEventListener('click', () => selectDevice({ id: item.deviceId, serial: item.serial,
+        inventory: item.inventory, company: item.company, site: item.site, os: item.os, osVersion: item.osVersion }));
+      const info = node('div'); info.append(title, place, serial);
+      row.append(info, when, button);
+      connectionContainer.append(row);
+    }
+    $('connections-count').textContent = connections.items?.length ? `${connections.items.length} новых` : '';
+    $('monitor-connections-empty').classList.toggle('hidden', !!connections.items?.length);
     const container = $('monitor-list'); container.replaceChildren();
     for (const alert of result.items || []) {
       const row = node('div', undefined, 'monitor-row ' + (alert.severity === 1 ? 'critical' : 'warning'));

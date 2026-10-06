@@ -7,13 +7,23 @@
   <Style TargetType="TextBox">
     <Setter Property="FontSize" Value="14" />
     <Setter Property="Padding" Value="10,8" />
-    <Setter Property="Background" Value="White" />
-    <Setter Property="BorderBrush" Value="#B8C6D5" />
+    <Setter Property="Background" Value="#F1F4F7" />
+    <Setter Property="Foreground" Value="#25384C" />
+    <Setter Property="BorderBrush" Value="#879AAF" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="VerticalContentAlignment" Value="Center" />
     <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="BorderBrush" Value="#536D89" />
+      </Trigger>
       <Trigger Property="IsKeyboardFocused" Value="True">
         <Setter Property="BorderBrush" Value="#326EFF" />
+        <Setter Property="Background" Value="#F5F8FF" />
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Background" Value="#E8EDF2" />
+        <Setter Property="Foreground" Value="#65778B" />
+        <Setter Property="BorderBrush" Value="#B5C0CD" />
       </Trigger>
     </Style.Triggers>
   </Style>
@@ -21,8 +31,8 @@
     <Setter Property="FontSize" Value="14" />
     <Setter Property="Padding" Value="10,7" />
     <Setter Property="MinHeight" Value="38" />
-    <Setter Property="Background" Value="White" />
-    <Setter Property="BorderBrush" Value="#B8C6D5" />
+    <Setter Property="Background" Value="#F1F4F7" />
+    <Setter Property="BorderBrush" Value="#879AAF" />
     <Setter Property="VerticalContentAlignment" Value="Center" />
     <Setter Property="Template">
       <Setter.Value>
@@ -47,8 +57,12 @@
             </Popup>
           </Grid>
           <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Surface" Property="BorderBrush" Value="#536D89" />
+            </Trigger>
             <Trigger Property="IsKeyboardFocusWithin" Value="True">
               <Setter TargetName="Surface" Property="BorderBrush" Value="#326EFF" />
+              <Setter TargetName="Surface" Property="Background" Value="#F5F8FF" />
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter TargetName="Surface" Property="Opacity" Value="0.45" />
@@ -63,9 +77,9 @@
     <Setter Property="Padding" Value="12,8" />
     <Setter Property="MinHeight" Value="38" />
     <Setter Property="Cursor" Value="Hand" />
-    <Setter Property="Background" Value="White" />
+    <Setter Property="Background" Value="#F5F7FA" />
     <Setter Property="Foreground" Value="#17448A" />
-    <Setter Property="BorderBrush" Value="#C4D0DF" />
+    <Setter Property="BorderBrush" Value="#9AACBF" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="Template">
       <Setter.Value>

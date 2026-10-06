@@ -91,7 +91,7 @@
           </ListBox.ItemContainerStyle>
           <ListBox.ItemTemplate>
             <DataTemplate>
-              <Border x:Name="MessageSurface" Background="White" BorderBrush="#DDE5EF" BorderThickness="1" CornerRadius="4" Padding="12" Margin="10,8,30,0">
+              <Border x:Name="MessageSurface" Background="White" BorderBrush="#BECBD9" BorderThickness="1" CornerRadius="4" Padding="12" Margin="10,8,30,0">
                 <StackPanel>
                   <DockPanel>
                     <TextBlock Text="{Binding Date}" FontSize="11" Foreground="#63748A" DockPanel.Dock="Right" />

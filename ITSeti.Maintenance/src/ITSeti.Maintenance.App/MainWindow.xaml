@@ -161,7 +161,11 @@
         <StackPanel><TextBlock Text="Инвентарный номер" FontWeight="SemiBold"/><TextBlock Text="{Binding ScheduleStatus}" Style="{StaticResource SecondaryText}" Margin="0,4,12,0"/></StackPanel>
         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top"><TextBox x:Name="InventoryInput" Text="{Binding AdminInventoryInput, UpdateSourceTrigger=PropertyChanged}" MaxLength="4" Width="82" Height="36" Padding="9,6" ToolTip="Четыре цифры инвентарного номера"/><Button Click="SaveInventory_Click" Width="36" Height="36" Margin="7,0,0,0" Cursor="Hand" ToolTip="Сохранить инвентарный номер"><TextBlock Text="&#xE74E;" FontFamily="Segoe MDL2 Assets"/></Button></StackPanel>
        </Grid>
-       <Button x:Name="ServerAssignmentButton" Content="Компания и объект ПК" Click="OpenServerAssignment_Click" HorizontalAlignment="Left" Padding="12,7" Margin="0,0,0,18" Background="White" BorderBrush="#C7D5E5" Foreground="#14419E" Cursor="Hand" ToolTip="Изменить привязку компьютера к серверу ИТ-Сети"/>
+       <StackPanel Margin="0,0,0,18">
+        <Button x:Name="ServerAssignmentButton" Content="Компания и объект ПК" Click="OpenServerAssignment_Click" HorizontalAlignment="Left" Padding="12,7" Background="White" BorderBrush="#C7D5E5" Foreground="#14419E" Cursor="Hand" ToolTip="Изменить привязку компьютера к серверу ИТ-Сети"/>
+        <TextBlock Text="{Binding ServerAssignmentLabel}" Foreground="#30475A" Margin="0,6,0,0"/>
+        <TextBlock Text="{Binding ServerConnectionLabel}" Foreground="#53708A" Margin="0,2,0,0"/>
+       </StackPanel>
        <Border BorderBrush="#DDE6EB" BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,18" Background="#F7FAFD">
         <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
          <StackPanel><TextBlock Text="RMS" FontSize="14" Foreground="#354A5E"/><TextBox x:Name="AdminRmsValue" Text="{Binding AdminRmsLabel, Mode=OneWay}" IsReadOnly="True" IsReadOnlyCaretVisible="True" IsTabStop="False" BorderThickness="0" Background="Transparent" Padding="0" Foreground="#203A50" FontWeight="SemiBold" ToolTip="Выделите мышью, чтобы скопировать номер RMS" Margin="0,3,14,0"/></StackPanel>

@@ -29,7 +29,7 @@ public static class MonitoringHistory
             await using var hide = new NpgsqlCommand("UPDATE monitor_alerts SET visible=false WHERE run_id=@run", connection, transaction);
             hide.Parameters.AddWithValue("run", run.Id);
             await hide.ExecuteNonQueryAsync();
-            foreach (var issue in Monitoring.NewIssues(run.Report, run.Previous, run.Events, includeWarnings: true))
+            foreach (var issue in Monitoring.NewIssues(run.Report, run.Previous, run.Events, includeWarnings: false))
             {
                 await using var insert = new NpgsqlCommand("""
                     INSERT INTO monitor_alerts(device_id,run_id,category,identity,title,detail,severity,detected_at,visible)

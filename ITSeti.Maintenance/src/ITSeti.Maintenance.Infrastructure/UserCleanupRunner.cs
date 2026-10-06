@@ -72,7 +72,7 @@ public sealed class UserCleanupRunner
                 userReleased = true;
                 await WaitForExitAsync(user, TimeSpan.FromHours(2));
                 return new CleanupResult(await ReadStatusAsync(root, "user-status.txt"),
-                    "Системные категории Windows (оптимизация доставки, очистка обновлений и пакеты драйверов) не очищены: приложение не установлено.");
+                    "Системные категории Windows (оптимизация доставки, очистка обновлений и пакеты драйверов) не запускались: системная задача приложения недоступна.");
             }
 
             request = Path.Combine(QueueRoot, Path.GetFileName(root) + ".request");

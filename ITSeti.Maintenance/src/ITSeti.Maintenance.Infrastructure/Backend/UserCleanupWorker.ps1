@@ -53,8 +53,9 @@ public static class ITSetiUserRecycleBin {
 }
 '@
     }
-    $result=[ITSetiUserRecycleBin]::SHEmptyRecycleBin([IntPtr]::Zero,$null,7)
-    if($result -lt 0){[Runtime.InteropServices.Marshal]::ThrowExceptionForHR($result)}
+    # A locked item or an unavailable shell recycle-bin provider must not turn
+    # the whole profile cleanup into a failed operation.
+    try { [void][ITSetiUserRecycleBin]::SHEmptyRecycleBin([IntPtr]::Zero,$null,7) } catch { }
 }
 try {
     [Diagnostics.Process]::GetCurrentProcess().PriorityClass='BelowNormal'

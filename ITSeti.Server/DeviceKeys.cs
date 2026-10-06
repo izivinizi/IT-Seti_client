@@ -92,6 +92,14 @@ public static class JsonRead
             System.Globalization.CultureInfo.InvariantCulture, out number) ? number : null;
     }
 
+    public static bool? Bool(JsonElement root, params string[] names)
+    {
+        var value = Property(root, names);
+        if (value is null) return null;
+        if (value.Value.ValueKind is JsonValueKind.True or JsonValueKind.False) return value.Value.GetBoolean();
+        return bool.TryParse(value.Value.ToString(), out var result) ? result : null;
+    }
+
     public static IReadOnlyList<string> StringList(JsonElement root, params string[] names)
     {
         var value = Property(root, names);

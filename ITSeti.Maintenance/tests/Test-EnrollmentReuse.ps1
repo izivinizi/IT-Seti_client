@@ -4,7 +4,7 @@ $fixture=Join-Path ([IO.Path]::GetTempPath()) ('ITSeti-enrollment-'+[Guid]::NewG
 $directory=Join-Path $fixture 'ITSeti\Maintenance'
 [void][IO.Directory]::CreateDirectory($directory)
 try {
-    [IO.File]::WriteAllText((Join-Path $directory 'server-device.json'),(@{serverUrl='https://it-seti.nylenz.ru';deviceId=[Guid]::NewGuid().ToString();deviceKey='fixture-not-a-secret';companyId=1}|ConvertTo-Json))
+    [IO.File]::WriteAllText((Join-Path $directory 'server-device.json'),(@{serverUrl='https://it-seti.nylenz.ru';deviceId=[Guid]::NewGuid().ToString();deviceKey='fixture-not-a-secret';companyId=1;siteId=1}|ConvertTo-Json))
     $start=New-Object Diagnostics.ProcessStartInfo
     $start.FileName=Join-Path $PSHOME 'powershell.exe'
     $start.Arguments='-STA -NoProfile -ExecutionPolicy Bypass -File "'+(Join-Path (Resolve-Path $Root).Path 'Connect-Server.ps1')+'" -SkipIfConnected'

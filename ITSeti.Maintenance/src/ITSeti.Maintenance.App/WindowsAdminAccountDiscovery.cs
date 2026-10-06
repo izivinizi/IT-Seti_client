@@ -51,12 +51,15 @@ internal static class WindowsAdminAccountDiscovery
     private static bool IsDesignatedLocalAdmin(string account)
     {
         var separator = account.LastIndexOf('\\');
-        if (separator < 0 || !account[..separator].Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase)) return false;
+        if (separator < 0) return false;
         var name = account[(separator + 1)..];
+        // Built-in administrator accounts are expected on both local and domain installations.
+        if (name.Equals("Administrator", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Администратор", StringComparison.OrdinalIgnoreCase)) return true;
+        if (!account[..separator].Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase)) return false;
         return name.Equals("Admin", StringComparison.OrdinalIgnoreCase)
             || name.Equals("it-seti", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Administrator", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Администратор", StringComparison.OrdinalIgnoreCase);
+            ;
     }
 
     private static (int Status, List<Member> Members) ReadMembers()
