@@ -55,7 +55,7 @@ public static class OrganizationSetupRunner
         }
         if (component is not null && !Packages.ContainsKey(component)) return ["Неизвестный компонент установки."];
         var bundledDirectory = OrganizationSoftwareAudit.FindBundledDirectory();
-        if (string.IsNullOrWhiteSpace(bundledDirectory)) return ["Встроенный комплект ПО ИТ-Сети не найден."];
+        if (string.IsNullOrWhiteSpace(bundledDirectory)) return ["ПК не подключён к серверу ИТ-Сети. Управляемое ПО устанавливается из серверного каталога."];
         var selectedPackages = component is null ? Packages : Packages.Where(item => item.Key == component)
             .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
         foreach (var (key, package) in selectedPackages)
@@ -202,7 +202,7 @@ public static class OrganizationSetupRunner
             if (!File.Exists(Path.Combine(MaintenanceRoot,"server-device.json")) && (component is null || !BundledPackages.ContainsKey(component)))
             {
                 if (OrganizationSoftwareAudit.FindBundledDirectory() is null)
-                throw new InvalidOperationException("Встроенный комплект ПО ИТ-Сети не найден.");
+                throw new InvalidOperationException("ПК не подключён к серверу ИТ-Сети. Управляемое ПО устанавливается из серверного каталога.");
             }
             var problems = await CheckAsync(component);
             if (problems.Count > 0) throw new InvalidOperationException(string.Join(Environment.NewLine, problems));

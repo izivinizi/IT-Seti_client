@@ -567,7 +567,7 @@ internal static class Program
                 var expectedSetup = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "Setup", "ITSETI-Setup"));
                 if (detectedSetup is not null && !string.Equals(Path.GetFullPath(detectedSetup), expectedSetup, StringComparison.OrdinalIgnoreCase))
                     throw new Exception("Bundled software resolved outside the application directory");
-                if (window.ViewModel.HasBundledSetup) await AssertSetupSignatureCheck();
+                if (window.ViewModel.HasBundledSetup) AssertSetupSignatureCheck();
                 if (((Button)window.FindName("InstallSetupButton")!).IsEnabled != window.ViewModel.CanInstallSetup)
                     throw new Exception("Install-all availability does not match available server or offline packages");
                 foreach (var name in new[] { "CreateAdminAccountButton", "RefreshSetupAuditButton", "LaunchDiskInfoButton", "LaunchDiskMarkButton", "LaunchTreeSizeButton" })
@@ -752,21 +752,12 @@ internal static class Program
         return 0;
     }
 
-    private static async Task<int> CheckBundledOrganizationSetup()
+    private static Task<int> CheckBundledOrganizationSetup()
     {
-        var bundledDirectory = OrganizationSoftwareAudit.FindBundledDirectory()
-            ?? throw new Exception("The in-app IT-Seti software package was not found next to the application.");
-        var problems = await OrganizationSetupRunner.CheckAsync();
-        if (problems.Count > 0)
-            throw new Exception("Bundled IT-Seti packages failed hash/signature checks: " + string.Join(" | ", problems));
-        foreach (var component in new[] { "WinRAR", "Yandex" })
-        {
-            var bundledProblems = await OrganizationSetupRunner.CheckAsync(component);
-            if (bundledProblems.Count > 0)
-                throw new Exception($"Bundled {component} failed hash/signature checks: {string.Join(" | ", bundledProblems)}");
-        }
-        Console.WriteLine("PASS: all IT-Seti software packages are bundled in the app and pass hash/signature checks.");
-        return 0;
+        if (OrganizationSoftwareAudit.FindBundledDirectory() is not null)
+            throw new Exception("Managed IT-Seti software packages must not be bundled with the application.");
+        Console.WriteLine("PASS: managed IT-Seti software packages are absent from the application and are server-backed.");
+        return Task.FromResult(0);
     }
 
     private static void AssertUpdateStatusVersionFiltering()
@@ -854,22 +845,10 @@ internal static class Program
             throw new Exception("DiskMarkA64.exe was not resolved");
     }
 
-    private static async Task AssertSetupSignatureCheck()
+    private static void AssertSetupSignatureCheck()
     {
-        var bundledDirectory = OrganizationSoftwareAudit.FindBundledDirectory()
-            ?? throw new Exception("The application output is missing its bundled IT-Seti software package.");
-        if (!string.Equals(Path.GetFullPath(bundledDirectory),
-                Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "Setup", "ITSETI-Setup")), StringComparison.OrdinalIgnoreCase))
-            throw new Exception("Software package resolution escaped the application directory.");
-        var problems = await OrganizationSetupRunner.CheckAsync();
-        if (problems.Count != 0)
-            throw new Exception("Bundled organization packages failed preflight: " + string.Join(" | ", problems));
-        foreach (var component in new[] { "WinRAR", "Yandex" })
-        {
-            var bundledProblems = await OrganizationSetupRunner.CheckAsync(component);
-            if (bundledProblems.Count != 0)
-                throw new Exception($"Bundled {component} failed preflight: {string.Join(" | ", bundledProblems)}");
-        }
+        if (OrganizationSoftwareAudit.FindBundledDirectory() is not null)
+            throw new Exception("Managed IT-Seti software packages must not be bundled with the application.");
     }
 
     private static void AssertRules()

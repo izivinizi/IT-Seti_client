@@ -30,8 +30,6 @@ Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
 Source: "{#PackageRoot}\App\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PackageRoot}\Tools\*"; DestDir: "{app}\Tools"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "Install-Maintenance.ps1"; DestDir: "{tmp}\ITSeti-Package"; Flags: ignoreversion deleteafterinstall
-Source: "Install-OrganizationSoftware.ps1"; DestDir: "{tmp}\ITSeti-Package"; Flags: ignoreversion deleteafterinstall
-Source: "Setup\ITSETI-Setup\*"; DestDir: "{tmp}\ITSeti-Package\Setup\ITSETI-Setup"; Flags: ignoreversion recursesubdirs createallsubdirs deleteafterinstall
 Source: "Uninstall-Maintenance.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Uninstall-Options.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "OrganizationUninstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -55,7 +53,6 @@ var
   OptionsPage: TWizardPage;
   InstallDirEdit: TNewEdit;
   InstallDirBrowse: TNewButton;
-  SoftwareCheck: TNewCheckBox;
   InventoryEdit: TNewEdit;
 
 procedure BrowseInstallDir(Sender: TObject);
@@ -101,21 +98,12 @@ begin
   InstallDirBrowse.Caption := 'Обзор...';
   InstallDirBrowse.OnClick := @BrowseInstallDir;
 
-  SoftwareCheck := TNewCheckBox.Create(OptionsPage);
-  SoftwareCheck.Parent := OptionsPage.Surface;
-  SoftwareCheck.Left := 0;
-  SoftwareCheck.Top := 68;
-  SoftwareCheck.Width := OptionsPage.SurfaceWidth;
-  SoftwareCheck.Height := 27;
-  SoftwareCheck.Caption := 'Установить AnyDesk, RMS, OCS и панель ИТ-Сети';
-  SoftwareCheck.Font.Size := 10;
-
-  AddLabel('Установочные файлы программ ИТ-Сети включены в приложение.', 106);
-  AddLabel('Инвентарный номер (четыре цифры, необязательно)', 145);
+  AddLabel('Программы ИТ-Сети устанавливаются из каталога сервера после подключения.', 68);
+  AddLabel('Инвентарный номер (четыре цифры, необязательно)', 107);
   InventoryEdit := TNewEdit.Create(OptionsPage);
   InventoryEdit.Parent := OptionsPage.Surface;
   InventoryEdit.Left := 0;
-  InventoryEdit.Top := 167;
+  InventoryEdit.Top := 129;
   InventoryEdit.Width := 120;
   InventoryEdit.MaxLength := 4;
   if LoadStringFromFile(ExpandConstant('{commonappdata}\ITSeti\Maintenance\inventory.txt'), Existing) then
@@ -148,9 +136,6 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Code: Integer;
-  SoftwareCode: Integer;
-  ResultPath: String;
-  ResultText: AnsiString;
   MaintenanceResult: String;
   MaintenanceText: AnsiString;
   ConnectCode: Integer;
@@ -189,24 +174,6 @@ begin
         '-STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ExpandConstant('{app}\Connect-Server.ps1') + '" -SkipIfConnected',
         '', SW_SHOWNORMAL, ewWaitUntilTerminated, ConnectCode) or (ConnectCode <> 0) then
         MsgBox('Не удалось открыть подключение к серверу. Локальная установка завершена; подключить ПК можно позже через меню «Пуск».', mbInformation, MB_OK);
-    end;
-    if SoftwareCheck.Checked then
-    begin
-      WizardForm.StatusLabel.Caption := 'Устанавливаем выбранные программы. Дождитесь результата...';
-      ResultPath := ExpandConstant('{tmp}\org-install-result.txt');
-      SoftwareCode := 2;
-      if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-        '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\Backend\Install-OrganizationSoftware.ps1') +
-        '" -InstallerDirectory "' + ExpandConstant('{tmp}\ITSeti-Package\Setup\ITSETI-Setup') + '" -ResultFile "' + ResultPath + '"',
-        '', SW_HIDE, ewWaitUntilTerminated, SoftwareCode) or (SoftwareCode <> 0) then
-      begin
-        if not LoadStringFromFile(ResultPath, ResultText) then
-          ResultText := 'No detailed result from package installer.';
-        MsgBox('Программы ИТ-Сети не установлены. Приложение обслуживания установлено.' + #13#10 + #13#10 + ResultText,
-          mbError, MB_OK);
-      end
-      else
-        MsgBox('Программы ИТ-Сети установлены.', mbInformation, MB_OK);
     end;
     WizardForm.ProgressGauge.Style := npbstNormal;
     WizardForm.ProgressGauge.Position := WizardForm.ProgressGauge.Max;

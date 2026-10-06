@@ -25,6 +25,7 @@ if($LASTEXITCODE -ne 0){
 }
 dotnet publish $appProject -c Release -r win-x64 --self-contained true --no-restore -o (Join-Path $OutputRoot 'App')
 if($LASTEXITCODE -ne 0){throw 'dotnet publish failed.'}
+Remove-Item -LiteralPath (Join-Path $OutputRoot 'App\Setup') -Recurse -Force -ErrorAction SilentlyContinue
 $accessControlPackage=Join-Path $env:USERPROFILE '.nuget\packages\system.threading.accesscontrol\10.0.3\runtimes\win\lib\net9.0\System.Threading.AccessControl.dll'
 $publishedAccessControl=Join-Path (Join-Path $OutputRoot 'App') 'System.Threading.AccessControl.dll'
 if(!(Test-Path -LiteralPath $accessControlPackage -PathType Leaf)){throw 'Restored System.Threading.AccessControl 10.0.3 package is missing.'}

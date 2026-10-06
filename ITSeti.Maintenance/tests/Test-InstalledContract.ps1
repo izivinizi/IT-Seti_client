@@ -67,7 +67,7 @@ foreach($name in @('Full','QuickFull','AutoFullRepair','Repair','Cleanup','Organ
 if($install -notmatch 'Register-ScheduledTask' -or $install -notmatch "-UserId 'S-1-5-18'" -or $install -notmatch 'LogonType ServiceAccount' -or $install -notmatch 'GRGX;;;BU' -or $install -notmatch 'icacls.exe') {throw 'Installed task privilege boundary is missing.'}
 if($install -notmatch 'ITSeti-Maintenance-OrganizationSetup' -or $install -notmatch 'InstalledOrganizationSetup.ps1' -or
    $install -notmatch 'OrganizationSetupRequests' -or $install -notmatch 'OrganizationSetupRuns' -or
-   $install -notmatch 'Install-OrganizationSoftware.ps1') {throw 'Verified organization software installation task is missing.'}
+   $install -match 'Copy-Item[^\r\n]+Install-OrganizationSoftware.ps1') {throw 'Server-backed organization software task contract is invalid.'}
 if(!$install.Contains('install.log') -or !$install.Contains('install-status.txt') -or !$install.Contains('throw "Не удалось зарегистрировать обязательную задачу')) {throw 'A failed required SYSTEM task must abort installation with logged details.'}
 if(!$install.Contains("'ITSeti-Maintenance-Temperature'") -or !$install.Contains('cpu-temperature.json') -or !$install.Contains("-Execute (Join-Path `$install 'ITSeti.Maintenance.exe')")) {throw 'The SYSTEM CPU-temperature task is not installed.'}
 $tempSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\CpuTemperatureCache.cs'),[Text.Encoding]::UTF8)
@@ -138,14 +138,13 @@ if($defenderErrors -or !$defenderScript.Contains("ValidateSet('Status', 'Enable'
 }
 if($organizationRunner -match 'Verb\s*=\s*"runas"' -or !$organizationRunner.Contains('ITSeti-Maintenance-OrganizationSetup') -or
    !$organizationRunner.Contains('RunComponentAsync') -or !$organizationRunner.Contains('RunUninstallComponentAsync') -or !$organizationRunner.Contains('PanelFileHashes') -or
-   !$organizationWorker.Contains('$stagedRoot=Join-Path $run') -or !$organizationWorker.Contains("'AnyDesk','RMS','OCS','Panel'") -or
-   $organizationWorker -notmatch 'Install-OrganizationSoftware.ps1' -or $organizationWorker -notmatch 'installer-result.txt' -or
+   !$organizationWorker.Contains('Join-Path $base ''server-device.json''') -or !$organizationWorker.Contains('ServerSoftware.ps1') -or
+   $organizationWorker -match 'Install-OrganizationSoftware.ps1' -or
    $organizationWorker -notmatch "Operation -eq 'Uninstall'" -or !$organizationWorker.Contains('ReadAllText($resultFromHelper') -or
-   !$organizationWorker.Contains('$detail=''OK''') -or
+   !$organizationWorker.Contains('Установочные файлы загружаются из серверного каталога') -or
    !$organizationWorker.Contains('[IO.File]::ReadAllText($request.FullName,[Text.Encoding]::UTF8)')) {
-    throw 'Organization software installation must use the verified SYSTEM task instead of an interactive elevation prompt.'
+    throw 'Organization software installation must use the server catalog through the SYSTEM task.'
 }
-$organizationHelper=[IO.File]::ReadAllText((Join-Path $Root 'Install-OrganizationSoftware.ps1'),[Text.Encoding]::UTF8)
 $softwareView=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml'),[Text.Encoding]::UTF8)
 $softwareCode=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml.cs'),[Text.Encoding]::UTF8)
 $softwareAudit=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\OrganizationSoftwareAudit.cs'),[Text.Encoding]::UTF8)
@@ -165,11 +164,9 @@ if(!$softwareCode.Contains('CopyAnyDesk_Click') -or !$softwareView.Contains('Use
    !$supportCode.Contains('new ContactsDialog(identity)') -or $softwareCode.Contains('GetMissingNewPcPackages')) {
     throw 'Support identity display or setup mode selection is missing.'
 }
-if(!$organizationHelper.Contains('ValidateSet(''AnyDesk'', ''RMS'', ''OCS'', ''Panel'')') -or
-   !$organizationHelper.Contains('Test-PinnedFile') -or !$organizationHelper.Contains('Panel file failed verification') -or
-   $softwareView.Contains('SetupModeSelector') -or $softwareView.Contains('AcceptanceWarning') -or
+if($softwareView.Contains('SetupModeSelector') -or $softwareView.Contains('AcceptanceWarning') -or
    !$softwareView.Contains('InstallComponent_Click') -or !$softwareView.Contains('Установить всё')) {
-    throw 'Software screen must use component allowlisting and omit the acceptance mode.'
+    throw 'Software screen must use the server catalog and omit the acceptance mode.'
 }
 $updateRunner=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\ApplicationUpdateRunner.cs'),[Text.Encoding]::UTF8)
 if($updateRunner -match 'Verb\s*=\s*"runas"' -or !$updateRunner.Contains('ITSeti-Maintenance-Update') -or
@@ -178,6 +175,9 @@ if($updateRunner -match 'Verb\s*=\s*"runas"' -or !$updateRunner.Contains('ITSeti
 }
 $installerDefinition=[IO.File]::ReadAllText((Join-Path $Root 'Installer.iss'),[Text.Encoding]::UTF8)
 if($installerDefinition -notmatch '(?m)^PrivilegesRequired=admin\r?$') {throw 'Setup must require administrator rights.'}
+if($installerDefinition -match 'SoftwareCheck|Setup\\ITSETI-Setup|Install-OrganizationSoftware.ps1') {throw 'The application installer must not embed the managed software catalog.'}
+$appProject=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj'),[Text.Encoding]::UTF8)
+if($appProject -match 'Setup\\ITSETI-Setup\\\*\*') {throw 'Managed software packages must not be published inside the application.'}
 $bootstrap=[IO.File]::ReadAllText((Join-Path $Root 'Install-ITSeti.ps1'),[Text.Encoding]::UTF8)
 if($bootstrap -match 'LoadUserProfile' -or !$bootstrap.Contains('NativeErrorCode') -or !$bootstrap.Contains("Get-Service -Name 'seclogon'") -or !$bootstrap.Contains('Start-AdministratorHelper -PowerShell $powershell') -or !$bootstrap.Contains('[Diagnostics.Process]::Start($start)') -or !$bootstrap.Contains('Start-Process -FilePath $setup -Verb RunAs')) {throw 'Credential bootstrap must launch as the selected administrator and fall back to the Windows UAC prompt.'}
 if($install -notmatch 'ITSeti-Maintenance-Status' -or $install -notmatch 'CurrentVersion\\Run') {throw 'Failed-night-check status startup is missing.'}

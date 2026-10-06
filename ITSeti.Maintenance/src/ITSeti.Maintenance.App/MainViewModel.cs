@@ -128,12 +128,12 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public bool CanManageSetup => !setupInstallRunning;
     public bool CanLaunchDiskTools => fullRunner is FullDiagnosticsRunner;
     public string SoftwareActionStatus => softwareActionStatus;
-    public string SetupBundleStatus => bundledSetupDirectory is null
-        ? "Встроенный комплект ПО не найден"
-        : "Комплект ПО ИТ-Сети включён в приложение";
-    public string SetupBundleTooltip => bundledSetupDirectory is null
-        ? "Установочные файлы ИТ-Сети отсутствуют в папке приложения."
-        : "Файлы AnyDesk, RMS, OCS и панели установлены вместе с приложением.";
+    public string SetupBundleStatus => ServerSoftwareCatalog.IsConnected
+        ? "Каталог ПО получен с сервера"
+        : "ПО устанавливается с сервера после подключения";
+    public string SetupBundleTooltip => ServerSoftwareCatalog.IsConnected
+        ? "Установщики загружаются с сервера, проверяются по SHA-256 и запускаются системной задачей."
+        : "Подключите компьютер к серверу, чтобы получить актуальный каталог и устанавливать ПО.";
     public void SetSetupStatus(string message) { softwareActionStatus = message; Notify(); }
     public void SetSoftwareActionStatus(string message) { softwareActionStatus = message; Notify(); }
     public string SetupSummary => $"Требуют внимания: {SetupComponents.Count(c => c.NeedsAttention)} из {SetupComponents.Count}";

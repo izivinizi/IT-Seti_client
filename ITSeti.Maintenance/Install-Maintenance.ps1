@@ -33,13 +33,13 @@ if(!(Test-Path -LiteralPath (Join-Path $sourceApp 'ITSeti.Maintenance.exe') -Pat
 foreach($relative in @('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe','PawnIO\PawnIO_setup.exe')){
     if(!(Test-Path -LiteralPath (Join-Path $sourceTools $relative) -PathType Leaf)){throw "Tool is missing: $relative"}
 }
-$sourceSetup=Join-Path $sourceApp 'Setup\ITSETI-Setup\system'
-foreach($relative in @('packages\AnyDesk-installer.exe','packages\Host-IT-SETI.RMS.7.7.3.0v3.msi','packages\OCS-Agent-Installerv4.exe','packages\DesktopInfo3230.exe','panel\DesktopInfo.ini','panel\update-support-ids.ps1','panel\start-panel.vbs')){
-    if(!(Test-Path -LiteralPath (Join-Path $sourceSetup $relative) -PathType Leaf)){throw "Встроенный комплект ПО неполный: $relative"}
+foreach($relative in @('Panel\DesktopInfo.ini','Panel\update-support-ids.ps1','Panel\start-panel.vbs')){
+    if(!(Test-Path -LiteralPath (Join-Path $sourceApp $relative) -PathType Leaf)){throw "Файл панели отсутствует: $relative"}
 }
 $install=$InstallRoot
 $installStage='Создание каталогов и копирование файлов'
 New-Item -ItemType Directory -Path $install,$data,(Join-Path $data 'Runs'),(Join-Path $data 'Repairs'),(Join-Path $data 'CleanupRequests'),(Join-Path $data 'CleanupRuns'),(Join-Path $data 'WindowsUpdate'),(Join-Path $data 'OrganizationSetupRequests'),(Join-Path $data 'OrganizationSetupRuns') -Force | Out-Null
+Remove-Item -LiteralPath (Join-Path $install 'Setup') -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path (Join-Path $install 'Backend') -Force | Out-Null
 if(!$PreinstalledApp){Get-ChildItem -LiteralPath $sourceApp -Force | Copy-Item -Destination $install -Recurse -Force}
 if(!$PreinstalledApp){
@@ -52,9 +52,7 @@ if(!$PreinstalledApp){
         }
     }
 }
-$organizationVerifier=Join-Path $PackageRoot 'Install-OrganizationSoftware.ps1'
-if(!(Test-Path -LiteralPath $organizationVerifier -PathType Leaf)){throw 'Organization setup verifier is missing from the installer package.'}
-Copy-Item -LiteralPath $organizationVerifier -Destination (Join-Path $install 'Backend\Install-OrganizationSoftware.ps1') -Force
+Remove-Item -LiteralPath (Join-Path $install 'Backend\Install-OrganizationSoftware.ps1') -Force -ErrorAction SilentlyContinue
 $pawnIoInstaller=Join-Path $sourceTools 'PawnIO\PawnIO_setup.exe'
 $pawnIoLog=Join-Path $data 'cpu-sensor-driver.txt'
 $pawnIoHash='1F519A22E47187F70A1379A48CA604981C4FCF694F4E65B734AAA74A9FBA3032'

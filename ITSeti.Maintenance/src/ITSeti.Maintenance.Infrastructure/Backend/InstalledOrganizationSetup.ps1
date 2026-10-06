@@ -2,8 +2,6 @@
 $base=Join-Path $env:ProgramData 'ITSeti\Maintenance'
 $requestRoot=Join-Path $base 'OrganizationSetupRequests'
 $resultRoot=Join-Path $base 'OrganizationSetupRuns'
-$helper=Join-Path $PSScriptRoot 'Install-OrganizationSoftware.ps1'
-if(!(Test-Path -LiteralPath $helper -PathType Leaf)){throw 'Trusted organization setup helper is missing.'}
 $request=Get-ChildItem -LiteralPath $requestRoot -Filter '*.json' -File -ErrorAction SilentlyContinue |
     Where-Object { $_.BaseName -match '^[a-f0-9]{32}$' } | Sort-Object CreationTimeUtc | Select-Object -First 1
 if(!$request){exit 0}
@@ -19,9 +17,6 @@ try {
     $operation=if($payload.Operation){[string]$payload.Operation}else{'Install'}
     if($component -and $component -notin @('AnyDesk','RMS','OCS','Panel','WinRAR','Yandex')){throw 'Unsupported organization software component.'}
     if($operation -notin @('Install','Uninstall')){throw 'Unsupported organization setup operation.'}
-    $source=if($operation -eq 'Install'){
-        Join-Path (Split-Path -Parent $PSScriptRoot) 'Setup\ITSETI-Setup'
-    }else{$null}
     if($operation -eq 'Uninstall'){
         if($component -in @('WinRAR','Yandex')){
             Remove-Item -LiteralPath $request.FullName -Force
@@ -103,53 +98,7 @@ try {
         Move-Item -LiteralPath $temporary -Destination $result -Force
         return
     }
-    $packageMap=@{
-        AnyDesk='AnyDesk-installer.exe'
-        RMS='Host-IT-SETI.RMS.7.7.3.0v3.msi'
-        OCS='OCS-Agent-Installerv4.exe'
-        Panel='DesktopInfo3230.exe'
-    }
-    $packages=if($component){@($packageMap[$component])}else{@($packageMap.Values)}
-    if(!$source -or !(Test-Path -LiteralPath $source -PathType Container)){
-        throw 'Встроенный каталог ПО ИТ-Сети не найден в папке приложения.'
-    }
-    $sourcePackages=Join-Path $source 'system\packages'
-    foreach($name in $packages){
-        if(!(Test-Path -LiteralPath (Join-Path $sourcePackages $name) -PathType Leaf)){throw "Не найден выбранный пакет: $name"}
-    }
-    $panelFiles=@('DesktopInfo.ini','update-support-ids.ps1','start-panel.vbs')
-    if(!$component -or $component -eq 'Panel'){
-        foreach($name in $panelFiles){
-            if(!(Test-Path -LiteralPath (Join-Path $source ('system\panel\'+$name)) -PathType Leaf)){throw "Не найден файл панели: $name"}
-        }
-    }
-    Remove-Item -LiteralPath $request.FullName -Force
-    $stagedRoot=Join-Path $run 'ITSETI-Setup'
-    $stagedSystem=Join-Path $stagedRoot 'system'
-    $stagedPackages=Join-Path $stagedSystem 'packages'
-    New-Item -ItemType Directory -Path $stagedPackages -Force | Out-Null
-    foreach($name in $packages){Copy-Item -LiteralPath (Join-Path $sourcePackages $name) -Destination (Join-Path $stagedPackages $name) -Force}
-    if(!$component -or $component -eq 'Panel'){
-        $stagedPanel=Join-Path $stagedSystem 'panel'
-        New-Item -ItemType Directory -Path $stagedPanel -Force | Out-Null
-        foreach($name in $panelFiles){
-            Copy-Item -LiteralPath (Join-Path $source ('system\panel\'+$name)) -Destination (Join-Path $stagedPanel $name) -Force
-        }
-    }
-    $resultFromHelper=Join-Path $run 'installer-result.txt'
-    $powershell=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$helper+'" -InstallerDirectory "'+$stagedRoot+'" -ResultFile "'+$resultFromHelper+'"'
-    if($component){$arguments+=' -Component '+$component}
-    $process=Start-Process -FilePath $powershell -ArgumentList $arguments -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
-    $detail=if(Test-Path -LiteralPath $resultFromHelper){[IO.File]::ReadAllText($resultFromHelper,[Text.Encoding]::UTF8).Trim()}else{"Installer helper exited with code $($process.ExitCode) without a result."}
-    if($process.ExitCode -eq 0){
-        [IO.File]::WriteAllText((Join-Path $run 'details.txt'),$detail,[Text.UTF8Encoding]::new($false))
-        $detail='OK'
-    }
-    elseif(!$detail){$detail="Installer helper exited with code $($process.ExitCode)."}
-    [IO.File]::WriteAllText($temporary,$detail,[Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temporary -Destination $result -Force
-    Remove-Item -LiteralPath $stagedRoot -Recurse -Force -ErrorAction SilentlyContinue
+    throw 'Для установки управляемого ПО подключите ПК к серверу ИТ-Сети. Установочные файлы загружаются из серверного каталога.'
 } catch {
     [IO.File]::WriteAllText($temporary,$_.Exception.ToString(),[Text.UTF8Encoding]::new($false))
     Move-Item -LiteralPath $temporary -Destination $result -Force

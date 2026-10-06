@@ -1,50 +1,17 @@
 param([string]$Root='.')
 $ErrorActionPreference='Stop'
 $rootPath=(Resolve-Path -LiteralPath $Root).Path
-$testRoot=Join-Path $env:TEMP ('maintenance-org-test-'+[guid]::NewGuid().ToString('N'))
-$setup=Join-Path $testRoot 'ITSETI-Setup\system'
-try {
-    $packages=Join-Path $setup 'packages'
-    $panel=Join-Path $setup 'panel'
-    New-Item -ItemType Directory -Path $packages,$panel -Force | Out-Null
-    $names=@('AnyDesk-installer.exe','Host-IT-SETI.RMS.7.7.3.0v3.msi','OCS-Agent-Installerv4.exe','DesktopInfo3230.exe')
-    foreach($name in $names){[IO.File]::WriteAllText((Join-Path $packages $name),'unsigned test fixture')}
-    foreach($name in @('DesktopInfo.ini','update-support-ids.ps1','start-panel.vbs')){[IO.File]::WriteAllText((Join-Path $panel $name),'tampered test fixture')}
-    $result=Join-Path $testRoot 'result.txt'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $rootPath 'Install-OrganizationSoftware.ps1') -InstallerDirectory $testRoot -ResultFile $result -PreflightOnly
-    if($LASTEXITCODE -ne 2){throw 'Modified organization installer was not rejected.'}
-    $rejection=Get-Content -LiteralPath $result -Raw
-    if($rejection -notmatch 'verification failed' -or !($names | Where-Object { $rejection -match [regex]::Escape($_) })){
-        throw 'A tampered package was not rejected before installation.'
-    }
-    $singleRoot=Join-Path $testRoot 'single'
-    $singlePackages=Join-Path $singleRoot 'ITSETI-Setup\system\packages'
-    New-Item -ItemType Directory -Path $singlePackages -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $singlePackages $names[1]),'unsigned test fixture')
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $rootPath 'Install-OrganizationSoftware.ps1') -InstallerDirectory $singleRoot -ResultFile $result -PreflightOnly -Component RMS
-    if($LASTEXITCODE -ne 2 -or (Get-Content -LiteralPath $result -Raw) -notmatch 'signature/hash verification failed'){
-        throw 'A single staged component must reach hash verification without the other packages.'
-    }
-    $iss=[IO.File]::ReadAllText((Join-Path $rootPath 'Installer.iss'))
-    if(([regex]::Matches($iss,'Name: "\{autodesktop\}')).Count -ne 1){throw 'Installer creates more than one desktop shortcut.'}
-    if($iss -notmatch 'SoftwareCheck := TNewCheckBox.Create' -or
-       $iss -notmatch 'if SoftwareCheck.Checked then' -or
-       $iss -notmatch 'Setup\\ITSETI-Setup' -or $iss -match 'SoftwareDirEdit|BrowseSoftwareDir'){
-        throw 'Optional software must install from the package bundled with the application.'
-    }
-    $install=[IO.File]::ReadAllText((Join-Path $rootPath 'Install-Maintenance.ps1'))
-    if($install -notmatch 'if\(\$PreinstalledApp\)\{' -or $install -notmatch 'Remove-Item -LiteralPath \$path'){
-        throw 'Legacy shortcuts are not removed during EXE installation.'
-    }
-    $worker=[IO.File]::ReadAllText((Join-Path $rootPath 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledOrganizationSetup.ps1'))
-    if($worker -notmatch 'Setup\\ITSETI-Setup' -or $worker -match 'payload\.Source'){
-        throw 'The system worker must use packaged application files, not an external setup folder.'
-    }
-    $project=[IO.File]::ReadAllText((Join-Path $rootPath 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj'))
-    if($project -notmatch 'Setup\\ITSETI-Setup' -or $project -notmatch '<CopyToPublishDirectory>Never</CopyToPublishDirectory>' -or
-       $iss -notmatch '\{tmp\}\\ITSeti-Package\\Setup\\ITSETI-Setup') {throw 'Offline payload must stay in the installer, not the installed application.'}
-    'PASS: modified packages rejected; offline payload remains in setup while enrolled clients use server software.'
-    $global:LASTEXITCODE=0
-} finally {
-    if(Test-Path -LiteralPath $testRoot){Remove-Item -LiteralPath $testRoot -Recurse -Force}
+$iss=[IO.File]::ReadAllText((Join-Path $rootPath 'Installer.iss'),[Text.Encoding]::UTF8)
+$project=[IO.File]::ReadAllText((Join-Path $rootPath 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj'),[Text.Encoding]::UTF8)
+$install=[IO.File]::ReadAllText((Join-Path $rootPath 'Install-Maintenance.ps1'),[Text.Encoding]::UTF8)
+$worker=[IO.File]::ReadAllText((Join-Path $rootPath 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledOrganizationSetup.ps1'),[Text.Encoding]::UTF8)
+if($iss -match 'SoftwareCheck|Setup\\ITSETI-Setup|Install-OrganizationSoftware.ps1'){
+    throw 'The application installer still embeds or launches the managed software package.'
 }
+if($project -match 'Setup\\ITSETI-Setup\\\*\*' -or $install -match 'Copy-Item[^\r\n]+Install-OrganizationSoftware.ps1'){
+    throw 'Managed software files must not be copied into the installed application.'
+}
+if(!$worker.Contains('Join-Path $base ''server-device.json''') -or !$worker.Contains('ServerSoftware.ps1')){
+    throw 'The SYSTEM software worker must use the server catalog.'
+}
+'PASS: managed software is excluded from the application installer and installed only from the server catalog.'
