@@ -1,7 +1,7 @@
 <Window x:Class="ITSeti.Maintenance.App.ContactsDialog"
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
  Title="ИТ-Сети | Контакты" Icon="Assets/favicon.ico" Width="490" Height="510" MinWidth="360" MinHeight="350"
- WindowStartupLocation="CenterOwner" Background="White" FontFamily="Segoe UI" FontSize="14">
+ WindowStartupLocation="CenterOwner" Background="#F0F3F7" FontFamily="Segoe UI" FontSize="14">
  <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="24">
   <TextBlock Text="Контакты ИТ-Сети" FontSize="22" FontWeight="SemiBold" Foreground="#143C87" Margin="0,0,0,18"/>
   <TextBlock Text="+7 (343) 243-57-63" FontSize="18" Foreground="#203A50"/>

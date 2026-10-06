@@ -8,8 +8,7 @@ $script:serializer = New-Object System.Web.Script.Serialization.JavaScriptSerial
 if ($SkipIfConnected -and (Test-Path -LiteralPath $deviceFile)) {
     try {
         $saved = $script:serializer.DeserializeObject([IO.File]::ReadAllText($deviceFile))
-        if ($saved.serverUrl -eq $serverUrl -and $saved.deviceId -and $saved.deviceKey -and
-            $saved.companyId -gt 0 -and $saved.siteId -gt 0) { exit 0 }
+        if ($saved.serverUrl -eq $serverUrl -and $saved.deviceId -and $saved.deviceKey) { exit 0 }
     } catch { }
 }
 

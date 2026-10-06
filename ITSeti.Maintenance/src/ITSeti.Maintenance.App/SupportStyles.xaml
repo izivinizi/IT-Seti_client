@@ -7,7 +7,7 @@
   <Style TargetType="TextBox">
     <Setter Property="FontSize" Value="14" />
     <Setter Property="Padding" Value="10,8" />
-    <Setter Property="Background" Value="#F1F4F7" />
+    <Setter Property="Background" Value="#E8EEF4" />
     <Setter Property="Foreground" Value="#25384C" />
     <Setter Property="BorderBrush" Value="#879AAF" />
     <Setter Property="BorderThickness" Value="1" />
@@ -18,7 +18,7 @@
       </Trigger>
       <Trigger Property="IsKeyboardFocused" Value="True">
         <Setter Property="BorderBrush" Value="#326EFF" />
-        <Setter Property="Background" Value="#F5F8FF" />
+        <Setter Property="Background" Value="#F4F7FB" />
       </Trigger>
       <Trigger Property="IsEnabled" Value="False">
         <Setter Property="Background" Value="#E8EDF2" />
@@ -31,7 +31,7 @@
     <Setter Property="FontSize" Value="14" />
     <Setter Property="Padding" Value="10,7" />
     <Setter Property="MinHeight" Value="38" />
-    <Setter Property="Background" Value="#F1F4F7" />
+    <Setter Property="Background" Value="#E8EEF4" />
     <Setter Property="BorderBrush" Value="#879AAF" />
     <Setter Property="VerticalContentAlignment" Value="Center" />
     <Setter Property="Template">
@@ -49,7 +49,7 @@
               </ToggleButton.Template>
             </ToggleButton>
             <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True" Focusable="False">
-              <Border Background="White" BorderBrush="#B8C6D5" BorderThickness="1" CornerRadius="4" MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}" MaxHeight="240" Padding="2">
+              <Border Background="#F7F9FC" BorderBrush="#9BAEC1" BorderThickness="1" CornerRadius="4" MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}" MaxHeight="240" Padding="2">
                 <ScrollViewer CanContentScroll="True">
                   <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained" />
                 </ScrollViewer>
@@ -62,7 +62,7 @@
             </Trigger>
             <Trigger Property="IsKeyboardFocusWithin" Value="True">
               <Setter TargetName="Surface" Property="BorderBrush" Value="#326EFF" />
-              <Setter TargetName="Surface" Property="Background" Value="#F5F8FF" />
+              <Setter TargetName="Surface" Property="Background" Value="#F4F7FB" />
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter TargetName="Surface" Property="Opacity" Value="0.45" />
