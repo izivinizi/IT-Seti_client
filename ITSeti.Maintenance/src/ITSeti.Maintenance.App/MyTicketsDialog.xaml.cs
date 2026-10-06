@@ -12,8 +12,9 @@ namespace ITSeti.Maintenance.App;
 
 public partial class MyTicketsDialog : Window
 {
-    private sealed record Ticket(Guid Id, string Title, string State, long? IssueId, string Description, DateTime? CreatedAt, string? RemoteStatus = null)
+    private sealed record Ticket(Guid Id, string Title, string State, long? IssueId, string Description, DateTime? CreatedAt, string? RemoteStatus = null, string? WorkflowState = null)
     {
+        public bool IsClosed => WorkflowState is "completed" or "cancelled" or "canceled" or "closed" or "resolved";
         public string StateLabel => RemoteStatus ?? (State switch
         {
             "queued" => "Принята · ожидает отправки в Okdesk",
@@ -36,16 +37,17 @@ public partial class MyTicketsDialog : Window
     private int refreshRequest;
     private Guid? draftTicket;
     private readonly System.Windows.Threading.DispatcherTimer refreshTimer = new() { Interval = TimeSpan.FromSeconds(30) };
+    private bool hasOpenTickets;
 
     public MyTicketsDialog()
     {
         InitializeComponent();
-        refreshTimer.Tick += async (_, _) => { if (Tickets.IsEnabled) await RefreshAsync(); };
+        refreshTimer.Tick += async (_, _) => { if (Tickets.IsEnabled && hasOpenTickets) await RefreshAsync(); };
         Closed += (_, _) => { isClosed = true; refreshTimer.Stop(); refreshRequest++; selectionRequest++; };
     }
 
     private bool isClosed;
-    private async void Window_Loaded(object sender, RoutedEventArgs e) { await RefreshAsync(); if (!isClosed) refreshTimer.Start(); }
+    private async void Window_Loaded(object sender, RoutedEventArgs e) { await RefreshAsync(); }
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
 
     private async Task RefreshAsync()
@@ -59,13 +61,16 @@ public partial class MyTicketsDialog : Window
             var selected = (Tickets.SelectedItem as Ticket)?.Id;
             Tickets.ItemsSource = data.RootElement.EnumerateArray().Select(item => new Ticket(
                 item.GetProperty("requestId").GetGuid(), item.GetProperty("title").GetString() ?? "",
-                item.TryGetProperty("workflowState", out var workflow) && workflow.GetString() is "completed" or "cancelled"
-                    ? workflow.GetString()! : item.GetProperty("status").GetString() ?? "", item.GetProperty("issueId").ValueKind == JsonValueKind.Null
+                item.TryGetProperty("workflowState", out var workflow) && workflow.GetString() is { } workflowValue && IsClosedWorkflow(workflowValue)
+                    ? workflowValue : item.GetProperty("status").GetString() ?? "", item.GetProperty("issueId").ValueKind == JsonValueKind.Null
                     ? null : item.GetProperty("issueId").GetInt64(),
                 item.TryGetProperty("description", out var description) ? description.GetString() ?? "" : "",
                 item.TryGetProperty("createdAt", out var created) ? created.GetDateTime() : null,
-                item.TryGetProperty("remoteStatus", out var remote) ? remote.GetString() : null)).ToArray();
+                item.TryGetProperty("remoteStatus", out var remote) ? remote.GetString() : null,
+                item.TryGetProperty("workflowState", out var workflowState) ? workflowState.GetString() : null)).ToArray();
             var tickets = (Ticket[])Tickets.ItemsSource;
+            hasOpenTickets = tickets.Any(ticket => !ticket.IsClosed);
+            if (hasOpenTickets && !isClosed) refreshTimer.Start(); else refreshTimer.Stop();
             EmptyTickets.Visibility = tickets.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
             Tickets.SelectedItem = tickets.FirstOrDefault(t => t.Id == selected) ?? tickets.FirstOrDefault();
             StatusText.Text = "";
@@ -77,8 +82,9 @@ public partial class MyTicketsDialog : Window
     {
         var request = ++selectionRequest;
         Messages.ItemsSource = null;
-        ReplyBody.IsEnabled = AttachButton.IsEnabled = SendButton.IsEnabled = Tickets.SelectedItem is Ticket;
-        if (Tickets.SelectedItem is not Ticket ticket) { TicketHeader.Text = "Выберите заявку"; TicketState.Text = ""; return; }
+        var selectedTicket = Tickets.SelectedItem as Ticket;
+        ReplyBody.IsEnabled = AttachButton.IsEnabled = SendButton.IsEnabled = selectedTicket is { IsClosed: false };
+        if (selectedTicket is not Ticket ticket) { TicketHeader.Text = "Выберите заявку"; TicketState.Text = ""; return; }
         if (draftTicket != ticket.Id)
         {
             ReplyBody.Clear(); files.Clear(); AttachmentLabel.Text = "";
@@ -113,7 +119,7 @@ public partial class MyTicketsDialog : Window
 
     private async void Send_Click(object sender, RoutedEventArgs e)
     {
-        if (Tickets.SelectedItem is not Ticket ticket || string.IsNullOrWhiteSpace(ReplyBody.Text)) return;
+        if (Tickets.SelectedItem is not Ticket ticket || ticket.IsClosed || string.IsNullOrWhiteSpace(ReplyBody.Text)) return;
         SendButton.IsEnabled = false;
         Tickets.IsEnabled = false;
         RefreshButton.IsEnabled = ReplyBody.IsEnabled = AttachButton.IsEnabled = false;
@@ -127,11 +133,15 @@ public partial class MyTicketsDialog : Window
             ReplyBody.Clear(); files.Clear(); AttachmentLabel.Text = "";
             Tickets_SelectionChanged(this, null!);
         }
-        catch (Exception ex) { StatusText.Text = ex.Message; }
+        catch (Exception ex)
+        {
+            StatusText.Text = ex.Message;
+            await RefreshAsync();
+        }
         finally
         {
             Tickets.IsEnabled = RefreshButton.IsEnabled = true;
-            SendButton.IsEnabled = ReplyBody.IsEnabled = AttachButton.IsEnabled = Tickets.SelectedItem is Ticket;
+            SendButton.IsEnabled = ReplyBody.IsEnabled = AttachButton.IsEnabled = Tickets.SelectedItem is Ticket { IsClosed: false };
         }
     }
 
@@ -188,4 +198,5 @@ public partial class MyTicketsDialog : Window
     }
 
     private static string PlainText(string html) => WebUtility.HtmlDecode(Regex.Replace(html, "<[^>]+>", " "));
+    private static bool IsClosedWorkflow(string? state) => state is "completed" or "cancelled" or "canceled" or "closed" or "resolved";
 }

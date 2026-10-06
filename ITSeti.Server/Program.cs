@@ -309,6 +309,7 @@ app.MapGet("/api/v1/ticket-updates", async (HttpRequest request, NpgsqlDataSourc
             SELECT m.id,m.request_id,r.title,m.created_at FROM ticket_messages m
             JOIN ticket_requests r ON r.request_id=m.request_id
             WHERE r.device_id=@device AND m.is_public AND m.direction='engineer'
+              AND r.workflow_state NOT IN ('completed','cancelled','canceled','closed','resolved')
               AND (m.created_at,m.id)>(@since,@after) AND m.created_at<=@until
             ORDER BY m.created_at,m.id LIMIT 101
             """, connection);
@@ -515,6 +516,17 @@ app.MapPost("/api/v1/tickets/{requestId:guid}/messages", async (Guid requestId, 
         !Guid.TryParse(request.Headers[DeviceKeys.IdHeader].ToString(), out var deviceId)) return Results.Unauthorized();
     if (body.MessageId == Guid.Empty || string.IsNullOrWhiteSpace(body.Content) || body.Content.Trim().Length > 5000)
         return Results.BadRequest(new { error = "Введите сообщение до 5000 символов." });
+    await using var stateConnection = await db.OpenConnectionAsync();
+    await using var stateCommand = new NpgsqlCommand("""
+        SELECT workflow_state FROM ticket_requests
+        WHERE request_id=@request AND device_id=@device
+        """, stateConnection);
+    stateCommand.Parameters.AddWithValue("request", requestId);
+    stateCommand.Parameters.AddWithValue("device", deviceId);
+    var workflowState = await stateCommand.ExecuteScalarAsync() as string;
+    if (workflowState is null) return Results.NotFound();
+    if (workflowState is "completed" or "cancelled" or "canceled" or "closed" or "resolved")
+        return Results.Conflict(new { error = "ticket_closed", message = "Нельзя добавить сообщение в закрытую заявку." });
     IReadOnlyList<TicketAttachment> files;
     try { files = TicketAttachments.Decode(body.Attachments); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }

@@ -36,7 +36,7 @@ internal sealed class TicketMessagePoller : IDisposable
         timer.Tick += async (_, _) => await PollAsync();
     }
 
-    public void Start() { if (!disposed) { timer.Start(); _ = PollAsync(); } }
+    public void Start() { if (!disposed) _ = PollAsync(); }
     public void RefreshSoon() { if (!disposed) _ = PollAsync(); }
 
     internal async Task PollAsync()
@@ -89,8 +89,16 @@ internal sealed class TicketMessagePoller : IDisposable
                 File.Move(temporary, statePath, true);
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
-            timer.Interval = TimeSpan.FromSeconds(root.GetProperty("hasMore").GetBoolean() ? 1 : HasActiveTickets ? 30 : 120);
-            if (!HasActiveTickets && incoming.Length == 0 && owner.IsVisible) DisposeTray();
+            if (HasActiveTickets || incoming.Length > 0)
+            {
+                timer.Interval = TimeSpan.FromSeconds(root.GetProperty("hasMore").GetBoolean() ? 1 : 30);
+                timer.Start();
+            }
+            else
+            {
+                timer.Stop();
+                if (owner.IsVisible) DisposeTray();
+            }
         }
         catch (OperationCanceledException) when (disposed) { }
         catch (Exception ex) when (ex is System.Net.Http.HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or ArgumentException or KeyNotFoundException or FormatException)
