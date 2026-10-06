@@ -1,5 +1,19 @@
 param([string]$Component, [switch]$AutoUpdate, [switch]$CatalogOnly)
 $ErrorActionPreference = 'Stop'
+$requestedComponent = $Component
+function Normalize-ComponentKey([string]$Value) {
+    $normalized = ([string]$Value).Trim().ToLowerInvariant()
+    switch -Regex ($normalized) {
+        '^anydesk(\s+service)?$' { return 'anydesk' }
+        '^rms(\s+host)?$' { return 'rms' }
+        '^ocs(\s+inventory)?$' { return 'ocs' }
+        '^panel$|^desktop\s*info$' { return 'panel' }
+        '^winrar$' { return 'winrar' }
+        '^yandex(\s+browser)?$' { return 'yandex' }
+        default { return $normalized }
+    }
+}
+$componentKey = if ([string]::IsNullOrWhiteSpace($Component)) { $null } else { Normalize-ComponentKey $Component }
 $root = Join-Path $env:ProgramData 'ITSeti\Maintenance'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 if ($identity.User.Value -ne 'S-1-5-18') { throw 'Server software worker requires SYSTEM.' }
@@ -67,12 +81,12 @@ try {
         Move-Item -LiteralPath $temporary -Destination $cache -Force
     } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
     if ($CatalogOnly) { exit 0 }
-    $selected = @($catalog | Where-Object { $_.platform -in @('windows','any') -and $_.key -ne 'application' })
-    if ($Component) { $selected = @($selected | Where-Object { $_.key -eq $Component }) }
+    $selected = @($catalog | Where-Object { $_.platform -in @('windows','any') -and ([string]$_.key).Trim().ToLowerInvariant() -ne 'application' })
+    if ($componentKey) { $selected = @($selected | Where-Object { Normalize-ComponentKey ([string]$_.key) -eq $componentKey }) }
     elseif (!$AutoUpdate) { $selected = @($selected | Where-Object { $_.key -notin @('winrar','yandex') -and $_.key -in @('rms','anydesk','ocs','panel') }) }
     # A platform-specific package takes precedence over a generic package.
-    $selected = @($selected | Group-Object key | ForEach-Object { $_.Group | Sort-Object @{Expression={if($_.platform -eq 'windows'){0}else{1}}} | Select-Object -First 1 })
-    if ($Component -and !$selected.Count) { throw 'Selected component is absent from the current server catalog.' }
+    $selected = @($selected | Group-Object { Normalize-ComponentKey ([string]$_.key) } | ForEach-Object { $_.Group | Sort-Object @{Expression={if($_.platform -eq 'windows'){0}else{1}}} | Select-Object -First 1 })
+    if ($componentKey -and !$selected.Count) { throw "Selected component '$requestedComponent' is absent from the current server catalog." }
     $failures = @()
     foreach ($package in $selected) {
         try {

@@ -5,13 +5,15 @@ $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $Root 'src\IT
 if($errors){throw ($errors -join '; ')}
 $validator=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Assert-ServerPackage'},$true)
 . ([scriptblock]::Create($validator.Extent.Text))
+$normalizer=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Normalize-ComponentKey'},$true)
+. ([scriptblock]::Create($normalizer.Extent.Text))
 $body=@($ast.EndBlock.Statements | Where-Object {$_ -is [Management.Automation.Language.TryStatementAst]})
 if($body.Count -ne 1){throw 'Worker body could not be isolated for fixture execution.'}
 $worker=[scriptblock]::Create($body[0].Extent.Text)
 $fixture=Join-Path $env:TEMP ('ITSeti-software-fixture-'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null
 $root=$fixture
-$CatalogOnly=$false; $AutoUpdate=$false; $Component='RMS'; $locked=$false
+$CatalogOnly=$false; $AutoUpdate=$false; $Component=' RMS Host '; $locked=$false
 $script:installCalls=0; $script:installed=$false
 $script:packageBytes=[Text.Encoding]::UTF8.GetBytes('unsigned fixture never executed')
 $sha=[Security.Cryptography.SHA256]::Create()
@@ -45,6 +47,8 @@ function New-FixtureMutex {
     return $value
 }
 try {
+    if ((Normalize-ComponentKey ' OCS Inventory ') -ne 'ocs') { throw 'OCS display name was not normalized.' }
+    if ((Normalize-ComponentKey 'RMS Host') -ne 'rms') { throw 'RMS display name was not normalized.' }
     $script:package=$package
     $mutex=New-FixtureMutex
     & $worker

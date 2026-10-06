@@ -66,7 +66,7 @@ try {
         if (!(Test-Path -LiteralPath $serverWorker -PathType Leaf)) { throw 'Trusted server software worker is missing.' }
         $powershell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
         $arguments = '-NoProfile -ExecutionPolicy Bypass -File "'+$serverWorker+'"'
-        if ($component) { $arguments += ' -Component '+$component }
+        if ($component) { $arguments += ' -Component "'+$component.Trim()+'"' }
         $process = Start-Process -FilePath $powershell -ArgumentList $arguments -WindowStyle Hidden -PassThru -Wait
         if ($process.ExitCode -ne 0) { throw 'Server software installation failed. Inspect server-software-error.txt.' }
         [IO.File]::WriteAllText($temporary,'OK',[Text.UTF8Encoding]::new($false))
