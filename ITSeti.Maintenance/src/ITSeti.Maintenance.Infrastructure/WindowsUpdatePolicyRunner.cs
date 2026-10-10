@@ -32,33 +32,44 @@ public sealed class WindowsUpdatePolicyRunner
     private static async Task<string> RunTaskAsync(string taskName, string action)
     {
         var previous = ReadResult()?.UpdatedAt ?? DateTimeOffset.MinValue;
-        Process? process;
-        try { process = Process.Start(new ProcessStartInfo("schtasks.exe")
+        var operation = action == "Disable"
+            ? MaintenanceServiceOperation.DisableWindowsUpdates
+            : MaintenanceServiceOperation.RestoreWindowsUpdates;
+        var service = await MaintenanceServiceClient.StartAsync(operation);
+        if (service.Connected)
         {
-            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
-            ArgumentList = { "/Run", "/TN", taskName }
-        }); }
-        catch (Exception ex) when (IsAdministrator() && ex is Win32Exception or InvalidOperationException or UnauthorizedAccessException)
-        { return await RunScriptDirectAsync(action); }
-        if (process is null)
-        {
-            if (IsAdministrator()) return await RunScriptDirectAsync(action);
-            throw new InvalidOperationException("Не удалось запустить системную задачу Windows Update.");
+            if (!service.Accepted) throw new InvalidOperationException(service.Message);
         }
-        using (process)
+        else
         {
-        var output = process.StandardOutput.ReadToEndAsync();
-        var error = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        if (process.ExitCode != 0)
-        {
-            _ = await error;
-            _ = await output;
-            if (IsAdministrator()) return await RunScriptDirectAsync(action);
-            throw new InvalidOperationException($"Задача Windows Update недоступна (код {process.ExitCode}).");
-        }
-        _ = await error;
-        _ = await output;
+            Process? process;
+            try { process = Process.Start(new ProcessStartInfo("schtasks.exe")
+            {
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+                ArgumentList = { "/Run", "/TN", taskName }
+            }); }
+            catch (Exception ex) when (IsAdministrator() && ex is Win32Exception or InvalidOperationException or UnauthorizedAccessException)
+            { return await RunScriptDirectAsync(action); }
+            if (process is null)
+            {
+                if (IsAdministrator()) return await RunScriptDirectAsync(action);
+                throw new InvalidOperationException("Не удалось запустить системную задачу Windows Update.");
+            }
+            using (process)
+            {
+                var output = process.StandardOutput.ReadToEndAsync();
+                var error = process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                if (process.ExitCode != 0)
+                {
+                    _ = await error;
+                    _ = await output;
+                    if (IsAdministrator()) return await RunScriptDirectAsync(action);
+                    throw new InvalidOperationException($"Задача Windows Update недоступна (код {process.ExitCode}).");
+                }
+                _ = await error;
+                _ = await output;
+            }
         }
 
         var deadline = DateTime.UtcNow.AddSeconds(20);

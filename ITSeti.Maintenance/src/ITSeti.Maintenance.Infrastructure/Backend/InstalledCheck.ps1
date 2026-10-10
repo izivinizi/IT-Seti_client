@@ -63,7 +63,7 @@ function Read-FreshTemperature([string]$Path,[int]$MaximumAgeSeconds) {
 }
 $sharedTemperatureFile=Join-Path $base 'cpu-temperature.json'
 $cpuTemperatureFile=Join-Path $run 'cpu-temperature.json'
-$sensor=Read-FreshTemperature $sharedTemperatureFile 45
+$sensor=Read-FreshTemperature $sharedTemperatureFile 90
 if($null -eq $sensor) {
     $probeStartedAt=[DateTimeOffset]::UtcNow
     try {

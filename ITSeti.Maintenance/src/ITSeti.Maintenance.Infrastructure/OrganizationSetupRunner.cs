@@ -18,11 +18,6 @@ public static class OrganizationSetupRunner
         ["OCS"] = new("OCS-Agent-Installerv4.exe", "EA1239BD75C43A85F89BD5813B64D9D0789F8E598EA24F29B2B28CE1F012ED3D"),
         ["Panel"] = new("DesktopInfo3230.exe", "BE653BF81088855640BD7F2D42D682BCB2731C71F390A83928D68AB6E707021C")
     };
-    private static readonly IReadOnlyDictionary<string, Package> BundledPackages = new Dictionary<string, Package>(StringComparer.Ordinal)
-    {
-        ["WinRAR"] = new("winrar-x64-723ru.exe", "831EE7523E1D9D542DDA1531E88D9F229312F2392CD7A99F9B9C885AB70604F2"),
-        ["Yandex"] = new("Yandex.exe", "E761361E28510C954A7F60A49E625EE1ECCC318CA1D0F05D7255A05E3E7DF4AF")
-    };
     private static readonly IReadOnlyDictionary<string, string> PanelFileHashes = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["DesktopInfo.ini"] = "8DC7F238E102200846E193B61A3EF53B592B0396190562E823F571BD0F94EEF8",
@@ -41,17 +36,6 @@ public static class OrganizationSetupRunner
             if (component is not null && !catalog.Any(x => x.Key.Equals(component,StringComparison.OrdinalIgnoreCase)))
                 return ["Выбранного компонента нет в актуальном каталоге сервера."];
             return [];
-        }
-        if (component is not null && BundledPackages.TryGetValue(component, out var bundled))
-        {
-            var bundledPath = Path.Combine(AppContext.BaseDirectory, "Tools", "Software", bundled.FileName);
-            if (!File.Exists(bundledPath)) return [$"В комплекте приложения нет {bundled.FileName}."];
-            using var bundledStream = File.OpenRead(bundledPath);
-            var bundledHash = Convert.ToHexString(await SHA256.HashDataAsync(bundledStream));
-            if (!bundledHash.Equals(bundled.Sha256, StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(await Task.Run(() => VerifyAuthenticode(bundledPath)), "Valid", StringComparison.Ordinal))
-                problems.Add($"{bundled.FileName}: неверный хеш или подпись установщика.");
-            return problems;
         }
         if (component is not null && !Packages.ContainsKey(component)) return ["Неизвестный компонент установки."];
         var bundledDirectory = OrganizationSoftwareAudit.FindBundledDirectory();
@@ -182,12 +166,6 @@ public static class OrganizationSetupRunner
     public static async Task<int> RunComponentAsync(string component, IProgress<string>? progress = null)
         => await RunAsync(component, "Install", progress);
 
-    public static async Task<int> RunBundledComponentAsync(string component, IProgress<string>? progress = null)
-    {
-        if (!BundledPackages.ContainsKey(component)) throw new ArgumentException("Неизвестный компонент приложения.", nameof(component));
-        return await RunAsync(component, "Install", progress);
-    }
-
     public static async Task<int> RunUninstallComponentAsync(string component, IProgress<string>? progress = null)
         => await RunAsync(component, "Uninstall", progress);
 
@@ -199,11 +177,8 @@ public static class OrganizationSetupRunner
         if (component is null && operation != "Install") throw new InvalidOperationException("Для действия требуется выбрать компонент.");
         if (operation == "Install")
         {
-            if (!File.Exists(Path.Combine(MaintenanceRoot,"server-device.json")) && (component is null || !BundledPackages.ContainsKey(component)))
-            {
-                if (OrganizationSoftwareAudit.FindBundledDirectory() is null)
+            if (!File.Exists(Path.Combine(MaintenanceRoot, "server-device.json")))
                 throw new InvalidOperationException("ПК не подключён к серверу ИТ-Сети. Управляемое ПО устанавливается из серверного каталога.");
-            }
             var problems = await CheckAsync(component);
             if (problems.Count > 0) throw new InvalidOperationException(string.Join(Environment.NewLine, problems));
         }
@@ -218,6 +193,13 @@ public static class OrganizationSetupRunner
         await File.WriteAllTextAsync(request, JsonSerializer.Serialize(new { Component = component, Operation = operation }), new UTF8Encoding(false));
         try
         {
+            var service = await MaintenanceServiceClient.StartAsync(MaintenanceServiceOperation.OrganizationSetup);
+            if (service.Connected)
+            {
+                if (!service.Accepted) throw new InvalidOperationException(service.Message);
+            }
+            else
+            {
             using var task = new Process
             {
                 StartInfo = new ProcessStartInfo("schtasks.exe")
@@ -235,8 +217,9 @@ public static class OrganizationSetupRunner
             await task.WaitForExitAsync();
             if (task.ExitCode != 0)
                 throw new InvalidOperationException($"Не удалось запустить системную установку (код {task.ExitCode}). Проверьте регистрацию задачи ITSeti-Maintenance-OrganizationSetup.");
+            }
 
-            progress?.Report("Системная установка запущена. Проверяем подписанные пакеты…");
+            progress?.Report("Системная установка запущена без запроса UAC. Проверяем подписанные пакеты…");
             var deadline = DateTime.UtcNow.AddMinutes(90);
             while (DateTime.UtcNow < deadline)
             {

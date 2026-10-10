@@ -209,6 +209,12 @@ public partial class App : Application
 
     private static async Task RunScheduledFullRetryAsync()
     {
+        var service = await MaintenanceServiceClient.StartAsync(MaintenanceServiceOperation.ScheduledFullCheck);
+        if (service.Connected)
+        {
+            if (!service.Accepted) throw new InvalidOperationException(service.Message);
+            return;
+        }
         using var process = new Process { StartInfo = new ProcessStartInfo("schtasks.exe")
         {
             UseShellExecute = false, CreateNoWindow = true,

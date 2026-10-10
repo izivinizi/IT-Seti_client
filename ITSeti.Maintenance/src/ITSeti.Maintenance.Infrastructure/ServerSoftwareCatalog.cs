@@ -14,13 +14,21 @@ public static class ServerSoftwareCatalog
     {
         if (!IsConnected) return;
         var before = File.GetLastWriteTimeUtc(CachePath);
-        using var process = Process.Start(new ProcessStartInfo("schtasks.exe")
+        var service = await MaintenanceServiceClient.StartAsync(MaintenanceServiceOperation.RefreshSoftwareCatalog);
+        if (service.Connected)
         {
-            UseShellExecute = false, CreateNoWindow = true,
-            ArgumentList = { "/Run", "/TN", "ITSeti-Maintenance-Catalog" }
-        }) ?? throw new IOException("Не удалось запустить получение каталога ПО.");
-        await process.WaitForExitAsync();
-        if (process.ExitCode != 0) throw new IOException("Задача получения ПО недоступна. Установите обновлённую версию приложения.");
+            if (!service.Accepted) throw new IOException(service.Message);
+        }
+        else
+        {
+            using var process = Process.Start(new ProcessStartInfo("schtasks.exe")
+            {
+                UseShellExecute = false, CreateNoWindow = true,
+                ArgumentList = { "/Run", "/TN", "ITSeti-Maintenance-Catalog" }
+            }) ?? throw new IOException("Не удалось запустить получение каталога ПО.");
+            await process.WaitForExitAsync();
+            if (process.ExitCode != 0) throw new IOException("Задача получения ПО недоступна. Установите обновлённую версию приложения.");
+        }
         var deadline = DateTime.UtcNow.AddSeconds(35);
         while (DateTime.UtcNow < deadline)
         {

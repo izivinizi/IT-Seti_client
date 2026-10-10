@@ -29,6 +29,7 @@ Remove-Item -LiteralPath (Join-Path $data 'installed.flag'),(Join-Path $data 'in
 $installStage='Проверка файлов приложения и инструментов'
 $sourceApp=if($PreinstalledApp){$InstallRoot}else{Join-Path $PackageRoot 'App'}
 $sourceTools=if($PreinstalledApp){Join-Path $InstallRoot 'Tools'}else{Join-Path $PackageRoot 'Tools'}
+$sourceService=if($PreinstalledApp){Join-Path $InstallRoot 'Service'}else{Join-Path $PackageRoot 'Service'}
 if(!(Test-Path -LiteralPath (Join-Path $sourceApp 'ITSeti.Maintenance.exe') -PathType Leaf)){throw 'Published application is missing.'}
 foreach($relative in @('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe','PawnIO\PawnIO_setup.exe')){
     if(!(Test-Path -LiteralPath (Join-Path $sourceTools $relative) -PathType Leaf)){throw "Tool is missing: $relative"}
@@ -36,6 +37,8 @@ foreach($relative in @('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDi
 foreach($relative in @('Panel\DesktopInfo.ini','Panel\update-support-ids.ps1','Panel\start-panel.vbs')){
     if(!(Test-Path -LiteralPath (Join-Path $sourceApp $relative) -PathType Leaf)){throw "Файл панели отсутствует: $relative"}
 }
+$serviceExe=Join-Path $InstallRoot 'Service\ITSeti.Maintenance.Service.exe'
+if(!(Test-Path -LiteralPath (Join-Path $sourceService 'ITSeti.Maintenance.Service.exe') -PathType Leaf)){throw 'Maintenance service executable is missing.'}
 $install=$InstallRoot
 $installStage='Создание каталогов и копирование файлов'
 New-Item -ItemType Directory -Path $install,$data,(Join-Path $data 'Runs'),(Join-Path $data 'Repairs'),(Join-Path $data 'CleanupRequests'),(Join-Path $data 'CleanupRuns'),(Join-Path $data 'WindowsUpdate'),(Join-Path $data 'OrganizationSetupRequests'),(Join-Path $data 'OrganizationSetupRuns') -Force | Out-Null
@@ -43,7 +46,12 @@ Remove-Item -LiteralPath (Join-Path $install 'Setup') -Recurse -Force -ErrorActi
 New-Item -ItemType Directory -Path (Join-Path $install 'Backend') -Force | Out-Null
 if(!$PreinstalledApp){Get-ChildItem -LiteralPath $sourceApp -Force | Copy-Item -Destination $install -Recurse -Force}
 if(!$PreinstalledApp){
-    foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO','Software')){
+    $serviceTarget=Join-Path $install 'Service'
+    New-Item -ItemType Directory -Path $serviceTarget -Force | Out-Null
+    Get-ChildItem -LiteralPath $sourceService -Force | Copy-Item -Destination $serviceTarget -Recurse -Force
+}
+if(!$PreinstalledApp){
+    foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO')){
         $source=Join-Path $sourceTools $folder
         if(Test-Path -LiteralPath $source -PathType Container){
             $target=Join-Path (Join-Path $install 'Tools') $folder
@@ -53,6 +61,7 @@ if(!$PreinstalledApp){
     }
 }
 Remove-Item -LiteralPath (Join-Path $install 'Backend\Install-OrganizationSoftware.ps1') -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $install 'Tools\Software') -Recurse -Force -ErrorAction SilentlyContinue
 $pawnIoInstaller=Join-Path $sourceTools 'PawnIO\PawnIO_setup.exe'
 $pawnIoLog=Join-Path $data 'cpu-sensor-driver.txt'
 $pawnIoHash='1F519A22E47187F70A1379A48CA604981C4FCF694F4E65B734AAA74A9FBA3032'
@@ -186,6 +195,37 @@ try {
     Write-InstallLog ('Не удалось зарегистрировать обязательные системные задачи: '+$_.Exception.ToString())
     throw
 }
+$installStage='Регистрация системной службы'
+$serviceName='ITSetiMaintenanceService'
+$existingService=Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+if($existingService){
+    if($existingService.Status -ne 'Stopped'){
+        Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+        for($attempt=0;$attempt -lt 80;$attempt++){
+            $state=(Get-Service -Name $serviceName -ErrorAction SilentlyContinue).Status
+            if($state -eq 'Stopped'){break}
+            Start-Sleep -Milliseconds 250
+        }
+        if((Get-Service -Name $serviceName -ErrorAction Stop).Status -ne 'Stopped'){throw 'Служба не остановилась перед обновлением.'}
+    }
+    & sc.exe config $serviceName binPath= ('"'+$serviceExe+'"') start= delayed-auto obj= LocalSystem DisplayName= 'ИТ-Сети: обслуживание ПК' | Out-Null
+    if($LASTEXITCODE -ne 0){throw 'Не удалось обновить регистрацию службы.'}
+}else{
+    New-Service -Name $serviceName -BinaryPathName ('"'+$serviceExe+'"') -DisplayName 'ИТ-Сети: обслуживание ПК' -Description 'Диагностика, мониторинг и системные операции ИТ-Сети.' -StartupType Automatic | Out-Null
+}
+& sc.exe config $serviceName start= delayed-auto | Out-Null
+if($LASTEXITCODE -ne 0){throw 'Не удалось включить отложенный автоматический запуск службы.'}
+& sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
+if($LASTEXITCODE -ne 0){throw 'Не удалось настроить восстановление службы.'}
+& sc.exe description $serviceName 'Диагностика, мониторинг и системные операции ИТ-Сети.' | Out-Null
+Start-Service -Name $serviceName -ErrorAction Stop
+for($attempt=0;$attempt -lt 120;$attempt++){
+    $registeredService=Get-Service -Name $serviceName -ErrorAction Stop
+    if($registeredService.Status -eq 'Running'){break}
+    Start-Sleep -Milliseconds 250
+}
+if((Get-Service -Name $serviceName -ErrorAction Stop).Status -ne 'Running'){throw 'Служба не перешла в состояние Running.'}
+Write-InstallLog ('Служба '+$serviceName+' зарегистрирована и запущена.')
 $installStage='Завершение установки'
 $legacyTask=Get-ScheduledTask -TaskName 'ITSeti-Maintenance-FullRepair' -ErrorAction SilentlyContinue
 if($legacyTask){Unregister-ScheduledTask -TaskName 'ITSeti-Maintenance-FullRepair' -Confirm:$false}
@@ -206,6 +246,6 @@ if($PreinstalledApp){
     }
 }
 [IO.File]::WriteAllText((Join-Path $data 'installed.flag'),'ITSeti-Maintenance-Full',[Text.Encoding]::ASCII)
-[IO.File]::WriteAllText((Join-Path $data 'install-status.txt'),'OK: все обязательные системные задачи зарегистрированы.',[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $data 'install-status.txt'),'OK: системная служба и резервные задачи зарегистрированы.',[Text.UTF8Encoding]::new($false))
 if(!(Test-Path -LiteralPath (Join-Path $data 'installed.flag') -PathType Leaf)){throw 'Installation marker was not written.'}
 Write-Host "Installed to $install. Users may launch the application without elevation."

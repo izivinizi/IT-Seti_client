@@ -36,7 +36,7 @@ try {
     $currentVersion = ConvertTo-AppVersion $currentText
     $manifestUrl = "https://raw.githubusercontent.com/$repository/main/release.json"
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $release = Invoke-RestMethod -Uri $manifestUrl -Headers @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/1.2.2'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache' } -TimeoutSec 30
+    $release = Invoke-RestMethod -Uri $manifestUrl -Headers @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/2.3.1'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache' } -TimeoutSec 30
     $versionText = [string]$release.version
     $tag = [string]$release.tag
     if ($versionText -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$' -or $tag -cne "v$versionText") { throw 'В манифесте GitHub некорректная версия или тег.' }
@@ -65,7 +65,7 @@ try {
         Set-UpdateStatus "Найдена версия $latestVersion. Подготавливаю установщик."
         $request = [Net.HttpWebRequest]::Create($downloadUrl)
         $request.Method = 'GET'
-        $request.UserAgent = 'ITSeti-Maintenance-Updater/1.2.2'
+        $request.UserAgent = 'ITSeti-Maintenance-Updater/2.3.1'
         $request.Timeout = 30000
         $request.ReadWriteTimeout = 30000
         $response = $request.GetResponse()

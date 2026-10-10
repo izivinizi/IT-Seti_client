@@ -282,23 +282,35 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         try { waitForCompletion = File.ReadAllText(GetInstalledScriptPath()).Contains("completed.txt", StringComparison.Ordinal); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         var previous = File.Exists(latest) ? (await File.ReadAllTextAsync(latest)).Trim() : "";
-        using var launch = new Process { StartInfo = new ProcessStartInfo("schtasks.exe")
+        var operation = taskName == InstalledQuickTask
+            ? MaintenanceServiceOperation.QuickCheck : MaintenanceServiceOperation.FullCheck;
+        var service = await MaintenanceServiceClient.StartAsync(operation, cancellationToken);
+        if (service.Connected)
         {
-            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
-        } };
-        launch.StartInfo.ArgumentList.Add("/Run");
-        launch.StartInfo.ArgumentList.Add("/TN");
-        launch.StartInfo.ArgumentList.Add(taskName);
-        progress.Report(new("Запуск установленной проверки без запроса UAC"));
-        try { launch.Start(); }
-        catch (Exception ex) when (ex is Win32Exception or UnauthorizedAccessException)
-        {
-            throw new InstalledTaskUnavailableException(ex.Message, ex);
+            if (!service.Accepted) throw new InvalidOperationException(service.Message);
+            progress.Report(new("Проверка запущена системной службой без запроса UAC"));
         }
-        var standard = launch.StandardOutput.ReadToEndAsync();
-        var errors = launch.StandardError.ReadToEndAsync();
-        await launch.WaitForExitAsync();
-        if (launch.ExitCode != 0) throw new InstalledTaskUnavailableException($"Код {launch.ExitCode}");
+        else
+        {
+            using var launch = new Process { StartInfo = new ProcessStartInfo("schtasks.exe")
+            {
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
+            } };
+            launch.StartInfo.ArgumentList.Add("/Run");
+            launch.StartInfo.ArgumentList.Add("/TN");
+            launch.StartInfo.ArgumentList.Add(taskName);
+            progress.Report(new("Запуск резервной системной задачи без запроса UAC"));
+            try { launch.Start(); }
+            catch (Exception ex) when (ex is Win32Exception or UnauthorizedAccessException)
+            {
+                throw new InstalledTaskUnavailableException(ex.Message, ex);
+            }
+            var standard = launch.StandardOutput.ReadToEndAsync();
+            var errors = launch.StandardError.ReadToEndAsync();
+            await launch.WaitForExitAsync();
+            if (launch.ExitCode != 0)
+                throw new InstalledTaskUnavailableException($"Код {launch.ExitCode}: {(await errors).Trim()} {(await standard).Trim()}");
+        }
 
         var deadline = DateTime.UtcNow.AddSeconds(20);
         string? root = null;
@@ -392,6 +404,10 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
 
     private static async Task StopInstalledTaskAsync(string taskName)
     {
+        var operation = taskName == InstalledQuickTask
+            ? MaintenanceServiceOperation.QuickCheck : MaintenanceServiceOperation.FullCheck;
+        var service = await MaintenanceServiceClient.StopAsync(operation);
+        if (service.Connected && service.Accepted) return;
         using var stop = Process.Start(new ProcessStartInfo("schtasks.exe")
         {
             UseShellExecute = false, CreateNoWindow = true,

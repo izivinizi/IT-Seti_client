@@ -3,7 +3,7 @@
 [Setup]
 AppId={{CFA7B53D-16A9-4D77-9D82-EE68369AB185}
 AppName=ИТ-Сети Обслуживание ПК
-AppVersion=2.2.0
+AppVersion=2.3.1
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance
 DefaultGroupName=ИТ-Сети
@@ -28,6 +28,7 @@ Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Files]
 Source: "{#PackageRoot}\App\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PackageRoot}\Service\*"; DestDir: "{app}\Service"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PackageRoot}\Tools\*"; DestDir: "{app}\Tools"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "Install-Maintenance.ps1"; DestDir: "{tmp}\ITSeti-Package"; Flags: ignoreversion deleteafterinstall
 Source: "Uninstall-Maintenance.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -178,5 +179,22 @@ begin
     WizardForm.ProgressGauge.Style := npbstNormal;
     WizardForm.ProgressGauge.Position := WizardForm.ProgressGauge.Max;
     WizardForm.StatusLabel.Caption := 'Установка завершена.';
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Code: Integer;
+begin
+  Result := '';
+  if Exec(ExpandConstant('{sys}\sc.exe'), 'query ITSetiMaintenanceService', '', SW_HIDE,
+    ewWaitUntilTerminated, Code) and (Code = 0) then
+  begin
+    Exec(ExpandConstant('{sys}\sc.exe'), 'stop ITSetiMaintenanceService', '', SW_HIDE,
+      ewWaitUntilTerminated, Code);
+    if (not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+      '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$deadline=(Get-Date).AddSeconds(30); do { $service=Get-Service -Name ITSetiMaintenanceService -ErrorAction SilentlyContinue; if(!$service -or $service.Status -eq ''Stopped''){exit 0}; Start-Sleep -Milliseconds 250 } while((Get-Date) -lt $deadline); exit 1"',
+      '', SW_HIDE, ewWaitUntilTerminated, Code)) or (Code <> 0) then
+      Result := 'Не удалось остановить службу ИТ-Сети перед обновлением. Повторите установку после перезагрузки Windows.';
   end;
 end;

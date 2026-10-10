@@ -35,6 +35,12 @@ public static class ServerReportQueue
         }
         try
         {
+            var service = await MaintenanceServiceClient.StartAsync(MaintenanceServiceOperation.UploadReports);
+            if (service.Connected)
+            {
+                if (!service.Accepted) throw new InvalidOperationException(service.Message);
+                return;
+            }
             using var process = Process.Start(new ProcessStartInfo("schtasks.exe")
             {
                 UseShellExecute = false,

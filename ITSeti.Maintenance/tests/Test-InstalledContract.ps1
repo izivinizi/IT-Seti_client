@@ -138,21 +138,24 @@ if($defenderErrors -or !$defenderScript.Contains("ValidateSet('Status', 'Enable'
 }
 if($organizationRunner -match 'Verb\s*=\s*"runas"' -or !$organizationRunner.Contains('ITSeti-Maintenance-OrganizationSetup') -or
    !$organizationRunner.Contains('RunComponentAsync') -or !$organizationRunner.Contains('RunUninstallComponentAsync') -or !$organizationRunner.Contains('PanelFileHashes') -or
+   $organizationRunner.Contains('BundledPackages') -or $organizationRunner.Contains('Tools", "Software') -or
    !$organizationWorker.Contains('Join-Path $base ''server-device.json''') -or !$organizationWorker.Contains('ServerSoftware.ps1') -or
-   $organizationWorker -match 'Install-OrganizationSoftware.ps1' -or
+   $organizationWorker -match 'Install-OrganizationSoftware.ps1|Tools\\Software|Missing bundled installer' -or
    $organizationWorker -notmatch "Operation -eq 'Uninstall'" -or !$organizationWorker.Contains('ReadAllText($resultFromHelper') -or
    !$organizationWorker.Contains('Установочные файлы загружаются из серверного каталога') -or
-   !$organizationWorker.Contains('[IO.File]::ReadAllText($request.FullName,[Text.Encoding]::UTF8)')) {
+   !$organizationWorker.Contains('[IO.File]::ReadAllText($request.FullName,[Text.Encoding]::UTF8)') -or
+   $packageBuilder -match 'foreach\(\$folder in @\([^\r\n]*''Software''') {
     throw 'Organization software installation must use the server catalog through the SYSTEM task.'
 }
 $softwareView=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml'),[Text.Encoding]::UTF8)
 $softwareCode=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml.cs'),[Text.Encoding]::UTF8)
+$appProject=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj'),[Text.Encoding]::UTF8)
 $softwareAudit=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\OrganizationSoftwareAudit.cs'),[Text.Encoding]::UTF8)
 $systemTools=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\SystemToolsLauncher.cs'),[Text.Encoding]::UTF8)
 $setupUninstaller=[IO.File]::ReadAllText((Join-Path $Root 'OrganizationUninstall.ps1'),[Text.Encoding]::UTF8)
 $supportView=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\SupportDialog.xaml'),[Text.Encoding]::UTF8)
 $supportCode=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\SupportDialog.xaml.cs'),[Text.Encoding]::UTF8)
-if($softwareCode.Contains('MatchesPassword') -or !$softwareCode.Contains('ConfigureEngineerShell();') -or
+if(!$appProject.Contains('Tools\Software\**\*') -or $softwareCode.Contains('MatchesPassword') -or !$softwareCode.Contains('ConfigureEngineerShell();') -or
    !$softwareCode.Contains('HandoffToEngineer(launch.Process)') -or $softwareCode.Contains('ChooseOrganizationInstallMode') -or
    !$softwareAudit.Contains('"Установлено" => "Удалить"') -or
    !$softwareCode.Contains('RunUninstallComponentAsync') -or !$systemTools.Contains('"ms-settings:"') -or

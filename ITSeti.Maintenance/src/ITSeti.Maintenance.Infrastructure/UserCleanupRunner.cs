@@ -138,6 +138,12 @@ public sealed class UserCleanupRunner
 
     private static async Task StartInstalledTaskAsync()
     {
+        var service = await MaintenanceServiceClient.StartAsync(MaintenanceServiceOperation.Cleanup);
+        if (service.Connected)
+        {
+            if (!service.Accepted) throw new InvalidOperationException(service.Message);
+            return;
+        }
         using var task = new Process { StartInfo = new ProcessStartInfo("schtasks.exe")
         {
             UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true

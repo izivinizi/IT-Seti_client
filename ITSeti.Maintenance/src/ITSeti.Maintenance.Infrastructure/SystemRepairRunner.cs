@@ -49,6 +49,14 @@ public sealed class SystemRepairRunner
     private static async Task<string> StartInstalledAsync(IProgress<string>? progress)
     {
         var previous = ReadLatestRoot(InstalledRoot);
+        var service = await MaintenanceServiceClient.StartAsync(MaintenanceServiceOperation.Repair);
+        if (service.Connected)
+        {
+            if (!service.Accepted) throw new InvalidOperationException(service.Message);
+            progress?.Report("Восстановление запущено системной службой. Ожидаем начало DISM/SFC…");
+        }
+        else
+        {
         using var task = new Process { StartInfo = new ProcessStartInfo("schtasks.exe")
         {
             UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
@@ -63,6 +71,7 @@ public sealed class SystemRepairRunner
         await task.WaitForExitAsync();
         if (task.ExitCode != 0) throw new InvalidOperationException($"Задание восстановления недоступно (код {task.ExitCode}): {(await errors).Trim()} {(await output).Trim()}. Переустановите приложение.");
         progress?.Report("Задание Windows запущено. Ожидаем начало DISM/SFC…");
+        }
         var deadline = DateTime.UtcNow.AddSeconds(25);
         while (DateTime.UtcNow < deadline)
         {

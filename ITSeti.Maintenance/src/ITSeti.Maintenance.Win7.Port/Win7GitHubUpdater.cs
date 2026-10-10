@@ -194,7 +194,7 @@ namespace ITSeti.Maintenance.App
         private static WebClient NewClient()
         {
             var client = new TimeLimitedWebClient();
-            client.Headers[HttpRequestHeader.UserAgent] = "ITSeti-Maintenance-Win7/2.2.0";
+            client.Headers[HttpRequestHeader.UserAgent] = "ITSeti-Maintenance-Win7/2.3.1";
             client.Headers[HttpRequestHeader.CacheControl] = "no-cache";
             return client;
         }

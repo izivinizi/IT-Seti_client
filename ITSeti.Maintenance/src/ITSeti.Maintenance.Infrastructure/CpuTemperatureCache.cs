@@ -65,6 +65,8 @@ public static class CpuTemperatureCache
     {
         try
         {
+            var service = await MaintenanceServiceClient.StartAsync(MaintenanceServiceOperation.ProbeTemperature, cancellationToken);
+            if (service.Connected) return service.Accepted;
             var scheduler = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "schtasks.exe");
             using var process = Process.Start(new ProcessStartInfo(scheduler)
             {

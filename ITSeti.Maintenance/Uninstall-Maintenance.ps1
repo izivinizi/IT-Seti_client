@@ -4,6 +4,19 @@ if(!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::
 }
 $updatePolicy=Join-Path $PSScriptRoot 'Backend\Set-WindowsAutomaticUpdates.ps1'
 if(Test-Path -LiteralPath $updatePolicy){try {& $updatePolicy -Action Restore | Out-Null} catch {Write-Warning ('Не удалось восстановить прежнюю политику автообновлений: '+$_.Exception.Message)}}
+$serviceName='ITSetiMaintenanceService'
+$service=Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+if($service){
+    if($service.Status -ne 'Stopped'){
+        Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+        for($attempt=0;$attempt -lt 80;$attempt++){
+            $current=Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+            if(!$current -or $current.Status -eq 'Stopped'){break}
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    & sc.exe delete $serviceName | Out-Null
+}
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-Full' /F | Out-Null
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-QuickFull' /F | Out-Null
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-AutoQuick' /F | Out-Null

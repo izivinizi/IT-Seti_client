@@ -73,31 +73,6 @@ try {
         Move-Item -LiteralPath $temporary -Destination $result -Force
         return
     }
-    if($component -in @('WinRAR','Yandex')){
-        Remove-Item -LiteralPath $request.FullName -Force
-        $softwareRoot=Join-Path (Split-Path -Parent $PSScriptRoot) 'Tools\Software'
-        $package=if($component -eq 'WinRAR'){'winrar-x64-723ru.exe'}else{'Yandex.exe'}
-        $expected=if($component -eq 'WinRAR'){'831EE7523E1D9D542DDA1531E88D9F229312F2392CD7A99F9B9C885AB70604F2'}else{'E761361E28510C954A7F60A49E625EE1ECCC318CA1D0F05D7255A05E3E7DF4AF'}
-        $installer=Join-Path $softwareRoot $package
-        if(!(Test-Path -LiteralPath $installer -PathType Leaf)){throw "Missing bundled installer: $package"}
-        if((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne $expected){throw "Bundled installer hash mismatch: $package"}
-        if((Get-AuthenticodeSignature -LiteralPath $installer).Status -ne 'Valid'){throw "Bundled installer signature invalid: $package"}
-        $arguments=if($component -eq 'WinRAR'){@('/S')}else{@('--silent','--system-level','--do-not-launch-browser')}
-        $process=Start-Process -FilePath $installer -ArgumentList $arguments -WorkingDirectory $softwareRoot -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
-        if($process.ExitCode -notin @(0,3010)){throw "$component installer exited with code $($process.ExitCode)."}
-        $relative=if($component -eq 'WinRAR'){'WinRAR\WinRAR.exe'}else{'Yandex\YandexBrowser\Application\browser.exe'}
-        $deadline=[DateTime]::UtcNow.AddMinutes(2)
-        do {
-            $installed=@($env:ProgramFiles,${env:ProgramFiles(x86)}) | Where-Object { $_ } |
-                ForEach-Object { Join-Path $_ $relative } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
-            if($installed){break}
-            Start-Sleep -Seconds 2
-        } while([DateTime]::UtcNow -lt $deadline)
-        if(!$installed){throw "$component installer exited successfully, but no machine-wide installation was found. Check installer log and network access."}
-        [IO.File]::WriteAllText($temporary,'OK',[Text.UTF8Encoding]::new($false))
-        Move-Item -LiteralPath $temporary -Destination $result -Force
-        return
-    }
     throw 'Для установки управляемого ПО подключите ПК к серверу ИТ-Сети. Установочные файлы загружаются из серверного каталога.'
 } catch {
     [IO.File]::WriteAllText($temporary,$_.Exception.ToString(),[Text.UTF8Encoding]::new($false))

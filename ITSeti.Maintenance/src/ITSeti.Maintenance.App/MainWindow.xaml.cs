@@ -745,7 +745,6 @@ public partial class MainWindow : Window
             });
             if (component is not null) ViewModel.SetSetupComponentStatus(component, "Установка…");
             var exitCode = component is null ? await OrganizationSetupRunner.RunBaseAsync(progress)
-                : component is "WinRAR" or "Yandex" ? await OrganizationSetupRunner.RunBundledComponentAsync(component, progress)
                 : await OrganizationSetupRunner.RunComponentAsync(component, progress);
             ViewModel.RefreshSetupAudit();
             if (component is not null) ViewModel.SetSetupComponentStatus(component, "Установлено");

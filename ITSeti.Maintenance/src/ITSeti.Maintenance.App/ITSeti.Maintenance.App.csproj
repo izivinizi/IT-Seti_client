@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType><TargetFramework>net9.0-windows</TargetFramework><UseWPF>true</UseWPF><UseWindowsForms>true</UseWindowsForms>
-    <AssemblyName>ITSeti.Maintenance</AssemblyName><Version>2.2.0</Version><AssemblyVersion>2.2.0.0</AssemblyVersion><FileVersion>2.2.0.0</FileVersion>
+    <AssemblyName>ITSeti.Maintenance</AssemblyName><Version>2.3.1</Version><AssemblyVersion>2.3.1.0</AssemblyVersion><FileVersion>2.3.1.0</FileVersion>
     <ApplicationIcon>Assets\favicon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup><Using Remove="System.Windows.Forms" /><Using Remove="System.Drawing" /></ItemGroup>
@@ -16,7 +16,7 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
     <None Include="..\..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\..\Tools\**\*" Exclude="..\..\Tools\Tools.rar">
+    <Content Include="..\..\Tools\**\*" Exclude="..\..\Tools\Tools.rar;..\..\Tools\Software\**\*">
       <Link>Tools\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>Never</CopyToPublishDirectory>

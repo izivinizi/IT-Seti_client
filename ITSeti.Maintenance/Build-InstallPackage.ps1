@@ -5,17 +5,22 @@ $buildProject.Load((Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.App\ITSeti.M
 $buildVersion=[string]$buildProject.SelectSingleNode('/Project/PropertyGroup/Version').InnerText
 $parsedVersion=[Version]$buildVersion
 $testBuild=$env:ITSETI_TEST_BUILD -eq '1' -or $parsedVersion.Major -ge 2
-$betaSeries='{0}.{1}' -f $parsedVersion.Major,$parsedVersion.Minor
+$betaSeries=$parsedVersion.ToString(3)
 $installerBaseName='ITSeti-Maintenance-Setup'
 if($testBuild){
     $OutputRoot=Join-Path $PSScriptRoot "dist\ITSeti-Maintenance-$betaSeries"
     $installerBaseName="ITSeti-Maintenance-Setup-$betaSeries"
 }
+$distRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'dist')).TrimEnd('\')+'\'
+$outputFull=[IO.Path]::GetFullPath($OutputRoot)
+if(!$outputFull.StartsWith($distRoot,[StringComparison]::OrdinalIgnoreCase)){throw 'Build output must remain inside dist.'}
+Remove-Item -LiteralPath (Join-Path $OutputRoot 'App'),(Join-Path $OutputRoot 'Service') -Recurse -Force -ErrorAction SilentlyContinue
 & (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'tests\Test-PowerShellCompatibility.ps1') -Root $PSScriptRoot
 if($LASTEXITCODE -ne 0){throw 'Windows PowerShell compatibility check failed.'}
 $required=@('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe','PawnIO\PawnIO_setup.exe')
 foreach($relative in $required){if(!(Test-Path -LiteralPath (Join-Path $ToolsRoot $relative) -PathType Leaf)){throw "Missing: $relative"}}
 $appProject=Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj'
+$serviceProject=Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.Service\ITSeti.Maintenance.Service.csproj'
 dotnet restore $appProject -r win-x64 -p:NuGetAudit=false
 if($LASTEXITCODE -ne 0){
     $cache=Join-Path $env:USERPROFILE '.nuget\packages'
@@ -23,8 +28,13 @@ if($LASTEXITCODE -ne 0){
     dotnet restore $appProject -r win-x64 --source $cache -p:NuGetAudit=false
     if($LASTEXITCODE -ne 0){throw 'dotnet restore failed; verify the NuGet connection or local package cache.'}
 }
+dotnet restore $serviceProject -r win-x64 -p:NuGetAudit=false
+if($LASTEXITCODE -ne 0){throw 'Service restore failed; verify the NuGet connection.'}
 dotnet publish $appProject -c Release -r win-x64 --self-contained true --no-restore -o (Join-Path $OutputRoot 'App')
 if($LASTEXITCODE -ne 0){throw 'dotnet publish failed.'}
+dotnet publish $serviceProject -c Release -r win-x64 --self-contained true --no-restore -o (Join-Path $OutputRoot 'Service')
+if($LASTEXITCODE -ne 0){throw 'Service publish failed.'}
+Remove-Item -LiteralPath (Join-Path $OutputRoot 'Service\Backend') -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $OutputRoot 'App\Setup') -Recurse -Force -ErrorAction SilentlyContinue
 $accessControlPackage=Join-Path $env:USERPROFILE '.nuget\packages\system.threading.accesscontrol\10.0.3\runtimes\win\lib\net9.0\System.Threading.AccessControl.dll'
 $publishedAccessControl=Join-Path (Join-Path $OutputRoot 'App') 'System.Threading.AccessControl.dll'
@@ -36,7 +46,8 @@ if([Reflection.AssemblyName]::GetAssemblyName($publishedAccessControl).Version -
 $destination=Join-Path $OutputRoot 'Tools'
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
 Remove-Item -LiteralPath (Join-Path $destination 'Tools.rar'),(Join-Path $OutputRoot 'App\Tools\Tools.rar') -Force -ErrorAction SilentlyContinue
-foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO','Software')) {
+Remove-Item -LiteralPath (Join-Path $destination 'Software') -Recurse -Force -ErrorAction SilentlyContinue
+foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO')) {
     $source=Join-Path $ToolsRoot $folder
     if(Test-Path -LiteralPath $source -PathType Container){
         $target=Join-Path $destination $folder
