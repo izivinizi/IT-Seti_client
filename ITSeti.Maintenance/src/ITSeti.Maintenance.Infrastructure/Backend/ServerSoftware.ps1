@@ -4,12 +4,12 @@ $requestedComponent = $Component
 function Normalize-ComponentKey([string]$Value) {
     $normalized = ([string]$Value).Trim().ToLowerInvariant()
     switch -Regex ($normalized) {
-        '^anydesk(\s+service)?$' { return 'anydesk' }
-        '^rms(\s+host)?$' { return 'rms' }
-        '^ocs(\s+inventory)?$' { return 'ocs' }
-        '^panel$|^desktop\s*info$' { return 'panel' }
-        '^winrar$' { return 'winrar' }
-        '^yandex(\s+browser)?$' { return 'yandex' }
+        '^anydesk([\s._-].*)?$' { return 'anydesk' }
+        '^rms([\s._-].*)?$' { return 'rms' }
+        '^ocs([\s._-].*)?$' { return 'ocs' }
+        '^panel$|^desktop[\s._-]*info([\s._-].*)?$' { return 'panel' }
+        '^winrar([\s._-].*)?$' { return 'winrar' }
+        '^yandex([\s._-].*)?$' { return 'yandex' }
         default { return $normalized }
     }
 }
@@ -73,7 +73,10 @@ try {
             $json = $text.ToString()
         } finally { $reader.Dispose() }
     } finally { $response.Dispose() }
-    $catalog = @($json | ConvertFrom-Json)
+    # Windows PowerShell 5.1 collapses a JSON array when it is piped into
+    # ConvertFrom-Json, producing one object with array-valued properties.
+    # InputObject preserves one catalog entry per object.
+    $catalog = @((ConvertFrom-Json -InputObject $json))
     $cache = Join-Path $root 'software-catalog.json'
     $temporary = $cache + '.' + [Guid]::NewGuid().ToString('N') + '.pending'
     try {
@@ -81,12 +84,24 @@ try {
         Move-Item -LiteralPath $temporary -Destination $cache -Force
     } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
     if ($CatalogOnly) { exit 0 }
-    $selected = @($catalog | Where-Object { $_.platform -in @('windows','any') -and ([string]$_.key).Trim().ToLowerInvariant() -ne 'application' })
-    if ($componentKey) { $selected = @($selected | Where-Object { (Normalize-ComponentKey ([string]$_.key)) -eq $componentKey }) }
-    elseif (!$AutoUpdate) { $selected = @($selected | Where-Object { $_.key -notin @('winrar','yandex') -and $_.key -in @('rms','anydesk','ocs','panel') }) }
-    # A platform-specific package takes precedence over a generic package.
-    $selected = @($selected | Group-Object { Normalize-ComponentKey ([string]$_.key) } | ForEach-Object { $_.Group | Sort-Object @{Expression={if($_.platform -eq 'windows'){0}else{1}}} | Select-Object -First 1 })
-    if ($componentKey -and !$selected.Count) { throw "Selected component '$requestedComponent' is absent from the current server catalog." }
+    $selected = @(
+        foreach ($entry in $catalog) {
+            if ($entry.platform -notin @('windows','any')) { continue }
+            $entryKey = Normalize-ComponentKey ([string]$entry.key)
+            if ($entryKey -eq 'application') { continue }
+            if ($componentKey) {
+                if ($entryKey -eq $componentKey) { $entry }
+            } elseif ($AutoUpdate -or $entryKey -in @('rms','anydesk','ocs','panel')) {
+                $entry
+            }
+        }
+    )
+    # A platform-specific package takes precedence for a full install. A manual component
+    # selection is already unique and must remain intact on Windows PowerShell 5.1.
+    if (!$componentKey) {
+        $selected = @($selected | Group-Object { Normalize-ComponentKey ([string]$_.key) } | ForEach-Object { $_.Group | Sort-Object @{Expression={if($_.platform -eq 'windows'){0}else{1}}} | Select-Object -First 1 })
+    }
+    if ($componentKey -and @($selected).Count -eq 0) { throw "Selected component '$requestedComponent' is absent from the current server catalog." }
     $failures = @()
     foreach ($package in $selected) {
         try {
@@ -136,18 +151,35 @@ try {
             $arguments = switch ($key) {
                 'rms' { $executable = Join-Path $env:WINDIR 'System32\msiexec.exe'; '/i "'+$installer+'" /qn /norestart REBOOT=ReallySuppress /l*v "'+(Join-Path $root 'server-rms-install.log')+'"' }
                 'anydesk' { '--install "'+(Join-Path $program86 'AnyDesk')+'" --silent --start-with-win' }
-                'ocs' { '/S' }
+                'ocs' { if ($installed) { '/S /NOSPLASH /UPGRADE' } else { '/S /NOSPLASH' } }
                 'panel' { '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /CLOSEAPPLICATIONS /DIR="'+(Join-Path $env:ProgramFiles 'Desktop Info')+'"' }
                 'winrar' { '/S' }
                 'yandex' { '--silent --system-level --do-not-launch-browser' }
             }
             $process = Start-Process -FilePath $executable -ArgumentList $arguments -WorkingDirectory $downloadRoot -WindowStyle Hidden -PassThru
+            $completedFromInstallMarker = $false
             try {
-                if (!$process.WaitForExit(900000)) {
+                if ($key -eq 'ocs' -and !$installed) {
+                    # Some OCS setup builds install the service and then keep their
+                    # bootstrap process alive indefinitely under SYSTEM. The service
+                    # and executable are the authoritative completion markers.
+                    $markerDeadline = [DateTime]::UtcNow.AddMinutes(2)
+                    while (!$process.HasExited -and [DateTime]::UtcNow -lt $markerDeadline) {
+                        if (Find-InstalledFile $key) {
+                            $completedFromInstallMarker = $true
+                            break
+                        }
+                        [void]$process.WaitForExit(1000)
+                    }
+                    if ($completedFromInstallMarker -and !$process.HasExited) {
+                        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                    }
+                }
+                if (!$completedFromInstallMarker -and !$process.WaitForExit(900000)) {
                     [IO.File]::WriteAllText($unknownMarker,[string]$process.Id,[Text.Encoding]::ASCII)
                     throw 'Silent installer exceeded 15 minutes; inspect its log before retrying.'
                 }
-                if ($process.ExitCode -notin @(0,3010)) { throw "Silent installer exited with code $($process.ExitCode)." }
+                if (!$completedFromInstallMarker -and $process.ExitCode -notin @(0,3010)) { throw "Silent installer exited with code $($process.ExitCode)." }
             } finally { $process.Dispose() }
             if (!(Find-InstalledFile $key)) { throw 'Installer returned success but the installed component was not found.' }
             if ($key -eq 'panel') {

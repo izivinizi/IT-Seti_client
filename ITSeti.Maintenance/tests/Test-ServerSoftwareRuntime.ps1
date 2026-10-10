@@ -31,7 +31,7 @@ function New-DownloadRequest([string]$Route){
 function Find-InstalledFile([string]$Key){if($script:installed){return (Join-Path $fixture 'installed.marker')}}
 function Start-Process {
     param($FilePath,$ArgumentList,$WorkingDirectory,$WindowStyle,[switch]$PassThru)
-    if($WindowStyle -ne 'Hidden' -or $ArgumentList -notmatch '/qn.*REBOOT=ReallySuppress'){throw 'Installer was not silent.'}
+    if($WindowStyle -ne 'Hidden' -or $ArgumentList -notmatch '(/qn.*REBOOT=ReallySuppress)|(/S)'){throw 'Installer was not silent.'}
     $script:installCalls++; $script:installed=$true
     [IO.File]::WriteAllText((Join-Path $fixture 'installed.marker'),'fixture')
     $process=New-Object PSObject -Property @{ExitCode=0;Id=0}
@@ -48,14 +48,37 @@ function New-FixtureMutex {
 }
 try {
     if ((Normalize-ComponentKey ' OCS Inventory ') -ne 'ocs') { throw 'OCS display name was not normalized.' }
+    if ((Normalize-ComponentKey 'ocs-agent') -ne 'ocs') { throw 'OCS package alias was not normalized.' }
     if ((Normalize-ComponentKey 'RMS Host') -ne 'rms') { throw 'RMS display name was not normalized.' }
     $script:package=$package
     $componentCatalog=@($package,[pscustomobject]@{key='ocs';platform='windows'})
     $filtered=@($componentCatalog | Where-Object { (Normalize-ComponentKey ([string]$_.key)) -eq 'rms' })
     if($filtered.Count -ne 1 -or $filtered[0].key -ne 'rms'){throw 'Component catalog filtering selected the wrong package.'}
+    $json=ConvertTo-Json -InputObject @($package,[pscustomobject]@{key='ocs';platform='windows'}) -Compress
+    $catalog=@((ConvertFrom-Json -InputObject $json))
+    $componentKey=Normalize-ComponentKey 'OCS'
+    $selected=@(
+        foreach($entry in $catalog){
+            if($entry.platform -notin @('windows','any')){continue}
+            $entryKey=Normalize-ComponentKey ([string]$entry.key)
+            if($entryKey -eq 'application'){continue}
+            if($componentKey){if($entryKey -eq $componentKey){$entry}}
+        }
+    )
+    if($selected.Count -ne 1 -or (Normalize-ComponentKey ([string]$selected[0].key)) -ne 'ocs'){throw 'Windows PowerShell catalog selection lost the OCS component.'}
+    $componentKey=$null
     $mutex=New-FixtureMutex
     & $worker
     if($script:installCalls -ne 1){throw 'Verified manual package did not reach the mocked installer.'}
+    $script:installed=$false; $script:installCalls=0
+    $Component='OCS'; $componentKey=Normalize-ComponentKey $Component
+    $package.key='ocs'; $package.fileName='ocs.exe'; $package.version='1'; $package.sha256=$hash
+    $script:package=$package; $mutex=New-FixtureMutex
+    & $worker
+    if($script:installCalls -ne 1 -or !(Test-Path -LiteralPath (Join-Path $fixture 'installed.marker'))){throw 'OCS completion marker did not finish a silent install.'}
+    $Component=' RMS Host '; $componentKey=$null
+    $package.key='rms'; $package.fileName='rms.msi'; $package.version='7.7.3'; $package.sha256=$hash
+    $script:package=$package
     $script:installed=$false; $script:installCalls=0
     $AutoUpdate=$true; $mutex=New-FixtureMutex
     & $worker
