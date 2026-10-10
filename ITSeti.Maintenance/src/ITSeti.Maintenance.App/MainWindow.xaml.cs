@@ -3,7 +3,6 @@ using System.ComponentModel;
 using System.Windows;
 using System.Diagnostics;
 using System.Security;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Input;
 using System.Windows.Controls;
@@ -261,7 +260,7 @@ public partial class MainWindow : Window
             return;
         }
         ClearAdminPassword();
-        AdminAccount.Text = Environment.MachineName + "\\" + Environment.UserName;
+        AdminAccount.Text = string.Empty;
         AdminError.Visibility = Visibility.Collapsed;
         AdminUnlock.Visibility = Visibility.Visible;
         AdminPassword.Focus();
@@ -287,8 +286,13 @@ public partial class MainWindow : Window
             ?? candidates.FirstOrDefault(account => account.EndsWith("\\Admin", StringComparison.OrdinalIgnoreCase))
             ?? candidates.FirstOrDefault(account => account.EndsWith("\\it-seti", StringComparison.OrdinalIgnoreCase))
             ?? candidates.FirstOrDefault(account => account.EndsWith("\\user", StringComparison.OrdinalIgnoreCase))
-            ?? (candidates.Count == 1 ? candidates[0] : defaultAccount);
-        AdminAccount.Text = selected;
+            ?? (candidates.Count == 1 ? candidates[0] : null);
+        AdminAccount.Text = selected ?? string.Empty;
+        if (selected is null)
+        {
+            AdminError.Text = "В локальной группе администраторов не найдена учётная запись для инженерного режима.";
+            AdminError.Visibility = Visibility.Visible;
+        }
     }
     private void CancelAdmin_Click(object sender, RoutedEventArgs e)
     {
@@ -383,11 +387,6 @@ public partial class MainWindow : Window
                 ShowEngineerShell();
                 return;
             }
-            if (MatchesNonElevatedEngineerPassword(password))
-            {
-                ShowEngineerShell();
-                return;
-            }
             var launch = await Task.Run(() => EngineerWindowLauncher.TryStartWithWindowsCredentials(
                 account, password, historyDatabasePath));
             if (launch.Process is null)
@@ -445,14 +444,6 @@ public partial class MainWindow : Window
         ViewModel.RefreshSetupAudit();
         ViewModel.RefreshIdentity();
         _ = ViewModel.RefreshAdminAccountAuditAsync();
-    }
-
-    private static bool MatchesNonElevatedEngineerPassword(SecureString password)
-    {
-        if (password.Length == 0) return false;
-        var pointer = Marshal.SecureStringToGlobalAllocUnicode(password);
-        try { return string.Equals(Marshal.PtrToStringUni(pointer), "itseti", StringComparison.Ordinal); }
-        finally { Marshal.ZeroFreeGlobalAllocUnicode(pointer); }
     }
 
     private void ConfigureUserShellSize()
@@ -783,7 +774,7 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(volume)) return;
         try
         {
-            ViewModel.SetSoftwareActionStatus("Открываем TreeSize Free без запроса UAC…");
+            ViewModel.SetSoftwareActionStatus("Открываем TreeSize Free…");
             await TreeSizeLauncher.StartScanAsync(volume);
             ViewModel.SetSoftwareActionStatus($"TreeSize Free открыт для {volume} с правами текущей учётной записи.");
         }

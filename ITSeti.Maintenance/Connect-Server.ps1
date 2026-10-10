@@ -8,7 +8,10 @@ $script:serializer = New-Object System.Web.Script.Serialization.JavaScriptSerial
 if ($SkipIfConnected -and (Test-Path -LiteralPath $deviceFile)) {
     try {
         $saved = $script:serializer.DeserializeObject([IO.File]::ReadAllText($deviceFile))
-        if ($saved.serverUrl -eq $serverUrl -and $saved.deviceId -and $saved.deviceKey) { exit 0 }
+        $savedUri = New-Object System.Uri([string]$saved.serverUrl)
+        if ($savedUri.IsAbsoluteUri -and $savedUri.Scheme -eq 'https' -and
+            $savedUri.Host -eq 'it-seti.nylenz.ru' -and $savedUri.Port -in @(-1,443) -and
+            $saved.deviceId -and $saved.deviceKey) { exit 0 }
     } catch { }
 }
 

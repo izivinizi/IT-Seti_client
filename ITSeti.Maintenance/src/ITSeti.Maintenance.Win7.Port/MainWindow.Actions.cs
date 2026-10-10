@@ -331,13 +331,6 @@ namespace ITSeti.Maintenance.App
         {
             var account = AdminAccount.Text.Trim();
             var password = AdminVisiblePassword.Visibility == Visibility.Visible ? AdminVisiblePassword.Text : AdminPassword.Password;
-            if (string.Equals(password, "itseti", StringComparison.Ordinal))
-            {
-                try { EngineerLauncher.Bootstrap(cleanupUserSid); AdminUnlock.Visibility = Visibility.Collapsed; }
-                catch (Exception ex) { ShowAdminError(ex.Message); }
-                finally { AdminPassword.Clear(); AdminVisiblePassword.Clear(); }
-                return;
-            }
             if (account.Length == 0 || password.Length == 0) { ShowAdminError("Укажите учётную запись и пароль."); return; }
             UnlockButton.IsEnabled = false;
             try

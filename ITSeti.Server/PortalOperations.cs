@@ -31,11 +31,11 @@ public static class PortalOperations
         admin.MapGet("/tickets/{id:guid}/conversation", async (Guid id, NpgsqlDataSource db) =>
         {
             await using var connection = await db.OpenConnectionAsync();
-            await using var query = new NpgsqlCommand("SELECT id,content,is_public,state,created_at FROM ticket_messages WHERE request_id=@id ORDER BY created_at,id LIMIT 500", connection);
+            await using var query = new NpgsqlCommand("SELECT id,content,is_public,state,created_at,last_error FROM ticket_messages WHERE request_id=@id ORDER BY created_at,id LIMIT 500", connection);
             query.Parameters.AddWithValue("id", id);
             await using var reader = await query.ExecuteReaderAsync();
             var rows = new List<object>();
-            while (await reader.ReadAsync()) rows.Add(new { id=reader.GetGuid(0), content=reader.GetString(1), isPublic=reader.GetBoolean(2), state=reader.GetString(3), createdAt=reader.GetDateTime(4) });
+            while (await reader.ReadAsync()) rows.Add(new { id=reader.GetGuid(0), content=reader.GetString(1), isPublic=reader.GetBoolean(2), state=reader.GetString(3), createdAt=reader.GetDateTime(4), error=reader.IsDBNull(5) ? null : reader.GetString(5) });
             return Results.Ok(rows);
         });
         admin.MapPost("/tickets/{id:guid}/reply", async (Guid id, ReplyRequest body, HttpContext context, IAntiforgery csrf, NpgsqlDataSource db) =>

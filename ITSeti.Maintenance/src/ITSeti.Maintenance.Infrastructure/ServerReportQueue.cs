@@ -13,13 +13,16 @@ public static class ServerReportQueue
     public static async Task EnqueueAsync(DiagnosticSnapshot snapshot)
     {
         if (Environment.GetEnvironmentVariable("ITSETI_DISABLE_REPORT_UPLOAD") == "1") return;
-        if (!Directory.Exists(QueueDirectory)) return;
+        Directory.CreateDirectory(QueueDirectory);
         var target = Path.Combine(QueueDirectory, snapshot.Id.ToString("N") + ".json");
         var temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             var report = JsonSerializer.SerializeToNode(snapshot)!.AsObject();
-            report["Findings"] = JsonSerializer.SerializeToNode(DiagnosticRules.GetFindings(snapshot));
+            report["Notes"] = JsonSerializer.SerializeToNode(snapshot.Notes.Where(note =>
+                !note.StartsWith("Ограничение интерфейса", StringComparison.OrdinalIgnoreCase) &&
+                !note.StartsWith("Без доступа к исполняемому файлу процессов", StringComparison.OrdinalIgnoreCase)));
+            report["Findings"] = JsonSerializer.SerializeToNode(DiagnosticRules.GetFindings(snapshot, includeDiskLinkWarnings: false));
             report["DiagnosticIssues"] = JsonSerializer.SerializeToNode(DiagnosticRules.GetUserIssues(snapshot));
             report["KindLabel"] = snapshot.KindLabel;
             report["MemoryUsedPercent"] = snapshot.MemoryUsedPercent;
@@ -38,8 +41,14 @@ public static class ServerReportQueue
                 CreateNoWindow = true,
                 ArgumentList = { "/Run", "/TN", "ITSeti-Maintenance-Upload" }
             });
-            if (process is not null) await process.WaitForExitAsync();
+            if (process is null) throw new InvalidOperationException("Не удалось запустить задачу отправки отчётов.");
+            await process.WaitForExitAsync();
+            if (process.ExitCode != 0) throw new InvalidOperationException($"Задача отправки отчётов завершилась с кодом {process.ExitCode}.");
         }
-        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception) { }
+        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            var errorPath = Path.Combine(QueueDirectory, "server-upload-error.txt");
+            try { await File.WriteAllTextAsync(errorPath, ex.Message); } catch (IOException) { }
+        }
     }
 }

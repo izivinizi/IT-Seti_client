@@ -61,7 +61,7 @@ public static class DiagnosticRules
                 issues.Add(new("В журнале Windows найдены критические события",
                     $"Количество: {otherCritical}. Подробности доступны инженеру в разделе событий Windows.", "Critical"));
         }
-        if (snapshot.ActiveUptimeHours is >= 60)
+        if (snapshot.ActiveUptimeHours is >= 80)
             issues.Add(new("Компьютер долго работает без перезагрузки",
                 $"После последнего запуска компьютер проработал {snapshot.ActiveUptimeHours:N0} ч (сон и гибернация не учитываются). Сохраните открытые документы и перезагрузите компьютер, когда закончите работу.", "Warning"));
         if (snapshot.WindowsBuild is int windowsBuild && windowsBuild < 17763)
@@ -142,8 +142,8 @@ public static class DiagnosticRules
     public static IReadOnlyList<string> GetFindings(DiagnosticSnapshot snapshot, bool includeDiskLinkWarnings = true)
     {
         var findings = new List<string>();
-        if (snapshot.ActiveUptimeHours is >= 60)
-            findings.Add($"Наработка после последнего запуска: {snapshot.ActiveUptimeHours:N0} ч (порог 60 ч, без сна и гибернации).");
+        if (snapshot.ActiveUptimeHours is >= 80)
+            findings.Add($"Наработка после последнего запуска: {snapshot.ActiveUptimeHours:N0} ч (порог 80 ч, без сна и гибернации).");
         if (snapshot.WindowsBuild is int windowsBuild && windowsBuild < 17763)
             findings.Add($"Windows ниже версии 1809: {FormatWindows(snapshot)}.");
         var sample = snapshot.Full?.ResourceSampling is { Samples: >= 6, Error: "" } complete ? complete : null;

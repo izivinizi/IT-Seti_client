@@ -154,7 +154,7 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
     if($Live){Write-Host ("ПК: $env:COMPUTERNAME"); Show-InitialSection 1}
     if($StartDiskTest) {
         if($script:ForbidInteractiveDiskTools){$script:DiskFailure='Интерактивный CrystalDiskMark отключён в автоматической проверке; используется фоновый DiskSpd.'}
-        elseif($script:Admin){try {Start-DiskToolsBackground} catch {$script:DiskFailure=$_.Exception.Message}}
+        elseif($script:Admin -or $script:InteractiveDiskMark){try {Start-DiskToolsBackground} catch {$script:DiskFailure=$_.Exception.Message}}
         else {$script:DiskFailure='Пропущен: для автоматического теста диска нужны права администратора.'}
     }
     try {

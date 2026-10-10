@@ -19,7 +19,7 @@ public sealed record DiagnosticSnapshot(
 {
     public double MemoryUsedPercent => TotalMemoryBytes > 0
         ? 100.0 * (TotalMemoryBytes - AvailableMemoryBytes) / TotalMemoryBytes : 0;
-    public int AlertCount => DiagnosticRules.GetFindings(this).Count;
+    public int AlertCount => DiagnosticRules.GetFindings(this, includeDiskLinkWarnings: false).Count;
     public string DateLabel => StartedAt.LocalDateTime.ToString("dd.MM.yyyy HH:mm:ss");
     public string CpuLabel => CpuPercent < 0 ? "Нет данных" : $"{CpuPercent:N0}%";
     public string MemoryLabel => TotalMemoryBytes == 0 ? "Нет данных" : $"{MemoryUsedPercent:N0}%";
@@ -40,7 +40,7 @@ public sealed record DiagnosticSnapshot(
     {
         get
         {
-            var findings = DiagnosticRules.GetFindings(this)
+            var findings = DiagnosticRules.GetFindings(this, includeDiskLinkWarnings: false)
                 .Select(CondenseHistoryFact)
                 .Distinct(StringComparer.CurrentCultureIgnoreCase)
                 .ToArray();

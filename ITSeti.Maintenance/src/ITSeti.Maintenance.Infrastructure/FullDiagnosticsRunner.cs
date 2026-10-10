@@ -51,11 +51,11 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         if (exe is null) return $"{name}: совместимый файл запуска не найден в {root}";
         try
         {
-            if (HasVisibleWindow(exe)) return $"{name}: окно уже открыто. Закройте его перед повторным запуском от администратора.";
+            if (HasVisibleWindow(exe)) return $"{name}: окно уже открыто. Закройте его перед повторным запуском.";
             var start = ElevatedProcessLauncher.CreateStartInfo(exe, Path.GetDirectoryName(exe)!);
             var launchContext = ElevatedProcessLauncher.IsCurrentProcessElevated
-                ? "с правами администратора"
-                : "без повышения прав";
+                ? "с правами администратора текущего окна"
+                : "в текущем пользовательском окне";
             using var launched = await Task.Run(() => Process.Start(start))
                 ?? throw new InvalidOperationException("Windows не запустила программу");
             for (var attempt = 0; attempt < 20; attempt++)
@@ -64,21 +64,11 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
                     return $"{name}: окно открыто {launchContext}";
                 if (launched.HasExited)
                 {
-                    if (!ElevatedProcessLauncher.IsCurrentProcessElevated && launched.ExitCode == 0)
-                        return $"{name}: программа завершилась без окна. Возможно, для запуска требуется токен администратора; UAC не запрашивался.";
                     return $"{name}: программа завершилась без окна (код {launched.ExitCode}).";
                 }
                 await Task.Delay(250);
             }
             return $"{name}: процесс запущен {launchContext}, окно не появилось за 5 секунд.";
-        }
-        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
-        {
-            return $"{name}: запуск от администратора отменён в окне контроля учётных записей.";
-        }
-        catch (Win32Exception ex) when (ex.NativeErrorCode == 740)
-        {
-            return $"{name}: Windows требует права администратора для этого окна. UAC не запрашивался; фоновая проверка использует системную задачу.";
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or UnauthorizedAccessException)
         {
@@ -121,7 +111,9 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
     private async Task<DiagnosticSnapshot> RunCoreAsync(IProgress<DiagnosticProgress> progress, bool userMode, bool quickMode, CancellationToken cancellationToken)
     {
         var installedTask = quickMode ? InstalledQuickTask : InstalledTask;
-        if (IsInstalled && (!quickMode || HasInstalledQuickTask.Value))
+        // User-facing full checks keep DiskMark in the current desktop session.
+        // The installed SYSTEM task remains the path for unattended and quick checks.
+        if (IsInstalled && (!quickMode || HasInstalledQuickTask.Value) && !(userMode && !quickMode))
         {
             try { return await AddCpuTemperatureAsync(await RunInstalledAsync(progress, installedTask, cancellationToken)); }
             catch (InstalledTaskUnavailableException ex)
@@ -135,7 +127,7 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         Directory.CreateDirectory(root);
         var backend = Path.Combine(AppContext.BaseDirectory, "Backend");
         foreach (var file in Directory.GetFiles(backend)) File.Copy(file, Path.Combine(root, Path.GetFileName(file)));
-        var tools = ToolsRoot ?? FindTools(true);
+        var tools = ToolsRoot ?? FindTools(!userMode || quickMode);
         var worker = Path.Combine(root, "FullCheckWorker.ps1");
         var info = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
         {
@@ -151,7 +143,8 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         info.ArgumentList.Add(root);
         info.ArgumentList.Add("-ToolsRoot");
         info.ArgumentList.Add(tools);
-        info.ArgumentList.Add("-HeadlessDiskSpd");
+        if (userMode && !quickMode) info.ArgumentList.Add("-InteractiveDiskMark");
+        else info.ArgumentList.Add("-HeadlessDiskSpd");
         if (userMode) info.ArgumentList.Add("-UserMode");
         if (quickMode)
         {
@@ -452,13 +445,13 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         static bool HasDiskInfo(string root) => ResolveInteractiveDiskTool(root, true) is not null;
         var bundled = Path.Combine(AppContext.BaseDirectory, "Tools");
         if ((headless ? HasDiskSpd(bundled) : HasDiskMark(bundled))
-            && HasDiskInfo(bundled)) return bundled;
+            && (headless || HasDiskInfo(bundled))) return bundled;
         foreach (var drive in DriveInfo.GetDrives())
         {
             try
             {
                 if (drive.IsReady && (headless ? HasDiskSpd(drive.RootDirectory.FullName) : HasDiskMark(drive.RootDirectory.FullName))
-                    && HasDiskInfo(drive.RootDirectory.FullName))
+                    && (headless || HasDiskInfo(drive.RootDirectory.FullName)))
                     return drive.RootDirectory.FullName;
             }
             catch (IOException) { }
@@ -474,7 +467,7 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
             if (!Directory.Exists(cache)) continue;
             foreach (var directory in Directory.GetDirectories(cache).OrderDescending())
                 if (File.Exists(Path.Combine(directory, "cache-id.txt")) && (headless ? HasDiskSpd(directory) : HasDiskMark(directory))
-                    && HasDiskInfo(directory)) return directory;
+                    && (headless || HasDiskInfo(directory))) return directory;
         }
         return "";
     }

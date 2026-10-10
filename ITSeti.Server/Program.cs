@@ -295,7 +295,7 @@ app.MapGet("/api/v1/ticket-updates", async (HttpRequest request, NpgsqlDataSourc
     await using var connection = await db.OpenConnectionAsync(request.HttpContext.RequestAborted);
     await using var clock = new NpgsqlCommand("SELECT now()", connection);
     var serverTime = new DateTimeOffset((DateTime)(await clock.ExecuteScalarAsync())!);
-    await using var count = new NpgsqlCommand("SELECT count(*) FROM ticket_requests WHERE device_id=@device AND workflow_state NOT IN ('completed','cancelled')", connection);
+    await using var count = new NpgsqlCommand("SELECT count(*) FROM ticket_requests WHERE device_id=@device AND workflow_state NOT IN ('completed','cancelled','canceled','closed','resolved')", connection);
     count.Parameters.AddWithValue("device", deviceId);
     var activeCount = (long)(await count.ExecuteScalarAsync())!;
     var messages = new List<object>();

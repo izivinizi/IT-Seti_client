@@ -230,7 +230,7 @@ namespace ITSeti.Maintenance.Win7
             if (QueryUnbiasedInterruptTime(out activeTicks))
             {
                 result.ActiveUptimeHours = activeTicks / 36000000000.0;
-                if (result.ActiveUptimeHours >= 60)
+                if (result.ActiveUptimeHours >= 80)
                     result.Findings.Add("Компьютер проработал " + result.ActiveUptimeHours.Value.ToString("N0") +
                         " ч без перезагрузки (без сна и гибернации). Сохраните документы и перезагрузите его.");
             }

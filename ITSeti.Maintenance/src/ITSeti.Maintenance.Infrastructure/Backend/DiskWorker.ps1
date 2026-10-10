@@ -1,9 +1,10 @@
-param([string]$ScriptRoot,[string]$ToolsRoot,[ValidateSet(1,2)][int]$Passes=1,[switch]$Quiet)
+param([string]$ScriptRoot,[string]$ToolsRoot,[ValidateSet(1,2)][int]$Passes=1,[switch]$Quiet,[switch]$InteractiveDiskMark)
 $ErrorActionPreference='Stop'
 $script:Admin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 $script:CompactOutput=$true
 $script:DiskTestPasses=$Passes
 $script:QuietDiskTools=[bool]$Quiet
+$script:InteractiveDiskMark=[bool]$InteractiveDiskMark
 $script:Snapshot=@{Smart=@();Notes=@()}
 function Section([string]$Text){Write-Output $Text}
 $logging=$false

@@ -24,7 +24,7 @@ internal static class WindowsAdminAccountDiscovery
             return new($"Не удалось проверить состав локальной группы администраторов (код {result.Status}).", []);
 
         var unexpected = result.Members
-            .Where(member => member.SidUsage is 1 or 2 && !IsDesignatedLocalAdmin(member.Name))
+            .Where(member => member.SidUsage is 1 or 2 && !IsDesignatedAdminMember(member))
             .Select(member => member.Name)
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -43,16 +43,28 @@ internal static class WindowsAdminAccountDiscovery
             if (IsDesignatedLocalAdmin(identity.Name)) return false;
             var administratorsSid = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
             var principal = new WindowsPrincipal(identity);
-            return principal.IsInRole(administratorsSid) || identity.Groups?.Contains(administratorsSid) == true;
+            // A filtered UAC token can contain the Administrators SID as deny-only.
+            // IsInRole reflects the effective token and avoids a false warning.
+            return principal.IsInRole(administratorsSid);
         }
         catch { return false; }
     }
 
     private static bool IsDesignatedLocalAdmin(string account)
+        => IsDesignatedAdminMember(new Member(account, 1));
+
+    private static bool IsDesignatedAdminMember(Member member)
     {
+        var account = member.Name;
+        if (string.IsNullOrWhiteSpace(account)) return false;
         var separator = account.LastIndexOf('\\');
         if (separator < 0) return false;
-        var name = account[(separator + 1)..];
+        var name = account[(separator + 1)..].Trim();
+        if (member.SidUsage == 2 && (name.Equals("Administrators", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Администраторы", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Domain Admins", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Администраторы домена", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Администраторы локальных машин", StringComparison.OrdinalIgnoreCase))) return true;
         // Built-in administrator accounts are expected on both local and domain installations.
         if (name.Equals("Administrator", StringComparison.OrdinalIgnoreCase)
             || name.Equals("Администратор", StringComparison.OrdinalIgnoreCase)) return true;

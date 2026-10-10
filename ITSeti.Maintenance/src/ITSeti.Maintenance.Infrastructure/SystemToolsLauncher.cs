@@ -22,7 +22,8 @@ public static class SystemToolsLauncher
 
         var start = new ProcessStartInfo(tool.FileName)
         {
-            UseShellExecute = tool.Shell,
+            UseShellExecute = true,
+            Verb = !tool.Shell && !ElevatedProcessLauncher.IsCurrentProcessElevated ? "runas" : string.Empty,
             WorkingDirectory = File.Exists(tool.FileName) ? Path.GetDirectoryName(tool.FileName)! : Environment.CurrentDirectory
         };
         foreach (var argument in tool.Arguments) start.ArgumentList.Add(argument);

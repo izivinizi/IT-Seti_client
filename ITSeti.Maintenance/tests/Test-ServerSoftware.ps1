@@ -19,7 +19,7 @@ foreach($case in @(@{key='arbitrary'},@{id=[Guid]::Empty.ToString()},@{sizeBytes
 $source=[IO.File]::ReadAllText($worker)
 foreach($requirement in @('S-1-5-18','AllowAutoRedirect = \$false','Package SHA-256 mismatch','Incomplete package download',
     'Package exceeds declared size','WindowStyle Hidden','REBOOT=ReallySuppress','server-install-','\.unknown',
-    'key -notin @\(''winrar'',''yandex''\)','if \(!\$installed\) \{ continue \}')){
+    'key -notin @\(','winrar','yandex','if \(!\$installed\) \{ continue \}')){
     if($source -notmatch $requirement){throw ('Missing software safety contract: '+$requirement)}
 }
 'PASS: server package metadata validation, SYSTEM gate, bounded download, hashes, silent mode, no auto-install of absent software and install-all exclusions.'

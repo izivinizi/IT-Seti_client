@@ -20,12 +20,18 @@ if ($identity.User.Value -ne 'S-1-5-18') { throw 'Server software worker require
 $deviceFile = Join-Path $root 'server-device.json'
 if (!(Test-Path -LiteralPath $deviceFile)) { exit 0 }
 $device = Get-Content -LiteralPath $deviceFile -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($device.serverUrl -ne 'https://it-seti.nylenz.ru' -or !$device.deviceId -or !$device.deviceKey) { throw 'Invalid server enrollment.' }
+try {
+    $configuredServer = New-Object System.Uri([string]$device.serverUrl)
+    if (!$configuredServer.IsAbsoluteUri -or $configuredServer.Scheme -ne 'https' -or
+        $configuredServer.Host -ne 'it-seti.nylenz.ru' -or $configuredServer.Port -notin @(-1,443)) { throw 'Invalid server enrollment.' }
+    $serverBase = New-Object System.Uri('https://it-seti.nylenz.ru/')
+} catch { throw 'Invalid server enrollment.' }
+if (!$device.deviceId -or !$device.deviceKey) { throw 'Invalid server enrollment.' }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $mutex = New-Object Threading.Mutex($false,'Global\ITSeti-ServerSoftware')
 $locked = $false
 function New-DownloadRequest([string]$Route) {
-    $request = [Net.HttpWebRequest][Net.WebRequest]::Create($device.serverUrl + $Route)
+    $request = [Net.HttpWebRequest][Net.WebRequest]::Create((New-Object System.Uri($serverBase, $Route.TrimStart('/'))))
     $request.AllowAutoRedirect = $false
     $request.Timeout = 30000
     $request.ReadWriteTimeout = 30000

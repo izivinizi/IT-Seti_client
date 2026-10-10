@@ -57,6 +57,14 @@ public static class ITSetiUserRecycleBin {
     # the whole profile cleanup into a failed operation.
     try { [void][ITSetiUserRecycleBin]::SHEmptyRecycleBin([IntPtr]::Zero,$null,7) } catch { }
 }
+function Invoke-BasicProfileCleanup {
+    Clear-ProfileDirectory $env:TEMP ([DateTime]::UtcNow.AddDays(-2))
+    Clear-ThumbnailCache
+    Clear-ProfileDirectory (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Temporary Internet Files')
+    Clear-ProfileDirectory (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\INetCache')
+    Clear-ProfileDirectory (Join-Path $env:LOCALAPPDATA 'D3DSCache')
+    Clear-CurrentUserRecycleBin
+}
 try {
     [Diagnostics.Process]::GetCurrentProcess().PriorityClass='BelowNormal'
     $identity=[Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -74,25 +82,28 @@ try {
     if($value -eq 'abort'){Status ('Очистка не запускалась | пользователь: '+$identity); return}
     if($value -notmatch '^\d{4}$' -and $value -ne 'fallback'){throw 'Некорректный режим очистки.'}
     Status ("Очистка профиля "+$identity)
+    $modeDetail=''
     if(!$TestOnly) {
         if($value -eq 'fallback') {
-            Clear-ProfileDirectory $env:TEMP ([DateTime]::UtcNow.AddDays(-2))
-            Clear-ThumbnailCache
-            Clear-ProfileDirectory (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Temporary Internet Files')
-            Clear-ProfileDirectory (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\INetCache')
-            Clear-ProfileDirectory (Join-Path $env:LOCALAPPDATA 'D3DSCache')
-            Clear-CurrentUserRecycleBin
+            Invoke-BasicProfileCleanup
+            $modeDetail=' | базовая очистка профиля'
         } else {
-            $start=New-Object Diagnostics.ProcessStartInfo
-            $start.FileName=Join-Path $env:windir 'System32\cleanmgr.exe'
-            $start.Arguments='/sagerun:'+([int]$value)
-            $start.UseShellExecute=$false
-            $start.CreateNoWindow=$false
-            $p=[Diagnostics.Process]::Start($start)
-            $p.WaitForExit()
-            if($p.ExitCode -ne 0){throw ('cleanmgr: код '+$p.ExitCode)}
+            try {
+                $start=New-Object Diagnostics.ProcessStartInfo
+                $start.FileName=Join-Path $env:windir 'System32\cleanmgr.exe'
+                $start.Arguments='/sagerun:'+([int]$value)
+                $start.UseShellExecute=$false
+                $start.CreateNoWindow=$false
+                $p=[Diagnostics.Process]::Start($start)
+                $p.WaitForExit()
+                if($p.ExitCode -ne 0){throw ('cleanmgr: код '+$p.ExitCode)}
+            } catch {
+                $cleanmgrError=([string]$_.Exception.Message) -replace '[\r\n]+',' '
+                Invoke-BasicProfileCleanup
+                $modeDetail=' | базовая очистка профиля (штатная очистка недоступна: '+$cleanmgrError+')'
+            }
         }
     }
-    Status ("Завершена | пользователь: "+$identity+$(if($value -eq 'fallback'){' | базовая очистка профиля'}else{''})+$(if($TestOnly){' | TEST OK'}))
+    Status ("Завершена | пользователь: "+$identity+$modeDetail+$(if($TestOnly){' | TEST OK'}))
 } catch { Status ('Не выполнена: '+$_.Exception.Message) }
 finally { 'done' | Set-Content -LiteralPath (Join-Path $JobRoot 'done.txt') }

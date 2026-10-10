@@ -35,7 +35,10 @@ function temperature(value) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 && number <= 120 ? Math.round(number) + ' °C' : 'Нет данных';
 }
-function visibleNote(value) { return !String(value).trim().toLowerCase().startsWith('без доступа к исполняемому файлу процессов'); }
+function visibleNote(value) {
+  const text = String(value).trim().toLowerCase();
+  return !text.startsWith('без доступа к исполняемому файлу процессов') && !text.startsWith('ограничение интерфейса');
+}
 function property(object, ...names) {
   if (!object || typeof object !== 'object') return null;
   for (const name of names) {
@@ -451,7 +454,9 @@ async function loadConversation() {
     for (const message of messages) {
       const row = node('div', undefined, 'detail-row');
       row.append(node('span', date(message.createdAt) + (message.isPublic ? ' · Публичный ответ' : ' · Внутренний комментарий') + ' · ' + (ticketStates[message.state] || message.state), 'meta'),
-        node('p', message.content, 'ticket-description')); container.append(row);
+        node('p', message.content, 'ticket-description'));
+      if (message.error) row.append(node('p', message.error, 'signal-error'));
+      container.append(row);
     }
     if (!messages.length) container.append(node('p', 'Сообщений пока нет.', 'muted'));
   } catch (error) { if (request === conversationRequest) status('ticket-action-status', error.message, 'error'); }

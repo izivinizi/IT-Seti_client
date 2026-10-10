@@ -12,8 +12,11 @@ internal static class ElevatedProcessLauncher
     {
         var start = new ProcessStartInfo(executable)
         {
+            // Portable disk utilities stay in the user's desktop session.
+            // Privileged checks use the installed SYSTEM task instead.
             UseShellExecute = false,
             WorkingDirectory = workingDirectory,
+            CreateNoWindow = false,
             Arguments = ""
         };
 

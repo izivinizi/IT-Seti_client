@@ -767,11 +767,15 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                     : "По проверенным показателям причин замедления не найдено. Это короткая проверка, а не оценка всего компьютера.";
             }
             var lines = DiagnosticRules.GetFindings(Selected, includeDiskLinkWarnings: false).ToList();
-            lines.AddRange(Selected.Notes.Where(note => !note.StartsWith("Без доступа к исполняемому файлу процессов", StringComparison.OrdinalIgnoreCase)));
+            lines.AddRange(Selected.Notes.Where(note => !IsHiddenTechnicalNote(note)));
             if (Selected.Full?.Benchmark is { State: "Failed" } test) lines.Add("Тест диска: " + test.Error);
             return lines.Count > 0 ? string.Join(Environment.NewLine, lines) : "По измеренным показателям замечаний нет";
         }
     }
+
+    private static bool IsHiddenTechnicalNote(string note) =>
+        note.StartsWith("Без доступа к исполняемому файлу процессов", StringComparison.OrdinalIgnoreCase) ||
+        note.StartsWith("Ограничение интерфейса", StringComparison.OrdinalIgnoreCase);
     public IReadOnlyList<UserIssue> OverviewIssues
     {
         get
@@ -1082,7 +1086,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public Task RunFullAsync() => RunFullCoreAsync(false);
     public Task RunQuickFullAsync() => RunFullCoreAsync(false, true);
     public Task RunUserFullAsync() => RunFullCoreAsync(true);
-    public Task RunScheduledUserQuickAsync() => RunFullCoreAsync(true);
+    public Task RunScheduledUserQuickAsync() => RunFullCoreAsync(true, true);
 
     public void StopFullCheck()
     {
@@ -1096,7 +1100,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public async Task OpenLowSpaceScanAsync()
     {
         if (busy || LowSpaceDisk is not { } disk) return;
-        userStatusOverride = "Открываем TreeSize Free без запроса UAC…";
+        userStatusOverride = "Открываем TreeSize Free…";
         Notify();
         await TreeSizeLauncher.StartScanAsync(disk.Name);
         userStatusOverride = $"TreeSize Free открыт для диска {disk.Name.TrimEnd('\\')} с правами текущей учётной записи.";
@@ -1181,7 +1185,11 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             }
             await history.SaveAsync(snapshot);
             try { await ServerReportQueue.EnqueueAsync(snapshot); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            catch (Exception ex)
+            {
+                if (!userMode)
+                    RecordProgress("Сервер", "Отчёт сохранён локально; отправка будет повторена: " + ex.Message);
+            }
             await ReloadAsync();
             LastFullSucceeded = true;
             status = quickMode ? "Быстрая полная проверка завершена. Результат сохранён" : "Полная проверка завершена. Результат сохранён";
@@ -1369,7 +1377,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             status = "Сохранение результата…"; Notify();
             await history.SaveAsync(snapshot);
             try { await ServerReportQueue.EnqueueAsync(snapshot); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            catch (Exception ex) { RecordProgress("Сервер", "Отчёт сохранён локально; отправка будет повторена: " + ex.Message); }
             await ReloadAsync();
             status = "Быстрая проверка завершена. Результат сохранён";
         }

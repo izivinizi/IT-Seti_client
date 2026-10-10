@@ -1,4 +1,4 @@
-﻿param([string]$RunRoot,[string]$ToolsRoot,[switch]$SkipDiskTests,[switch]$LimitedMode,[switch]$HeadlessDiskSpd,[switch]$UserMode,[switch]$TrustedTools,[switch]$SkipResourceSampling,[switch]$SkipDiskBenchmark,[switch]$StartRepair)
+﻿param([string]$RunRoot,[string]$ToolsRoot,[switch]$SkipDiskTests,[switch]$LimitedMode,[switch]$HeadlessDiskSpd,[switch]$InteractiveDiskMark,[switch]$UserMode,[switch]$TrustedTools,[switch]$SkipResourceSampling,[switch]$SkipDiskBenchmark,[switch]$StartRepair)
 $ErrorActionPreference='Stop'
 $CpuTemperatureFile=$env:ITSETI_CPU_TEMPERATURE_FILE
 $RunRoot=(Resolve-Path -LiteralPath $RunRoot).Path
@@ -9,7 +9,8 @@ $script:Admin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsI
 $script:CompactOutput=$true
 $script:DiskTestPasses=2
 $script:QuietDiskTools=$true
-$script:ForbidInteractiveDiskTools=$true
+$script:InteractiveDiskMark=[bool]$InteractiveDiskMark
+$script:ForbidInteractiveDiskTools=!$InteractiveDiskMark
 $script:SkipWindowsUpdateChange=[bool]($SkipDiskTests -or $SkipDiskBenchmark -or $UserMode)
 $started=[DateTimeOffset]::Now.ToString('o')
 $id=[guid]::NewGuid().ToString()

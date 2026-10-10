@@ -26,7 +26,7 @@ public static class OrganizationSoftwareAudit
         var data = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
         var anyDesk = Existing(programFiles, programFiles86, "AnyDesk", "AnyDesk.exe");
         var rms = Existing(programFiles, programFiles86, "Remote Manipulator System - Host", "rutserv.exe");
-        var ocs = Path.Combine(programFiles, "OCS Inventory Agent", "OcsService.exe");
+        var ocs = Existing(programFiles, programFiles86, "OCS Inventory Agent", "OcsService.exe");
         var desktop = Path.Combine(programFiles, "Desktop Info", "DesktopInfo.exe");
         var panel = Path.Combine(data, "ITSETI", "DesktopInfo.ini");
         var winRar = Existing(programFiles, programFiles86, "WinRAR", "WinRAR.exe");
@@ -35,7 +35,7 @@ public static class OrganizationSoftwareAudit
         {
             Evaluate("AnyDesk", "AnyDesk", anyDesk, HasService("AnyDesk"), bundledDirectory, "AnyDesk-installer.exe"),
             Evaluate("RMS Host", "RMS", rms, HasService("RManService"), bundledDirectory, "Host-IT-SETI.RMS.7.7.3.0v3.msi", new Version(7, 7, 3, 0)),
-            Evaluate("OCS Inventory", "OCS", File.Exists(ocs) ? ocs : null, HasService("OCS Inventory Service"), bundledDirectory, "OCS-Agent-Installerv4.exe"),
+            Evaluate("OCS Inventory", "OCS", ocs, HasService("OCS Inventory Service"), bundledDirectory, "OCS-Agent-Installerv4.exe"),
             Evaluate("Панель ИТ-Сети", "Panel", File.Exists(desktop) ? desktop : null, File.Exists(panel), bundledDirectory, "DesktopInfo3230.exe", new Version(3, 23, 0)),
             EvaluateStandalone("WinRAR", "WinRAR", winRar, "winrar-x64-723ru.exe", new Version(7, 23, 0)),
             EvaluateStandalone("Яндекс Браузер", "Yandex", yandex, "Yandex.exe", new Version(26, 8, 4, 893))

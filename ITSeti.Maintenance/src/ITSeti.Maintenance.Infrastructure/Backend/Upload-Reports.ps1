@@ -6,8 +6,18 @@ $queue = Join-Path $root 'ReportQueue'
 $runs = Join-Path $root 'Runs'
 if (!(Test-Path -LiteralPath $deviceFile -PathType Leaf)) { exit 0 }
 $device = Get-Content -LiteralPath $deviceFile -Raw -Encoding UTF8 | ConvertFrom-Json
-if (!$device.deviceId -or !$device.deviceKey -or $device.serverUrl -ne 'https://it-seti.nylenz.ru') { exit 1 }
+try {
+    $configuredServer = New-Object System.Uri([string]$device.serverUrl)
+    if (!$configuredServer.IsAbsoluteUri -or $configuredServer.Scheme -ne 'https' -or
+        $configuredServer.Host -ne 'it-seti.nylenz.ru' -or $configuredServer.Port -notin @(-1,443)) { exit 1 }
+    $serverBase = New-Object System.Uri('https://it-seti.nylenz.ru/')
+} catch { exit 1 }
+if (!$device.deviceId -or !$device.deviceKey) { exit 1 }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+function New-ServerUri([string]$route) {
+    return New-Object System.Uri($serverBase, $route.TrimStart('/'))
+}
 
 function Get-Identity {
     $inventory = $null
@@ -61,7 +71,7 @@ function Send-Report([string]$path, [hashtable]$identity) {
     $json = $report | ConvertTo-Json -Depth 30 -Compress
     $bytes = [Text.Encoding]::UTF8.GetBytes($json)
     if ($bytes.Length -gt 12MB) { throw 'Отчёт превышает лимит сервера 12 МБ.' }
-    $request = [Net.HttpWebRequest][Net.WebRequest]::Create($device.serverUrl + '/api/v1/check-runs')
+    $request = [Net.HttpWebRequest][Net.WebRequest]::Create((New-ServerUri '/api/v1/check-runs'))
     $request.Method = 'POST'
     $request.AllowAutoRedirect = $false
     $request.Timeout = 30000
@@ -82,7 +92,7 @@ if ($VerifyOnly) { Get-Identity | ConvertTo-Json -Compress; exit 0 }
 try {
     $policyPath = Join-Path $root 'process-policy.json'
     if (!(Test-Path -LiteralPath $policyPath) -or (Get-Item -LiteralPath $policyPath).LastWriteTimeUtc -lt [DateTime]::UtcNow.AddDays(-1)) {
-        $request = [Net.HttpWebRequest][Net.WebRequest]::Create($device.serverUrl + '/api/v1/process-policy')
+        $request = [Net.HttpWebRequest][Net.WebRequest]::Create((New-ServerUri '/api/v1/process-policy'))
         $request.AllowAutoRedirect = $false
         $request.Timeout = 5000
         $request.ReadWriteTimeout = 5000
@@ -131,6 +141,7 @@ if (Test-Path -LiteralPath $runs -PathType Container) {
         Where-Object { !(Test-Path -LiteralPath (Join-Path $_.DirectoryName 'server-uploaded.txt')) } |
         Sort-Object LastWriteTimeUtc)
 }
+$failures = @()
 foreach ($file in $pending | Select-Object -First 200) {
     try {
         Send-Report $file.FullName $identity
@@ -138,9 +149,12 @@ foreach ($file in $pending | Select-Object -First 200) {
         else { [IO.File]::WriteAllText((Join-Path $file.DirectoryName 'server-uploaded.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII) }
     } catch {
         $message = $_.Exception.GetType().Name + ': ' + $_.Exception.Message
-        [IO.File]::WriteAllText((Join-Path $root 'server-upload-error.txt'),$message,[Text.Encoding]::UTF8)
-        exit 1
+        $failures += ($file.FullName + ': ' + $message)
     }
+}
+if ($failures.Count) {
+    [IO.File]::WriteAllText((Join-Path $root 'server-upload-error.txt'),($failures -join [Environment]::NewLine),[Text.Encoding]::UTF8)
+    exit 1
 }
 if (Test-Path -LiteralPath (Join-Path $root 'server-upload-error.txt')) {
     Remove-Item -LiteralPath (Join-Path $root 'server-upload-error.txt') -Force

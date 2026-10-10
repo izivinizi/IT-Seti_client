@@ -8,8 +8,10 @@ $validator=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionD
 $normalizer=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Normalize-ComponentKey'},$true)
 . ([scriptblock]::Create($normalizer.Extent.Text))
 $body=@($ast.EndBlock.Statements | Where-Object {$_ -is [Management.Automation.Language.TryStatementAst]})
-if($body.Count -ne 1){throw 'Worker body could not be isolated for fixture execution.'}
-$worker=[scriptblock]::Create($body[0].Extent.Text)
+if($body.Count -lt 1){throw 'Worker body could not be isolated for fixture execution.'}
+# The worker validates the enrollment URI in a small try/catch before the
+# main worker try/catch. Execute the last top-level try, which is the worker.
+$worker=[scriptblock]::Create(($body | Select-Object -Last 1).Extent.Text)
 $fixture=Join-Path $env:TEMP ('ITSeti-software-fixture-'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null
 $root=$fixture

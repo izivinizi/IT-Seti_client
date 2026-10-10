@@ -388,12 +388,12 @@ internal static class Program
                 using (var rmsKey = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\TektonIT\RMS Host\Host\Parameters"))
                     if (rmsKey?.GetValue("InternetId") is byte[] && new MachineIdentityStore().Read().RmsId is null)
                         throw new Exception("Installed RMS Internet ID was not detected");
-                var longRunning = first with { ActiveUptimeHours = 61 };
+                var longRunning = first with { ActiveUptimeHours = 81 };
                 var rebootIssue = DiagnosticRules.GetUserIssues(longRunning).FirstOrDefault(i => i.Title.Contains("перезагрузки"));
-                if (rebootIssue is null || !rebootIssue.Detail.Contains("61 ч") || !rebootIssue.Detail.Contains("Сохраните открытые документы"))
-                    throw new Exception("60-hour uptime warning is missing");
-                if (DiagnosticRules.GetUserIssues(first with { ActiveUptimeHours = 59 })
-                    .Any(i => i.Title.Contains("перезагрузки"))) throw new Exception("60-hour uptime boundary is wrong");
+                if (rebootIssue is null || !rebootIssue.Detail.Contains("81 ч") || !rebootIssue.Detail.Contains("Сохраните открытые документы"))
+                    throw new Exception("80-hour uptime warning is missing");
+                if (DiagnosticRules.GetUserIssues(first with { ActiveUptimeHours = 79 })
+                    .Any(i => i.Title.Contains("перезагрузки"))) throw new Exception("80-hour uptime boundary is wrong");
                 var hasQuickDiskHealth = first.QuickDisks is { Count: > 0 };
                 if (hasQuickDiskHealth
                     ? !window.ViewModel.UserDiskHealth.Contains("по данным Windows") || !window.ViewModel.Coverage.Contains("полной диагностике")
@@ -562,7 +562,7 @@ internal static class Program
                     throw new Exception("TreeSize must launch in the current user session without UAC");
                 var diskToolStart = ElevatedProcessLauncher.CreateStartInfo(@"C:\Tools\DiskInfo64.exe", @"C:\Tools");
                 if (diskToolStart.UseShellExecute || diskToolStart.Verb.Length > 0)
-                    throw new Exception("Disk utilities must launch in the current user session without UAC");
+                    throw new Exception("Portable disk utilities must run in the current desktop session without a credential prompt");
                 var detectedSetup = OrganizationSoftwareAudit.FindBundledDirectory();
                 var expectedSetup = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "Setup", "ITSETI-Setup"));
                 if (detectedSetup is not null && !string.Equals(Path.GetFullPath(detectedSetup), expectedSetup, StringComparison.OrdinalIgnoreCase))

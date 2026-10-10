@@ -103,7 +103,9 @@ if((Test-Path -LiteralPath $cancelRequest) -and [IO.File]::ReadAllText($cancelRe
 }
 if(Test-Path -LiteralPath (Join-Path $run 'result.json')){
     try { & (Join-Path $env:WINDIR 'System32\schtasks.exe') /Run /TN 'ITSeti-Maintenance-Upload' | Out-Null } catch {}
-    [IO.File]::WriteAllText((Join-Path $base 'last-quick-run.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII)
+    if($Quick -or $ScheduledQuick){
+        [IO.File]::WriteAllText((Join-Path $base 'last-quick-run.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII)
+    }
     if($StartRepair){
         [IO.File]::WriteAllText((Join-Path $run 'stage.txt'),'Плановое восстановление Windows',[Text.Encoding]::UTF8)
         Complete-ScheduledFullCheck $base $run (Join-Path $source 'InstalledRepair.ps1')

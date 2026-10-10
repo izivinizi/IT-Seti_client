@@ -32,12 +32,12 @@ function Close-OwnedDiskTools {
     }
 }
 function Start-DiskToolsBackground {
-    if(!$script:Admin){throw 'Для автоматического теста диска нужны права администратора.'}
     $root64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ScriptRoot))
     $tools64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ToolsRoot))
     $command="`$r=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$root64')); `$t=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$tools64')); & ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path `$r 'DiskWorker.ps1'),[Text.Encoding]::UTF8))) -ScriptRoot `$r -ToolsRoot `$t"
     if($script:DiskTestPasses -eq 2){$command+=' -Passes 2'}
     if($script:QuietDiskTools){$command+=' -Quiet'}
+    if($script:InteractiveDiskMark){$command+=' -InteractiveDiskMark'}
     $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     $script:DiskWorker=Start-Process powershell.exe -WindowStyle Hidden -WorkingDirectory $ScriptRoot -ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded" -PassThru -ErrorAction Stop
     $script:DiskWorkerStarted=Get-Date
@@ -81,8 +81,12 @@ function Clear-PreviousDiskMark {
         $path=$null
         try {$path=$p.Path} catch {}
         $ours=$false
-        foreach($kind in @('Sessions','ToolCache')) {
-            $base=[IO.Path]::GetFullPath((Join-Path $env:ProgramData ('ServiceMaintenance\'+$kind)))+'\'
+        foreach($root in @(
+            (Join-Path $env:ProgramData 'ServiceMaintenance'),
+            (Join-Path $env:LOCALAPPDATA 'ServiceMaintenance'),
+            $ToolsRoot
+        ) | Where-Object {$_ -and (Test-Path -LiteralPath $_ -PathType Container)}) {
+            $base=[IO.Path]::GetFullPath($root).TrimEnd('\')+'\'
             if($path -and $path.StartsWith($base,[StringComparison]::OrdinalIgnoreCase) -and $path -match '\\CrystalDiskMark9\\DiskMark64A?\.exe$'){$ours=$true}
         }
         if(!$ours){throw ('Уже открыт сторонний CrystalDiskMark (PID '+$p.Id+'). Закройте его перед автотестом.')}
@@ -103,10 +107,10 @@ function Clear-PreviousDiskMark {
 function Start-DiskTools([switch]$NoWait) {
     $script:DiskResult=$null
     Section 'Дисковые утилиты'
-    if(!$script:Admin) { throw 'Запустите Start.cmd: управление тестом требует прав администратора.' }
     if([IntPtr]::Size -lt 8 -and !$env:PROCESSOR_ARCHITEW6432) { throw 'В комплекте указаны 64-битные дисковые утилиты. На 32-битной Windows доступна сводка, но нужны отдельные x86-утилиты.' }
-    $info = Find-Tool 'CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe'
-    if($script:Snapshot -and (Get-Command ConvertFrom-CdiReport -ErrorAction SilentlyContinue)) {
+    $info = $null
+    if(!$script:InteractiveDiskMark) { $info = Find-Tool 'CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe' }
+    if(!$script:InteractiveDiskMark -and $script:Snapshot -and (Get-Command ConvertFrom-CdiReport -ErrorAction SilentlyContinue)) {
         try {
             $report=Join-Path (Split-Path $info) 'DiskInfo.txt'
             $startedAt=Get-Date
@@ -120,7 +124,7 @@ function Start-DiskTools([switch]$NoWait) {
     }
     $infoSession=[Diagnostics.Process]::GetCurrentProcess().SessionId
     $visibleInfo=@(Get-Process DiskInfo64 -ErrorAction SilentlyContinue | Where-Object {$_.SessionId -eq $infoSession -and $_.MainWindowHandle -ne [IntPtr]::Zero})
-    if(!$visibleInfo.Count -and !$script:QuietDiskTools) {
+    if(!$script:InteractiveDiskMark -and !$visibleInfo.Count -and !$script:QuietDiskTools) {
         $infoProcess=Start-Process -FilePath $info -WorkingDirectory (Split-Path $info) -PassThru -ErrorAction Stop
         Register-OwnedDiskTool $infoProcess $info
     }
@@ -131,11 +135,13 @@ function Start-DiskTools([switch]$NoWait) {
     $disk = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='$env:SystemDrive'"
     if(!$disk -or $disk.DriveType -ne 3 -or $disk.FreeSpace -lt 3GB) { throw 'Для теста требуется локальный системный диск с минимум 3 ГБ свободного места.' }
     # Probe only a newly created file, automatically removed when its handle is closed.
-    $probePath = Join-Path ($env:SystemDrive+'\') ('ServiceDiskProbe-'+[guid]::NewGuid().ToString('N')+'.tmp')
-    try {
-        $probe = New-Object IO.FileStream -ArgumentList @($probePath,[IO.FileMode]::CreateNew,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None,4096,[IO.FileOptions]::DeleteOnClose)
-        try { $probe.WriteByte(0); $probe.Flush() } finally { $probe.Dispose() }
-    } catch { throw "Нет доступа для тестовой записи на $env:SystemDrive. Тест не запущен: $($_.Exception.Message)" }
+    if(!$script:InteractiveDiskMark) {
+        $probePath = Join-Path ($env:SystemDrive+'\') ('ServiceDiskProbe-'+[guid]::NewGuid().ToString('N')+'.tmp')
+        try {
+            $probe = New-Object IO.FileStream -ArgumentList @($probePath,[IO.FileMode]::CreateNew,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None,4096,[IO.FileOptions]::DeleteOnClose)
+            try { $probe.WriteByte(0); $probe.Flush() } finally { $probe.Dispose() }
+        } catch { throw "Нет доступа для тестовой записи на $env:SystemDrive. Тест не запущен: $($_.Exception.Message)" }
+    }
     Clear-PreviousDiskMark
     $style='Normal';if($script:QuietDiskTools){$style='Minimized'}
     $launched=Start-Process -FilePath $mark -WorkingDirectory (Split-Path $mark) -WindowStyle $style -PassThru -ErrorAction Stop
