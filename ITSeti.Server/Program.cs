@@ -238,7 +238,7 @@ app.MapPost("/api/v1/enroll", async (HttpRequest request, EnrollRequest body, Np
 app.MapPost("/api/v1/auto-enroll", async (HttpRequest request, AutoEnrollRequest body, NpgsqlDataSource db,
     IConfiguration configuration, EnrollmentDiagnostics diagnostics) =>
 {
-    if (!configuration.GetValue("AutomaticIpEnrollmentEnabled", false)) return Results.NotFound();
+    if (!configuration.GetValue("AutomaticIpEnrollmentEnabled", true)) return Results.NotFound();
     if (string.IsNullOrWhiteSpace(body.ComputerName))
         return diagnostics.Reject(request.HttpContext, 400, "automatic_computer_name_missing", "Не удалось определить имя компьютера.");
     var fingerprint = DeviceIdentity.CreateFingerprint(body.SerialNumber, body.HardwareUuid);
