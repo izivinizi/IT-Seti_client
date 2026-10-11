@@ -4,6 +4,7 @@ public enum MaintenanceServiceOperation
 {
     FullCheck,
     QuickCheck,
+    DailySmartCheck,
     ScheduledFullCheck,
     Cleanup,
     Repair,
@@ -12,10 +13,17 @@ public enum MaintenanceServiceOperation
     RefreshSoftwareCatalog,
     ProbeTemperature,
     DisableWindowsUpdates,
-    RestoreWindowsUpdates
+    RestoreWindowsUpdates,
+    OpenSystemTool,
+    OpenUtility
 }
 
-public sealed record MaintenanceServiceRequest(string Command, MaintenanceServiceOperation? Operation = null);
+public sealed record MaintenanceServiceRequest(
+    string Command,
+    MaintenanceServiceOperation? Operation = null,
+    string? Target = null,
+    string? Argument = null,
+    int? SessionId = null);
 
 public sealed record MaintenanceServiceResponse(bool Success, string Message, string? Version = null);
 

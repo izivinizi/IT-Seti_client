@@ -54,13 +54,57 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
             ? await CpuTemperatureCache.RequestFreshAsync(TimeSpan.FromSeconds(5), cancellationToken)
             : CpuTemperatureCache.ReadFresh(maxAge: TimeSpan.FromSeconds(45));
         temperature ??= new CpuTemperatureReading(null, "Ожидается опрос системной задачи");
+        var latency = await ReadDiskLatencyAsync(cancellationToken);
         return new DiagnosticSnapshot(Guid.NewGuid(), started, Environment.MachineName, cpu,
             memory.TotalPhysical, memory.AvailablePhysical, disks, notes, QuickDisks: physicalDisks,
             LastBootAt: DateTimeOffset.Now - TimeSpan.FromMilliseconds(Environment.TickCount64),
             WindowsEdition: windows.Edition, WindowsRelease: windows.Release, WindowsBuild: windows.Build,
             CpuTemperatureC: temperature.TemperatureC, CpuTemperatureStatus: temperature.Status,
-            ActiveUptimeHours: ReadActiveUptimeHours());
+            ActiveUptimeHours: ReadActiveUptimeHours(), DiskReadLatencyMs: latency.ReadMs,
+            DiskWriteLatencyMs: latency.WriteMs);
     }, cancellationToken);
+
+    private static async Task<(double? ReadMs, double? WriteMs)> ReadDiskLatencyAsync(CancellationToken cancellationToken)
+    {
+        const string script = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+            + "$row=Get-WmiObject Win32_PerfFormattedData_PerfDisk_PhysicalDisk -Filter \"Name='_Total'\" -ErrorAction Stop; "
+            + "if($null -eq $row){throw 'Не найден счётчик PhysicalDisk.'}; "
+            + "[pscustomobject]@{ReadMs=[double]$row.AvgDisksecPerRead*1000;WriteMs=[double]$row.AvgDisksecPerWrite*1000} | ConvertTo-Json -Compress";
+        try
+        {
+            var powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+            using var process = new Process { StartInfo = new ProcessStartInfo(powershell)
+            {
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true,
+                RedirectStandardError = true, StandardOutputEncoding = Encoding.UTF8,
+                ArgumentList = { "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand",
+                    Convert.ToBase64String(Encoding.Unicode.GetBytes(script)) }
+            } };
+            if (!process.Start()) return default;
+            var output = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(6));
+            try { await process.WaitForExitAsync(timeout.Token); }
+            catch (OperationCanceledException)
+            {
+                try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+                if (cancellationToken.IsCancellationRequested) throw;
+                return default;
+            }
+            if (process.ExitCode != 0) return default;
+            using var json = JsonDocument.Parse(await output);
+            var root = json.RootElement;
+            var read = root.TryGetProperty("ReadMs", out var readElement) && readElement.TryGetDouble(out var readValue)
+                ? Math.Clamp(readValue, 0, 60_000) : (double?)null;
+            var write = root.TryGetProperty("WriteMs", out var writeElement) && writeElement.TryGetDouble(out var writeValue)
+                ? Math.Clamp(writeValue, 0, 60_000) : (double?)null;
+            return (read, write);
+        }
+        catch (Exception ex) when (ex is Win32Exception or IOException or JsonException or InvalidOperationException
+            or UnauthorizedAccessException)
+        { return default; }
+    }
 
     private static async Task<List<PhysicalDiskDetails>> ReadDiskHealthAsync(CancellationToken cancellationToken)
     {

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Reflection;
@@ -20,6 +21,10 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     private readonly string backendRoot;
     private readonly string statusPath;
     private readonly string pipeName;
+    private readonly Dictionary<string, int> monitoringStreaks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> reportedMonitoringIssues = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object diagnosticGate = new();
+    private MaintenanceServiceOperation? queuedDiagnostic;
     private DateTimeOffset lastTemperatureProbe = DateTimeOffset.MinValue;
     private DateTimeOffset lastUpload = DateTimeOffset.MinValue;
     private DateTimeOffset lastCatalogRefresh = DateTimeOffset.MinValue;
@@ -123,10 +128,31 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             return new(true, "Служба обслуживания работает.", GetVersion());
         if (string.Equals(request.Command, "stop", StringComparison.OrdinalIgnoreCase) && request.Operation is { } stopOperation)
             return new(true, StopOperation(stopOperation) ? "Операция остановлена." : "Операция уже завершена.", GetVersion());
+        if (string.Equals(request.Command, "launch", StringComparison.OrdinalIgnoreCase) && request.Operation is
+            MaintenanceServiceOperation.OpenSystemTool or MaintenanceServiceOperation.OpenUtility)
+        {
+            try
+            {
+                var processId = LaunchInteractiveTool(request);
+                return new(true, $"Утилита запущена службой (PID {processId}).", GetVersion());
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException
+                or Win32Exception or ArgumentException)
+            {
+                return new(false, ex.Message, GetVersion());
+            }
+        }
         if (!string.Equals(request.Command, "start", StringComparison.OrdinalIgnoreCase) || request.Operation is null)
             return new(false, "Команда службы не поддерживается.", GetVersion());
         try
         {
+            if (IsDiagnosticOperation(request.Operation.Value) && HasRunningDiagnostic())
+            {
+                if (request.Operation.Value == MaintenanceServiceOperation.DailySmartCheck)
+                    return new(true, "Диагностическая проверка уже выполняется.", GetVersion());
+                lock (diagnosticGate) queuedDiagnostic = request.Operation.Value;
+                return new(true, "Диагностическая проверка уже выполняется; запрос поставлен в очередь.", GetVersion());
+            }
             var started = StartOperation(request.Operation.Value);
             var queueable = request.Operation.Value is MaintenanceServiceOperation.Cleanup
                 or MaintenanceServiceOperation.OrganizationSetup
@@ -191,6 +217,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     {
         MaintenanceServiceOperation.FullCheck => ("InstalledCheck.ps1", []),
         MaintenanceServiceOperation.QuickCheck => ("InstalledCheck.ps1", ["-Quick"]),
+        MaintenanceServiceOperation.DailySmartCheck => ("InstalledCheck.ps1", ["-SmartOnly"]),
         MaintenanceServiceOperation.ScheduledFullCheck => ("InstalledCheck.ps1", ["-StartRepair"]),
         MaintenanceServiceOperation.Cleanup => ("InstalledCleanup.ps1", []),
         MaintenanceServiceOperation.Repair => ("InstalledRepair.ps1", []),
@@ -202,6 +229,51 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         MaintenanceServiceOperation.ProbeTemperature => throw new InvalidOperationException("Опрос температуры выполняется самой службой."),
         _ => throw new InvalidOperationException("Операция службы не поддерживается.")
     };
+
+    private int LaunchInteractiveTool(MaintenanceServiceRequest request)
+    {
+        if (request.SessionId is not > 0)
+            throw new InvalidOperationException("Не удалось определить пользовательский сеанс Windows.");
+        if (string.IsNullOrWhiteSpace(request.Target))
+            throw new ArgumentException("Не указана разрешённая утилита.", nameof(request));
+
+        SystemToolLaunchSpec spec;
+        if (request.Operation == MaintenanceServiceOperation.OpenSystemTool)
+        {
+            spec = SystemToolsLauncher.GetLaunchSpec(request.Target);
+        }
+        else
+        {
+            var toolsRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(backendRoot)!, "Tools"));
+            spec = request.Target switch
+            {
+                "CrystalDiskInfo" => CreateToolSpec(
+                    FullDiagnosticsRunner.ResolveInteractiveDiskTool(toolsRoot, diskInfo: true), request.Target),
+                "CrystalDiskMark" => CreateToolSpec(
+                    FullDiagnosticsRunner.ResolveInteractiveDiskTool(toolsRoot, diskInfo: false), request.Target),
+                "TreeSize" => CreateTreeSizeSpec(toolsRoot, request.Argument),
+                _ => throw new ArgumentOutOfRangeException(nameof(request.Target), "Утилита не разрешена службой.")
+            };
+        }
+        return ElevatedInteractiveProcessLauncher.LaunchAsSystem(request.SessionId.Value,
+            spec.FileName, spec.Arguments, spec.WorkingDirectory);
+    }
+
+    private static SystemToolLaunchSpec CreateToolSpec(string? executable, string name)
+    {
+        if (string.IsNullOrWhiteSpace(executable))
+            throw new FileNotFoundException($"{name} не найден в установленном комплекте.");
+        return new(executable, [], Path.GetDirectoryName(executable)!);
+    }
+
+    private static SystemToolLaunchSpec CreateTreeSizeSpec(string toolsRoot, string? volume)
+    {
+        if (string.IsNullOrWhiteSpace(volume) || !System.Text.RegularExpressions.Regex.IsMatch(volume, @"^[A-Za-z]:\\$"))
+            throw new ArgumentException("TreeSize можно запустить только для локального диска.", nameof(volume));
+        var executable = Path.Combine(toolsRoot, "TreeSize Free", "TreeSizeFree.exe");
+        if (!File.Exists(executable)) throw new FileNotFoundException("TreeSize Free не найден в установленном комплекте.");
+        return new(executable, [volume], Path.GetDirectoryName(executable)!);
+    }
 
     private Process CreatePowerShellProcess(string scriptName, IReadOnlyList<string> arguments)
     {
@@ -238,6 +310,24 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         {
             running.TryRemove(new KeyValuePair<MaintenanceServiceOperation, Process>(operation, process));
             process.Dispose();
+            if (IsDiagnosticOperation(operation))
+            {
+                MaintenanceServiceOperation? next = null;
+                lock (diagnosticGate)
+                {
+                    if (!HasRunningDiagnostic() && queuedDiagnostic is { } queued)
+                    {
+                        next = queued;
+                        queuedDiagnostic = null;
+                    }
+                }
+                if (next is { } nextOperation)
+                {
+                    try { StartOperation(nextOperation); }
+                    catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
+                    { await WriteServiceErrorAsync(ex); }
+                }
+            }
             if (HasPendingRequests(operation))
             {
                 try { StartOperation(operation); }
@@ -246,6 +336,12 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             }
         }
     }
+
+    private bool HasRunningDiagnostic() => running.Keys.Any(IsDiagnosticOperation);
+
+    private static bool IsDiagnosticOperation(MaintenanceServiceOperation operation) => operation is
+        MaintenanceServiceOperation.FullCheck or MaintenanceServiceOperation.QuickCheck or
+        MaintenanceServiceOperation.DailySmartCheck or MaintenanceServiceOperation.ScheduledFullCheck;
 
     private static bool HasPendingRequests(MaintenanceServiceOperation operation)
     {
@@ -276,7 +372,10 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
                     lastTemperatureProbe = DateTimeOffset.UtcNow;
                 }
                 var snapshot = await new WindowsDiagnosticsRunner().RunLiveAsync(cancellationToken);
-                await WriteStatusAsync(snapshot, "Мониторинг работает", cancellationToken);
+                var critical = EvaluateMonitoring(snapshot);
+                await WriteStatusAsync(snapshot, critical.Count > 0 ? "Обнаружено критическое состояние" : "Мониторинг работает", cancellationToken, critical);
+                if (critical.Count > 0)
+                    await QueueMonitoringReportAsync(snapshot, critical, cancellationToken);
                 var connected = File.Exists(Path.Combine(DataRoot, "server-device.json"));
                 if (connected && DateTimeOffset.UtcNow - lastUpload >= TimeSpan.FromMinutes(5))
                 {
@@ -288,6 +387,8 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
                     StartOperation(MaintenanceServiceOperation.RefreshSoftwareCatalog);
                     lastCatalogRefresh = DateTimeOffset.UtcNow;
                 }
+                if (!HasFreshSmartReport())
+                    StartOperation(MaintenanceServiceOperation.DailySmartCheck);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
@@ -297,6 +398,70 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             }
             await Task.Delay(TimeSpan.FromMinutes(1), cancellationToken);
         }
+    }
+
+    private static bool HasFreshSmartReport()
+    {
+        try
+        {
+            var marker = Path.Combine(DataRoot, "last-smart-run.txt");
+            if (!File.Exists(marker)) return false;
+            return DateTimeOffset.TryParse(File.ReadAllText(marker).Trim(), out var value) &&
+                DateTimeOffset.UtcNow - value.ToUniversalTime() < TimeSpan.FromHours(24);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException) { return false; }
+    }
+
+    private IReadOnlyList<CriticalMonitoringIssue> EvaluateMonitoring(ITSeti.Maintenance.Core.DiagnosticSnapshot snapshot)
+    {
+        var current = CriticalMonitoringEvaluator.Evaluate(snapshot);
+        var active = current.Select(issue => issue.Identity).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in monitoringStreaks.Keys.Where(key => !active.Contains(key)).ToArray())
+        {
+            monitoringStreaks.Remove(key);
+            reportedMonitoringIssues.Remove(key);
+        }
+
+        var ready = new List<CriticalMonitoringIssue>();
+        foreach (var issue in current)
+        {
+            monitoringStreaks[issue.Identity] = monitoringStreaks.TryGetValue(issue.Identity, out var count) ? count + 1 : 1;
+            if (monitoringStreaks[issue.Identity] >= 2 && reportedMonitoringIssues.Add(issue.Identity)) ready.Add(issue);
+        }
+        return ready;
+    }
+
+    private Task QueueMonitoringReportAsync(ITSeti.Maintenance.Core.DiagnosticSnapshot snapshot,
+        IReadOnlyList<CriticalMonitoringIssue> issues, CancellationToken cancellationToken)
+    {
+        var queue = Path.Combine(DataRoot, "MonitoringQueue");
+        var report = new
+        {
+            snapshot.Id,
+            snapshot.StartedAt,
+            snapshot.ComputerName,
+            snapshot.CpuPercent,
+            snapshot.TotalMemoryBytes,
+            snapshot.AvailableMemoryBytes,
+            snapshot.Disks,
+            snapshot.WindowsEdition,
+            snapshot.WindowsRelease,
+            snapshot.WindowsBuild,
+            snapshot.CpuTemperatureC,
+            snapshot.CpuTemperatureStatus,
+            snapshot.ActiveUptimeHours,
+            snapshot.DiskReadLatencyMs,
+            snapshot.DiskWriteLatencyMs,
+            KindLabel = "Постоянный мониторинг",
+            DiagnosticIssues = issues.Select(issue => new
+            {
+                issue.Title,
+                issue.Detail,
+                Severity = "Critical"
+            }).ToArray()
+        };
+        var path = Path.Combine(queue, snapshot.Id.ToString("N") + ".json");
+        return WriteJsonAtomicallyAsync(path, report, cancellationToken);
     }
 
     private async Task RefreshTemperatureAsync(CancellationToken cancellationToken)
@@ -311,15 +476,24 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     }
 
     private Task WriteStatusAsync(ITSeti.Maintenance.Core.DiagnosticSnapshot? snapshot, string state,
-        CancellationToken cancellationToken) => WriteJsonAtomicallyAsync(statusPath, new
+        CancellationToken cancellationToken, IReadOnlyList<CriticalMonitoringIssue>? critical = null) => WriteJsonAtomicallyAsync(statusPath, new
         {
             Version = GetVersion(),
             State = state,
             CapturedAtUtc = DateTimeOffset.UtcNow,
+            ComputerName = snapshot?.ComputerName,
             CpuPercent = snapshot?.CpuPercent is { } cpu ? (double?)Math.Round(cpu) : null,
             MemoryUsedPercent = snapshot is null ? null : (double?)Math.Round(snapshot.MemoryUsedPercent),
+            TotalMemoryBytes = snapshot?.TotalMemoryBytes,
+            AvailableMemoryBytes = snapshot?.AvailableMemoryBytes,
             CpuTemperatureC = snapshot?.CpuTemperatureC is { } temperature ? (double?)Math.Round(temperature) : null,
             UptimeHours = snapshot?.ActiveUptimeHours is { } uptime ? (double?)Math.Round(uptime, 1) : null,
+            DiskReadLatencyMs = snapshot?.DiskReadLatencyMs is { } readLatency ? (double?)Math.Round(readLatency, 1) : null,
+            DiskWriteLatencyMs = snapshot?.DiskWriteLatencyMs is { } writeLatency ? (double?)Math.Round(writeLatency, 1) : null,
+            WindowsEdition = snapshot?.WindowsEdition,
+            WindowsRelease = snapshot?.WindowsRelease,
+            WindowsBuild = snapshot?.WindowsBuild,
+            CriticalIssues = critical?.Select(issue => new { issue.Identity, issue.Title, issue.Detail }).ToArray() ?? [],
             FixedDisks = snapshot?.Disks.Select(disk => new
             {
                 disk.Name,

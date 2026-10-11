@@ -111,9 +111,9 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
     private async Task<DiagnosticSnapshot> RunCoreAsync(IProgress<DiagnosticProgress> progress, bool userMode, bool quickMode, CancellationToken cancellationToken)
     {
         var installedTask = quickMode ? InstalledQuickTask : InstalledTask;
-        // User-facing full checks keep DiskMark in the current desktop session.
-        // The installed SYSTEM task remains the path for unattended and quick checks.
-        if (IsInstalled && (!quickMode || HasInstalledQuickTask.Value) && !(userMode && !quickMode))
+        // All installed checks use the same SYSTEM pipeline. The UI remains an
+        // unprivileged client; it only starts the task and displays its report.
+        if (IsInstalled && (!quickMode || HasInstalledQuickTask.Value))
         {
             try { return await AddCpuTemperatureAsync(await RunInstalledAsync(progress, installedTask, cancellationToken)); }
             catch (InstalledTaskUnavailableException ex)
@@ -312,7 +312,8 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
                 throw new InstalledTaskUnavailableException($"Код {launch.ExitCode}: {(await errors).Trim()} {(await standard).Trim()}");
         }
 
-        var deadline = DateTime.UtcNow.AddSeconds(20);
+        var queued = service.Connected && service.Message.Contains("очеред", StringComparison.OrdinalIgnoreCase);
+        var deadline = DateTime.UtcNow.AddMinutes(queued ? 10 : 1);
         string? root = null;
         while (DateTime.UtcNow < deadline)
         {

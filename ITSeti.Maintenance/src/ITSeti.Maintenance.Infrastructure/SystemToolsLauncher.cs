@@ -3,6 +3,7 @@ using System.Diagnostics;
 namespace ITSeti.Maintenance.Infrastructure;
 
 public sealed record SystemToolShortcut(string Key, string Title, string Icon, bool Available, string ToolTip);
+public sealed record SystemToolLaunchSpec(string FileName, IReadOnlyList<string> Arguments, string WorkingDirectory);
 
 public static class SystemToolsLauncher
 {
@@ -14,19 +15,31 @@ public static class SystemToolsLauncher
 
     public static IReadOnlyList<SystemToolShortcut> GetShortcuts() => ToolKeys.Select(Create).ToArray();
 
+    public static SystemToolLaunchSpec GetLaunchSpec(string key)
+    {
+        var tool = Resolve(key);
+        if (tool.Shell)
+        {
+            var explorer = Path.Combine(System, "explorer.exe");
+            return new(explorer, [tool.FileName], System);
+        }
+        return new(tool.FileName, tool.Arguments, Path.GetDirectoryName(tool.FileName)!);
+    }
+
     public static Process? Launch(string key)
     {
         var tool = Resolve(key);
         if (!File.Exists(tool.FileName) && !tool.Shell)
             throw new FileNotFoundException("Системное приложение недоступно в этой редакции Windows.", tool.FileName);
 
-        var start = new ProcessStartInfo(tool.FileName)
+        var spec = GetLaunchSpec(key);
+        var start = new ProcessStartInfo(spec.FileName)
         {
             UseShellExecute = true,
-            Verb = !tool.Shell && !ElevatedProcessLauncher.IsCurrentProcessElevated ? "runas" : string.Empty,
-            WorkingDirectory = File.Exists(tool.FileName) ? Path.GetDirectoryName(tool.FileName)! : Environment.CurrentDirectory
+            Verb = !ElevatedProcessLauncher.IsCurrentProcessElevated ? "runas" : string.Empty,
+            WorkingDirectory = spec.WorkingDirectory
         };
-        foreach (var argument in tool.Arguments) start.ArgumentList.Add(argument);
+        foreach (var argument in spec.Arguments) start.ArgumentList.Add(argument);
         return Process.Start(start);
     }
 

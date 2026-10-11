@@ -773,9 +773,14 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(volume)) return;
         try
         {
-            ViewModel.SetSoftwareActionStatus("Открываем TreeSize Free…");
-            await TreeSizeLauncher.StartScanAsync(volume);
-            ViewModel.SetSoftwareActionStatus($"TreeSize Free открыт для {volume} с правами текущей учётной записи.");
+            ViewModel.SetSoftwareActionStatus("Открываем TreeSize Free через службу…");
+            var result = await MaintenanceServiceClient.LaunchUtilityAsync("TreeSize", volume,
+                Process.GetCurrentProcess().SessionId);
+            var message = result.Connected
+                ? result.Message
+                : "Служба обслуживания недоступна. Переустановите приложение с включённой службой.";
+            ViewModel.SetSoftwareActionStatus(message);
+            if (!result.Accepted) MessageBox.Show(this, message, "TreeSize Free", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (Exception ex)
         {
@@ -796,20 +801,29 @@ public partial class MainWindow : Window
         catch (Exception ex) { MessageBox.Show(this, ex.Message, "Не удалось открыть каталог утилит", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
 
-    private void LaunchSystemTool_Click(object sender, RoutedEventArgs e)
+    private async void LaunchSystemTool_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { Tag: string key }) return;
-        try { _ = SystemToolsLauncher.Launch(key); }
+        try
+        {
+            var result = await MaintenanceServiceClient.LaunchSystemToolAsync(key,
+                Process.GetCurrentProcess().SessionId);
+            if (!result.Accepted)
+                MessageBox.Show(this, result.Connected ? result.Message : "Служба обслуживания недоступна.",
+                    "Системное приложение", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
         catch (Exception ex) { MessageBox.Show(this, ex.Message, "Системное приложение", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
     private async Task LaunchDiskToolAsync(bool diskInfo)
     {
         try
         {
-            var message = await fullRunner.LaunchInteractiveDiskToolAsync(diskInfo);
+            var key = diskInfo ? "CrystalDiskInfo" : "CrystalDiskMark";
+            var result = await MaintenanceServiceClient.LaunchUtilityAsync(key, null,
+                Process.GetCurrentProcess().SessionId);
+            var message = result.Connected ? result.Message : "Служба обслуживания недоступна. Переустановите приложение с включённой службой.";
             ViewModel.SetSoftwareActionStatus(message);
-            if (!message.Contains("окно открыто", StringComparison.OrdinalIgnoreCase)
-                && !message.Contains("окно уже открыто", StringComparison.OrdinalIgnoreCase))
+            if (!result.Accepted)
                 MessageBox.Show(this, message, "Дисковая утилита", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (Exception ex)

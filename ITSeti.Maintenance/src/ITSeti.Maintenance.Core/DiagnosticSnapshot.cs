@@ -15,7 +15,7 @@ public sealed record DiagnosticSnapshot(
     FullDiagnosticDetails? Full = null, List<PhysicalDiskDetails>? QuickDisks = null,
     DateTimeOffset? LastBootAt = null, string? WindowsEdition = null, string? WindowsRelease = null,
     int? WindowsBuild = null, double? CpuTemperatureC = null, string? CpuTemperatureStatus = null,
-    double? ActiveUptimeHours = null)
+    double? ActiveUptimeHours = null, double? DiskReadLatencyMs = null, double? DiskWriteLatencyMs = null)
 {
     public double MemoryUsedPercent => TotalMemoryBytes > 0
         ? 100.0 * (TotalMemoryBytes - AvailableMemoryBytes) / TotalMemoryBytes : 0;

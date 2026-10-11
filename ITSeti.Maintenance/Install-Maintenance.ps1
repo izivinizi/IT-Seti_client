@@ -41,7 +41,7 @@ $serviceExe=Join-Path $InstallRoot 'Service\ITSeti.Maintenance.Service.exe'
 if(!(Test-Path -LiteralPath (Join-Path $sourceService 'ITSeti.Maintenance.Service.exe') -PathType Leaf)){throw 'Maintenance service executable is missing.'}
 $install=$InstallRoot
 $installStage='Создание каталогов и копирование файлов'
-New-Item -ItemType Directory -Path $install,$data,(Join-Path $data 'Runs'),(Join-Path $data 'Repairs'),(Join-Path $data 'CleanupRequests'),(Join-Path $data 'CleanupRuns'),(Join-Path $data 'WindowsUpdate'),(Join-Path $data 'OrganizationSetupRequests'),(Join-Path $data 'OrganizationSetupRuns') -Force | Out-Null
+New-Item -ItemType Directory -Path $install,$data,(Join-Path $data 'Runs'),(Join-Path $data 'Repairs'),(Join-Path $data 'CleanupRequests'),(Join-Path $data 'CleanupRuns'),(Join-Path $data 'MonitoringQueue'),(Join-Path $data 'WindowsUpdate'),(Join-Path $data 'OrganizationSetupRequests'),(Join-Path $data 'OrganizationSetupRuns') -Force | Out-Null
 Remove-Item -LiteralPath (Join-Path $install 'Setup') -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path (Join-Path $install 'Backend') -Force | Out-Null
 if(!$PreinstalledApp){Get-ChildItem -LiteralPath $sourceApp -Force | Copy-Item -Destination $install -Recurse -Force}

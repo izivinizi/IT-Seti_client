@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 $root = Join-Path $env:ProgramData 'ITSeti\Maintenance'
 $deviceFile = Join-Path $root 'server-device.json'
 $queue = Join-Path $root 'ReportQueue'
+$monitoringQueue = Join-Path $root 'MonitoringQueue'
 $runs = Join-Path $root 'Runs'
 if (!(Test-Path -LiteralPath $deviceFile -PathType Leaf)) { exit 0 }
 $device = Get-Content -LiteralPath $deviceFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -136,6 +137,9 @@ $pending = @()
 if (Test-Path -LiteralPath $queue -PathType Container) {
     $pending += @(Get-ChildItem -LiteralPath $queue -File -Filter '*.json' | Sort-Object LastWriteTimeUtc)
 }
+if (Test-Path -LiteralPath $monitoringQueue -PathType Container) {
+    $pending += @(Get-ChildItem -LiteralPath $monitoringQueue -File -Filter '*.json' | Sort-Object LastWriteTimeUtc)
+}
 if (Test-Path -LiteralPath $runs -PathType Container) {
     $pending += @(Get-ChildItem -LiteralPath $runs -File -Filter 'result.json' -Recurse |
         Where-Object { !(Test-Path -LiteralPath (Join-Path $_.DirectoryName 'server-uploaded.txt')) } |
@@ -145,7 +149,7 @@ $failures = @()
 foreach ($file in $pending | Select-Object -First 200) {
     try {
         Send-Report $file.FullName $identity
-        if ($file.DirectoryName -eq $queue) { Remove-Item -LiteralPath $file.FullName -Force }
+        if ($file.DirectoryName -in @($queue, $monitoringQueue)) { Remove-Item -LiteralPath $file.FullName -Force }
         else { [IO.File]::WriteAllText((Join-Path $file.DirectoryName 'server-uploaded.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII) }
     } catch {
         $message = $_.Exception.GetType().Name + ': ' + $_.Exception.Message

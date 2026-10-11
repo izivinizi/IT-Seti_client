@@ -1,4 +1,4 @@
-﻿param([switch]$StartRepair,[switch]$Quick,[switch]$ScheduledQuick)
+﻿param([switch]$StartRepair,[switch]$Quick,[switch]$ScheduledQuick,[switch]$SmartOnly)
 $ErrorActionPreference='Stop'
 $base=Join-Path $env:ProgramData 'ITSeti\Maintenance'
 $runs=Join-Path $base 'Runs'
@@ -18,7 +18,7 @@ if(!$StartRepair -and !$ScheduledQuick){
     & icacls.exe $cancelRequest /grant '*S-1-5-32-545:M' | Out-Null
     if($LASTEXITCODE -ne 0){throw 'Could not allow the current user to stop the check.'}
 }
-$latestName=if($Quick){'latest-quick.txt'}elseif($StartRepair){'latest-auto-full.txt'}else{'latest-full.txt'}
+$latestName=if($SmartOnly){'latest-smart.txt'}elseif($Quick){'latest-quick.txt'}elseif($StartRepair){'latest-auto-full.txt'}else{'latest-full.txt'}
 if($ScheduledQuick){
     $lastRunFile=Join-Path $base 'last-quick-run.txt'
     $lastRun=[DateTimeOffset]::MinValue
@@ -95,7 +95,10 @@ foreach($file in @('FullCheckWorker.ps1','HeadlessDiskWorker.ps1','ResourceSampl
     Copy-Item -LiteralPath (Join-Path $source $file) -Destination $run -ErrorAction Stop
 }
 $env:ITSETI_CPU_TEMPERATURE_FILE=$cpuTemperatureFile
-& ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $run 'FullCheckWorker.ps1'),[Text.Encoding]::UTF8))) -RunRoot $run -ToolsRoot $tools -HeadlessDiskSpd -TrustedTools -UserMode:$Quick
+$workerArgs=@('-RunRoot',$run,'-ToolsRoot',$tools,'-HeadlessDiskSpd','-TrustedTools')
+if($Quick -or $SmartOnly){$workerArgs += '-UserMode'}
+if($SmartOnly){$workerArgs += '-SkipResourceSampling';$workerArgs += '-SkipDiskBenchmark'}
+& ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $run 'FullCheckWorker.ps1'),[Text.Encoding]::UTF8))) @workerArgs
 Remove-Item Env:ITSETI_CPU_TEMPERATURE_FILE -ErrorAction SilentlyContinue
 if((Test-Path -LiteralPath $cancelRequest) -and [IO.File]::ReadAllText($cancelRequest).Trim() -eq 'cancel'){
     [IO.File]::WriteAllText((Join-Path $run 'cancelled.txt'),'cancelled',[Text.Encoding]::ASCII)
@@ -103,7 +106,10 @@ if((Test-Path -LiteralPath $cancelRequest) -and [IO.File]::ReadAllText($cancelRe
 }
 if(Test-Path -LiteralPath (Join-Path $run 'result.json')){
     try { & (Join-Path $env:WINDIR 'System32\schtasks.exe') /Run /TN 'ITSeti-Maintenance-Upload' | Out-Null } catch {}
-    if($Quick -or $ScheduledQuick){
+    if($SmartOnly){
+        [IO.File]::WriteAllText((Join-Path $base 'last-smart-run.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII)
+    }
+    elseif($Quick -or $ScheduledQuick){
         [IO.File]::WriteAllText((Join-Path $base 'last-quick-run.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII)
     }
     if($StartRepair){

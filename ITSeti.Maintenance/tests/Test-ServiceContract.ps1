@@ -15,8 +15,16 @@ if($serviceProject -notmatch '<Version>2\.3\.1</Version>' -or
    !$client.Contains('NamedPipeClientStream') -or !$client.Contains('CancelAfter(TimeSpan.FromSeconds(3))')) {
     throw 'The service IPC contract is missing its version, ACL, timeout, or fixed operation allowlist.'
 }
-foreach($operation in @('FullCheck','QuickCheck','ScheduledFullCheck','Cleanup','Repair','OrganizationSetup','UploadReports','RefreshSoftwareCatalog','ProbeTemperature','DisableWindowsUpdates','RestoreWindowsUpdates')) {
+foreach($operation in @('FullCheck','QuickCheck','DailySmartCheck','ScheduledFullCheck','Cleanup','Repair','OrganizationSetup','UploadReports','RefreshSoftwareCatalog','ProbeTemperature','DisableWindowsUpdates','RestoreWindowsUpdates')) {
     if(!$coordinator.Contains('MaintenanceServiceOperation.'+$operation)){throw "Service operation is missing: $operation"}
+}
+if(!$protocol.Contains('OpenSystemTool') -or !$protocol.Contains('OpenUtility') -or
+   !$client.Contains('LaunchSystemToolAsync') -or !$client.Contains('LaunchUtilityAsync') -or
+   !$coordinator.Contains('LaunchInteractiveTool') -or !$coordinator.Contains('ElevatedInteractiveProcessLauncher') -or
+   !$coordinator.Contains('SessionId')) { throw 'Privileged engineering-menu IPC is missing.' }
+if(!$coordinator.Contains('MonitoringQueue') -or !$coordinator.Contains('CriticalMonitoringEvaluator') -or
+   !$coordinator.Contains('DiskReadLatencyMs') -or !$coordinator.Contains('DiskWriteLatencyMs')) {
+    throw 'Continuous critical monitoring is missing disk latency or its protected queue.'
 }
 if(!$coordinator.Contains('MaintenanceServiceOperation.Cleanup => (Folder: "CleanupRequests", Pattern: "*.request")') -or
    !$coordinator.Contains('if (HasPendingRequests(operation))')) {

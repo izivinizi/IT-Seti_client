@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Net.NetworkInformation;
 using System.Security.Principal;
@@ -1115,10 +1116,12 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public async Task OpenLowSpaceScanAsync()
     {
         if (busy || LowSpaceDisk is not { } disk) return;
-        userStatusOverride = "Открываем TreeSize Free…";
+        userStatusOverride = "Открываем TreeSize Free через службу…";
         Notify();
-        await TreeSizeLauncher.StartScanAsync(disk.Name);
-        userStatusOverride = $"TreeSize Free открыт для диска {disk.Name.TrimEnd('\\')} с правами текущей учётной записи.";
+        var result = await MaintenanceServiceClient.LaunchUtilityAsync("TreeSize", disk.Name,
+            Process.GetCurrentProcess().SessionId);
+        userStatusOverride = result.Connected ? result.Message
+            : "Служба обслуживания недоступна. Переустановите приложение с включённой службой.";
         Notify();
     }
 
@@ -1351,9 +1354,11 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                 _ = RequestTemperatureProbeAsync();
             }
 
-            var snapshot = runner is WindowsDiagnosticsRunner windowsRunner
-                ? await windowsRunner.RunLiveAsync()
-                : await runner.RunAsync();
+            var snapshot = MaintenanceServiceStatusReader.ReadSnapshot(TimeSpan.FromMinutes(3));
+            if (snapshot is null)
+                snapshot = runner is WindowsDiagnosticsRunner windowsRunner
+                    ? await windowsRunner.RunLiveAsync()
+                    : await runner.RunAsync();
             var temperature = CpuTemperatureCache.ReadFresh(maxAge: TimeSpan.FromSeconds(45));
             live = snapshot with
             {

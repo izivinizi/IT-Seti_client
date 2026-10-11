@@ -24,6 +24,16 @@ public static class MaintenanceServiceClient
         MaintenanceServiceOperation operation, CancellationToken cancellationToken = default) =>
         SendAsync(new MaintenanceServiceRequest("stop", operation), cancellationToken);
 
+    public static Task<MaintenanceServiceCallResult> LaunchSystemToolAsync(
+        string key, int sessionId, CancellationToken cancellationToken = default) =>
+        SendAsync(new MaintenanceServiceRequest("launch", MaintenanceServiceOperation.OpenSystemTool,
+            key, SessionId: sessionId), cancellationToken);
+
+    public static Task<MaintenanceServiceCallResult> LaunchUtilityAsync(
+        string key, string? argument, int sessionId, CancellationToken cancellationToken = default) =>
+        SendAsync(new MaintenanceServiceRequest("launch", MaintenanceServiceOperation.OpenUtility,
+            key, argument, sessionId), cancellationToken);
+
     private static async Task<MaintenanceServiceCallResult> SendAsync(
         MaintenanceServiceRequest request, CancellationToken cancellationToken)
     {
