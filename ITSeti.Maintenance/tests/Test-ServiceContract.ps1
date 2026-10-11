@@ -21,7 +21,8 @@ foreach($operation in @('FullCheck','QuickCheck','DailySmartCheck','ScheduledFul
 if(!$protocol.Contains('OpenSystemTool') -or !$protocol.Contains('OpenUtility') -or
    !$client.Contains('LaunchSystemToolAsync') -or !$client.Contains('LaunchUtilityAsync') -or
    !$coordinator.Contains('LaunchInteractiveTool') -or !$coordinator.Contains('ElevatedInteractiveProcessLauncher') -or
-   !$coordinator.Contains('SessionId')) { throw 'Privileged engineering-menu IPC is missing.' }
+   !$coordinator.Contains('SessionId') -or !$coordinator.Contains('IsAdministrativeClient') -or
+   !$coordinator.Contains('IsAdministratorOnlyLaunch')) { throw 'Privileged engineering-menu IPC is missing.' }
 if(!$coordinator.Contains('MonitoringQueue') -or !$coordinator.Contains('CriticalMonitoringEvaluator') -or
    !$coordinator.Contains('DiskReadLatencyMs') -or !$coordinator.Contains('DiskWriteLatencyMs')) {
     throw 'Continuous critical monitoring is missing disk latency or its protected queue.'

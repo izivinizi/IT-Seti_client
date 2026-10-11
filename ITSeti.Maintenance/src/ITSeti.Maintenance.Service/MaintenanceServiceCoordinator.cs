@@ -95,7 +95,8 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             else
             {
                 var request = JsonSerializer.Deserialize<MaintenanceServiceRequest>(line, JsonOptions);
-                response = request is null ? new(false, "Некорректный запрос.", GetVersion()) : HandleRequest(request);
+                var clientIsAdministrator = IsAdministrativeClient(pipe);
+                response = request is null ? new(false, "Некорректный запрос.", GetVersion()) : HandleRequest(request, clientIsAdministrator);
             }
             await writer.WriteLineAsync(JsonSerializer.Serialize(response, JsonOptions).AsMemory(), requestTimeout.Token);
         }
@@ -122,7 +123,18 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         }
     }
 
-    private MaintenanceServiceResponse HandleRequest(MaintenanceServiceRequest request)
+    private static bool IsAdministrativeClient(NamedPipeServerStream pipe)
+    {
+        var result = false;
+        pipe.RunAsClient(() =>
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            result = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+        });
+        return result;
+    }
+
+    private MaintenanceServiceResponse HandleRequest(MaintenanceServiceRequest request, bool clientIsAdministrator)
     {
         if (string.Equals(request.Command, "ping", StringComparison.OrdinalIgnoreCase))
             return new(true, "Служба обслуживания работает.", GetVersion());
@@ -131,6 +143,8 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         if (string.Equals(request.Command, "launch", StringComparison.OrdinalIgnoreCase) && request.Operation is
             MaintenanceServiceOperation.OpenSystemTool or MaintenanceServiceOperation.OpenUtility)
         {
+            if (!clientIsAdministrator && IsAdministratorOnlyLaunch(request))
+                return new(false, "Эта операция доступна только из инженерного меню администратора.", GetVersion());
             try
             {
                 var processId = LaunchInteractiveTool(request);
@@ -165,6 +179,12 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             return new(false, ex.Message, GetVersion());
         }
     }
+
+    private static bool IsAdministratorOnlyLaunch(MaintenanceServiceRequest request) =>
+        request.Operation == MaintenanceServiceOperation.OpenUtility &&
+        string.Equals(request.Target, "CrystalDiskMark", StringComparison.OrdinalIgnoreCase) ||
+        request.Operation == MaintenanceServiceOperation.OpenSystemTool &&
+        string.Equals(request.Target, "terminal", StringComparison.OrdinalIgnoreCase);
 
     private bool StartOperation(MaintenanceServiceOperation operation)
     {
