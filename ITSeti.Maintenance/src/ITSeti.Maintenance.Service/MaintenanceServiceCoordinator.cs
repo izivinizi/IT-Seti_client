@@ -489,7 +489,12 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         if (!await temperatureLock.WaitAsync(0, cancellationToken)) return;
         try
         {
-            var reading = (await CpuTemperatureReader.ReadAsync()) with { CapturedAtUtc = DateTimeOffset.UtcNow };
+            if (HwInfoReader.SessionRestartDue)
+                HwInfoReader.ResetSession();
+            var hwInfo = await HwInfoReader.ReadAsync(cancellationToken);
+            var reading = hwInfo?.CpuTemperatureC is { } hwTemperature
+                ? new CpuTemperatureReading(hwTemperature, $"HWiNFO · {hwInfo.Source}", hwInfo.CapturedAtUtc)
+                : (await CpuTemperatureReader.ReadAsync()) with { CapturedAtUtc = DateTimeOffset.UtcNow };
             await WriteJsonAtomicallyAsync(CpuTemperatureCache.InstalledPath, reading, cancellationToken);
         }
         finally { temperatureLock.Release(); }
@@ -510,6 +515,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             UptimeHours = snapshot?.ActiveUptimeHours is { } uptime ? (double?)Math.Round(uptime, 1) : null,
             DiskReadLatencyMs = snapshot?.DiskReadLatencyMs is { } readLatency ? (double?)Math.Round(readLatency, 1) : null,
             DiskWriteLatencyMs = snapshot?.DiskWriteLatencyMs is { } writeLatency ? (double?)Math.Round(writeLatency, 1) : null,
+            HwInfo = snapshot?.HwInfo,
             WindowsEdition = snapshot?.WindowsEdition,
             WindowsRelease = snapshot?.WindowsRelease,
             WindowsBuild = snapshot?.WindowsBuild,
@@ -550,7 +556,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     }
 
     private static string GetVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.3.2";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.3.3";
 
     private void StopChildren()
     {

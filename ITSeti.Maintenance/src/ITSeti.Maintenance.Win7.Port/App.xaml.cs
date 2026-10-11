@@ -80,7 +80,7 @@ namespace ITSeti.Maintenance.App
             if (args.Length == 1 && args[0] == "--scheduled-check") return ScheduledCheckRunner.RunWorker();
             if (args.Length == 1 && args[0] == "--scheduled-full") return ScheduledCheckRunner.RunFullWorker();
             if (args.Length == 1 && args[0] == "--upload-reports") return ServerReportUploader.Upload();
-            if (args.Length == 1 && args[0] == "--update-application") return Win7GitHubUpdater.RunBackgroundWorker();
+            if (args.Length == 1 && args[0] == "--update-application") return Win7ServerUpdater.RunBackgroundWorker();
             if (args.Length == 1 && args[0] == "--register-smart-task") { SmartTaskInstaller.Register(); return 0; }
             if (args.Length == 1 && args[0] == "--unregister-smart-task") { SmartTaskInstaller.Unregister(); return 0; }
             if (args.Length == 2 && args[0] == "--diagnose")

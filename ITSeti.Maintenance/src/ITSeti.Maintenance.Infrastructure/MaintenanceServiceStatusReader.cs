@@ -33,7 +33,8 @@ public static class MaintenanceServiceStatusReader
                 notes, LastBootAt: uptime, WindowsEdition: status.WindowsEdition, WindowsRelease: status.WindowsRelease,
                 WindowsBuild: status.WindowsBuild, CpuTemperatureC: status.CpuTemperatureC,
                 CpuTemperatureStatus: status.CpuTemperatureStatus, ActiveUptimeHours: status.UptimeHours,
-                DiskReadLatencyMs: status.DiskReadLatencyMs, DiskWriteLatencyMs: status.DiskWriteLatencyMs);
+                DiskReadLatencyMs: status.DiskReadLatencyMs, DiskWriteLatencyMs: status.DiskWriteLatencyMs,
+                HwInfo: status.HwInfo);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         { return null; }
@@ -55,7 +56,7 @@ public static class MaintenanceServiceStatusReader
         string? WindowsRelease,
         int? WindowsBuild,
         List<StatusDisk>? FixedDisks,
-        List<StatusIssue>? CriticalIssues);
+         List<StatusIssue>? CriticalIssues, HwInfoSnapshot? HwInfo);
 
     private sealed record StatusDisk(string? Name, long FreeBytes, long TotalBytes);
     private sealed record StatusIssue(string Identity, string Title, string Detail);

@@ -72,6 +72,15 @@ public static class DiagnosticRules
             issues.Add(new("Критически высокая температура процессора", $"Датчик показывает {cpuTemperature:N0} °C. Дайте компьютеру остыть и проверьте охлаждение.", "Critical"));
         else if (cpuTemperature is >= 75)
             issues.Add(new("Повышенная температура процессора", $"Датчик показывает {cpuTemperature:N0} °C. Проверьте охлаждение, если температура держится высокой.", "Warning"));
+        if (snapshot.HwInfo?.VrmTemperatureC is { } vrmTemperature)
+        {
+            if (vrmTemperature >= 105)
+                issues.Add(new("Критическая температура VRM", $"HWiNFO показывает {vrmTemperature:N0} °C на VRM/MOS.", "Critical"));
+            else if (vrmTemperature >= 90)
+                issues.Add(new("Повышенная температура VRM", $"HWiNFO показывает {vrmTemperature:N0} °C на VRM/MOS.", "Warning"));
+        }
+        AddRailIssue(issues, "12 В", snapshot.HwInfo?.Rail12V, 11.4, 12.6, 10.8, 13.2);
+        AddRailIssue(issues, "5 В", snapshot.HwInfo?.Rail5V, 4.75, 5.25, 4.5, 5.5);
         if (snapshot.TotalMemoryBytes > 0)
         {
             var total = snapshot.TotalMemoryBytes / 1073741824.0;
@@ -139,6 +148,16 @@ public static class DiagnosticRules
         return issues.OrderByDescending(i => i.Priority).ToArray();
     }
 
+    private static void AddRailIssue(ICollection<UserIssue> issues, string label, double? value,
+        double warningMin, double warningMax, double criticalMin, double criticalMax)
+    {
+        if (value is not { } voltage) return;
+        if (voltage < criticalMin || voltage > criticalMax)
+            issues.Add(new($"Критическое отклонение шины {label}", $"HWiNFO показывает {voltage:N2} В.", "Critical"));
+        else if (voltage < warningMin || voltage > warningMax)
+            issues.Add(new($"Отклонение шины {label}", $"HWiNFO показывает {voltage:N2} В. Номинал стоит перепроверить под нагрузкой.", "Warning"));
+    }
+
     public static IReadOnlyList<string> GetFindings(DiagnosticSnapshot snapshot, bool includeDiskLinkWarnings = true)
     {
         var findings = new List<string>();
@@ -152,6 +171,11 @@ public static class DiagnosticRules
             findings.Add($"CPU: критически высокая температура {cpuTemperature:N0} °C (порог 85 °C).");
         else if (cpuTemperature is >= 75)
             findings.Add($"CPU: температура {cpuTemperature:N0} °C достигла порога 75 °C.");
+        if (snapshot.HwInfo?.VrmTemperatureC is { } vrmTemperature)
+            if (vrmTemperature >= 105) findings.Add($"VRM/MOS: критическая температура {vrmTemperature:N0} °C (порог 105 °C).");
+            else if (vrmTemperature >= 90) findings.Add($"VRM/MOS: температура {vrmTemperature:N0} °C достигла порога 90 °C.");
+        AddRailFinding(findings, "12 В", snapshot.HwInfo?.Rail12V, 11.4, 12.6, 10.8, 13.2);
+        AddRailFinding(findings, "5 В", snapshot.HwInfo?.Rail5V, 4.75, 5.25, 4.5, 5.5);
         if (sample?.CpuHighSamples >= 5) findings.Add($"CPU: ≥90% в {sample.CpuHighSamples} из {sample.Samples} замеров за 30 секунд");
         if (sample?.MemoryHighSamples >= 5) findings.Add($"ОЗУ: ≥90% в {sample.MemoryHighSamples} из {sample.Samples} замеров за 30 секунд");
         if (sample is not null && sample.LowAvailableSamples >= 5 && sample.PagingHighSamples >= 3)
@@ -193,6 +217,16 @@ public static class DiagnosticRules
                 findings.Add($"{benchmark.Drive}: средняя задержка диска {latency:N0} мс за 30 секунд; проверьте при обычной нагрузке.");
         }
         return findings;
+    }
+
+    private static void AddRailFinding(ICollection<string> findings, string label, double? value,
+        double warningMin, double warningMax, double criticalMin, double criticalMax)
+    {
+        if (value is not { } voltage) return;
+        if (voltage < criticalMin || voltage > criticalMax)
+            findings.Add($"Шина {label}: критическое отклонение {voltage:N2} В (допустимо {criticalMin:N2}–{criticalMax:N2} В).");
+        else if (voltage < warningMin || voltage > warningMax)
+            findings.Add($"Шина {label}: предупреждение {voltage:N2} В (ориентир {warningMin:N2}–{warningMax:N2} В).");
     }
 
     private static int GetReadWarningThreshold(DiagnosticSnapshot snapshot, DiskBenchmark benchmark)

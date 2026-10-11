@@ -1,6 +1,5 @@
 ﻿$ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$repository = 'izivinizi/IT-Seti_client'
 $assetName = 'ITSeti-Maintenance-Setup.exe'
 $appDirectory = Split-Path $PSScriptRoot -Parent
 $appPath = Join-Path $appDirectory 'ITSeti.Maintenance.exe'
@@ -31,30 +30,39 @@ try {
     if ($systemSid -ne 'S-1-5-18') { throw 'Задача обновления должна выполняться от LocalSystem.' }
     if (!(Test-Path -LiteralPath $appPath -PathType Leaf) -or !(Test-Path -LiteralPath $appAssemblyPath -PathType Leaf)) { throw 'Установленное приложение не найдено.' }
 
-    Set-UpdateStatus 'Проверяю выпуск GitHub.'
+    Set-UpdateStatus 'Проверяю каталог обновлений на сервере.'
     $currentText = (Get-Item -LiteralPath $appAssemblyPath).VersionInfo.FileVersion
     $currentVersion = ConvertTo-AppVersion $currentText
-    $manifestUrl = "https://raw.githubusercontent.com/$repository/main/release.json"
+    $deviceFile = Join-Path $env:ProgramData 'ITSeti\Maintenance\server-device.json'
+    if (!(Test-Path -LiteralPath $deviceFile -PathType Leaf)) { throw 'Данные подключения к серверу не найдены.' }
+    $device = Get-Content -LiteralPath $deviceFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (!$device.serverUrl -or !$device.deviceId -or !$device.deviceKey) { throw 'Данные подключения к серверу неполны.' }
+    $serverBase = [Uri]$device.serverUrl
+    if ($serverBase.Scheme -ne 'https') { throw 'Сервер обновлений должен использовать HTTPS.' }
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $release = Invoke-RestMethod -Uri $manifestUrl -Headers @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/2.3.2'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache' } -TimeoutSec 30
+    $updateUrl = New-Object Uri($serverBase, '/api/v1/application-update?platform=windows')
+    $headers = @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/2.3.3'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache'; 'X-Device-Id' = [string]$device.deviceId; 'X-Device-Key' = [string]$device.deviceKey }
+    $release = Invoke-RestMethod -Uri $updateUrl -Headers $headers -TimeoutSec 30
+    if ($null -eq $release) {
+        Set-UpdateStatus "Установлена последняя версия $currentVersion; обновление не требуется."
+        exit 0
+    }
     $versionText = [string]$release.version
-    $tag = [string]$release.tag
-    if ($versionText -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$' -or $tag -cne "v$versionText") { throw 'В манифесте GitHub некорректная версия или тег.' }
+    if ($versionText -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$' -or [string]$release.key -cne 'application' -or [string]$release.platform -cne 'windows') { throw 'Сервер вернул некорректные параметры обновления.' }
     $latestVersion = [Version]$versionText
     if ($latestVersion -le $currentVersion) {
         Set-UpdateStatus "Установлена последняя версия $currentVersion; обновление не требуется."
         exit 0
     }
 
-    $manifestAssetName = [string]$release.assetName
-    if ($manifestAssetName -cne $assetName -or [string]$release.size -notmatch '^\d+$') { throw 'В манифесте не указаны проверенные параметры установщика.' }
-    $assetSize = [long]$release.size
+    $manifestAssetName = [IO.Path]::GetFileName([string]$release.fileName)
+    if ([IO.Path]::GetExtension($manifestAssetName) -ine '.exe' -or [string]$release.sizeBytes -notmatch '^\d+$') { throw 'Сервер не указал проверенные параметры установщика.' }
+    $assetSize = [long]$release.sizeBytes
     if ($assetSize -lt 1 -or $assetSize -gt 500000000) { throw 'Размер установщика в манифесте недопустим.' }
-    if ([string]$release.digest -notmatch '^sha256:([0-9a-fA-F]{64})$') { throw 'В манифесте нет SHA-256 установщика.' }
+    $packageId = [Guid]::Empty
+    if ([string]$release.sha256 -notmatch '^([0-9a-fA-F]{64})$' -or ![Guid]::TryParse([string]$release.id, [ref]$packageId)) { throw 'Сервер не указал SHA-256 или идентификатор установщика.' }
     $expectedHash = $Matches[1].ToUpperInvariant()
-    $expectedUrl = "https://github.com/$repository/releases/download/$tag/$assetName"
-    $downloadUrl = [string]$release.downloadUrl
-    if ($downloadUrl -cne $expectedUrl) { throw 'Ссылка на установщик не соответствует доверенному репозиторию.' }
+    $downloadUrl = New-Object Uri($serverBase, ('api/v1/packages/' + $packageId.ToString('D') + '/download'))
 
     $installer = Join-Path $updateRoot $assetName
     $cached=(Test-Path -LiteralPath $installer -PathType Leaf) -and
@@ -65,7 +73,7 @@ try {
         Set-UpdateStatus "Найдена версия $latestVersion. Подготавливаю установщик."
         $request = [Net.HttpWebRequest]::Create($downloadUrl)
         $request.Method = 'GET'
-        $request.UserAgent = 'ITSeti-Maintenance-Updater/2.3.2'
+        $request.UserAgent = 'ITSeti-Maintenance-Updater/2.3.3'
         $request.Timeout = 30000
         $request.ReadWriteTimeout = 30000
         $response = $request.GetResponse()
@@ -97,7 +105,7 @@ try {
         if ((Get-Item -LiteralPath $partial).Length -ne $assetSize) { throw 'Размер скачанного установщика не совпал с манифестом.' }
         Set-UpdateStatus 'Проверяю SHA-256 установщика.'
         $actualHash = (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash
-        if ($actualHash -cne $expectedHash) { throw 'SHA-256 установщика не совпал с данными GitHub.' }
+        if ($actualHash -cne $expectedHash) { throw 'SHA-256 установщика не совпал с данными сервера.' }
         Move-Item -LiteralPath $partial -Destination $installer -Force
     }
 

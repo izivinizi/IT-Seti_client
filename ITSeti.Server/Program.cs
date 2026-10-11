@@ -81,7 +81,7 @@ builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>
 {
     options.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor |
         Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
-    options.KnownIPNetworks.Clear();
+    options.KnownNetworks.Clear();
     options.KnownProxies.Clear();
     options.ForwardLimit = 1;
 });
@@ -817,6 +817,29 @@ app.MapGet("/api/v1/updates", async (HttpRequest request, NpgsqlDataSource db) =
     return Results.Ok(rows);
 });
 
+app.MapGet("/api/v1/application-update", async (HttpRequest request, NpgsqlDataSource db, string? platform) =>
+{
+    if (!await DeviceKeys.AuthenticateAsync(request, db)) return Results.Unauthorized();
+    platform = string.IsNullOrWhiteSpace(platform) ? "windows" : platform.Trim().ToLowerInvariant();
+    if (platform is not ("windows" or "win7")) return Results.BadRequest(new { error = "Unsupported application platform." });
+
+    await using var connection = await db.OpenConnectionAsync();
+    await using var command = new NpgsqlCommand("""
+        SELECT id,package_key,version,platform,sha256,size_bytes,download_name
+        FROM packages WHERE is_latest AND package_key='application' AND platform=@platform
+        LIMIT 1
+        """, connection);
+    command.Parameters.AddWithValue("platform", platform);
+    await using var reader = await command.ExecuteReaderAsync();
+    if (!await reader.ReadAsync()) return Results.NoContent();
+    return Results.Ok(new
+    {
+        id = reader.GetGuid(0), key = reader.GetString(1), version = reader.GetString(2),
+        platform = reader.GetString(3), sha256 = reader.GetString(4), sizeBytes = reader.GetInt64(5),
+        fileName = reader.GetString(6)
+    });
+});
+
 app.MapGet("/api/v1/packages/{id:guid}/download", async (Guid id, HttpRequest request, NpgsqlDataSource db, HttpContext context) =>
 {
     if (!await DeviceKeys.AuthenticateAsync(request, db)) return Results.Unauthorized();
@@ -1126,13 +1149,21 @@ admin.MapPost("/packages", async (HttpContext context, IAntiforgery antiforgery,
     await antiforgery.ValidateRequestAsync(context);
     var form = await context.Request.ReadFormAsync();
     var key = form["key"].ToString().Trim().ToLowerInvariant();
-    var version = form["version"].ToString().Trim();
+    var requestedVersion = form["version"].ToString().Trim();
     var platform = form["platform"].ToString().Trim().ToLowerInvariant();
     var file = form.Files.GetFile("file");
     if (!System.Text.RegularExpressions.Regex.IsMatch(key, "^[a-zA-Z0-9._-]{1,64}$") ||
-        !System.Text.RegularExpressions.Regex.IsMatch(version, "^[a-zA-Z0-9.+_-]{1,48}$") ||
         platform is not ("windows" or "win7" or "any") || file is null || file.Length == 0 || file.Length > 1024L*1024*1024)
         return Results.BadRequest(new { error = "Проверьте ключ, версию, платформу и файл (до 1 ГБ)." });
+    if (key != "application" && !System.Text.RegularExpressions.Regex.IsMatch(requestedVersion, "^[a-zA-Z0-9.+_-]{1,48}$"))
+        return Results.BadRequest(new { error = "Для программ каталога необходимо указать версию." });
+    if (key == "application" && platform is not ("windows" or "win7"))
+        return Results.BadRequest(new { error = "Приложение можно публиковать только для Windows 10/11 или Windows 7." });
+    if (key == "application" && !string.Equals(Path.GetExtension(file.FileName), ".exe", StringComparison.OrdinalIgnoreCase))
+        return Results.BadRequest(new { error = "Установщик приложения должен быть EXE-файлом." });
+    if (!string.IsNullOrWhiteSpace(requestedVersion) && !PackageVersionDetector.TryParse(requestedVersion, out _))
+        return Results.BadRequest(new { error = "Версия должна иметь формат major.minor.patch или определяться автоматически." });
+    var version = requestedVersion;
     await using (var checkConnection = await db.OpenConnectionAsync(context.RequestAborted))
     await using (var duplicate = new NpgsqlCommand("SELECT EXISTS(SELECT 1 FROM packages WHERE package_key=@key AND version=@version AND platform=@platform)", checkConnection))
     {
@@ -1147,6 +1178,12 @@ admin.MapPost("/packages", async (HttpContext context, IAntiforgery antiforgery,
     await using (var output = File.Create(destination)) await file.CopyToAsync(output, context.RequestAborted);
     string hash;
     await using (var stream = File.OpenRead(destination)) hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, context.RequestAborted));
+    var detectedVersion = new Version(0, 0, 0);
+    if (key == "application" && string.IsNullOrWhiteSpace(version) &&
+        !PackageVersionDetector.TryDetect(destination, file.FileName, out detectedVersion))
+        return Results.BadRequest(new { error = "Не удалось определить версию установщика. Укажите версию вручную или загрузите EXE с FileVersion." });
+    if (key == "application" && string.IsNullOrWhiteSpace(version)) version = detectedVersion.ToString(3);
+    if (string.IsNullOrWhiteSpace(version)) version = "unknown";
     await using var connection = await db.OpenConnectionAsync(context.RequestAborted);
     await using var transaction = await connection.BeginTransactionAsync(context.RequestAborted);
     await using (var packageLock = new NpgsqlCommand("SELECT pg_advisory_xact_lock(hashtextextended(@key||':'||@platform,0))",connection,transaction))
@@ -1181,12 +1218,12 @@ admin.MapPost("/packages", async (HttpContext context, IAntiforgery antiforgery,
 
 app.Run();
 
-static async Task<bool> SameOriginAsync(HttpContext context)
+static Task<bool> SameOriginAsync(HttpContext context)
 {
     var origin = context.Request.Headers.Origin.ToString();
-    if (!Uri.TryCreate(origin, UriKind.Absolute, out var parsed)) return false;
-    return parsed.Host.Equals(context.Request.Host.Host, StringComparison.OrdinalIgnoreCase)
-        && parsed.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase);
+    if (!Uri.TryCreate(origin, UriKind.Absolute, out var parsed)) return Task.FromResult(false);
+    return Task.FromResult(parsed.Host.Equals(context.Request.Host.Host, StringComparison.OrdinalIgnoreCase)
+        && parsed.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase));
 }
 
 static string LoginPage(string token, string? error = null) => $$"""

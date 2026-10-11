@@ -210,6 +210,8 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
 
     private static async Task<DiagnosticSnapshot> AddCpuTemperatureAsync(DiagnosticSnapshot snapshot)
     {
+        var hwInfo = HwInfoReader.ReadCached(TimeSpan.FromMinutes(10));
+        snapshot = snapshot with { HwInfo = hwInfo };
         var existing = snapshot.CpuTemperatureC ?? snapshot.Full?.CpuTemperatureC;
         if (existing is not null)
             return snapshot;

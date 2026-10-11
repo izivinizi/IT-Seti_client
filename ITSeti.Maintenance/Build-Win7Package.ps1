@@ -16,6 +16,8 @@ $diskMarkTarget=Join-Path $package 'Tools\CrystalDiskMark9'
 $source=Join-Path $PSScriptRoot 'Tools\CrystalDiskInfo9_6_3_Portable'
 $diskSpdSource=Join-Path $PSScriptRoot 'Tools\CrystalDiskMark9\CdmResource\DiskSpd'
 $diskSpdTarget=Join-Path $package 'Tools\DiskSpd'
+$hwInfoSource=Join-Path $PSScriptRoot 'Tools\HWiNFO'
+$hwInfoTarget=Join-Path $package 'Tools\HWiNFO'
 $frameworkSource=Join-Path $OutputRoot 'Prerequisites\NDP48-x86-x64-AllOS-ENU.exe'
 $frameworkTarget=Join-Path $package 'Prerequisites\NDP48-x86-x64-AllOS-ENU.exe'
 $frameworkUrl='https://download.microsoft.com/download/f/3/a/f3a6af84-da23-40a5-8d1c-49cc10c8e76f/NDP48-x86-x64-AllOS-ENU.exe'
@@ -51,6 +53,7 @@ foreach($name in @('DiskSpd32L.exe','DiskSpd64L.exe')){
 foreach($name in @('DiskMark32.exe','DiskMark64.exe')){
     if(!(Test-Path -LiteralPath (Join-Path $diskMarkSource $name) -PathType Leaf)){throw "Missing Win7 CrystalDiskMark file: $name"}
 }
+if(!(Test-Path -LiteralPath (Join-Path $hwInfoSource 'HWiNFO32.exe') -PathType Leaf)){throw 'Missing HWiNFO32 file.'}
 $workspace=[IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\')
 $packagePath=[IO.Path]::GetFullPath($package)
 $packageParent=[IO.Path]::GetFullPath($OutputRoot).TrimEnd('\')+'\'
@@ -76,6 +79,8 @@ foreach($name in @('DiskSpd32L.exe','DiskSpd64L.exe')){
 }
 New-Item -ItemType Directory -Path $diskMarkTarget -Force | Out-Null
 Get-ChildItem -LiteralPath $diskMarkSource -Force | Copy-Item -Destination $diskMarkTarget -Recurse -Force
+New-Item -ItemType Directory -Path $hwInfoTarget -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $hwInfoSource 'HWiNFO32.exe') -Destination (Join-Path $hwInfoTarget 'HWiNFO32.exe') -Force
 New-Item -ItemType Directory -Path (Split-Path -Parent $frameworkTarget) -Force | Out-Null
 Copy-Item -LiteralPath $frameworkSource -Destination $frameworkTarget -Force
 if($PackageDirectory -eq 'dist\Win7\Package'){

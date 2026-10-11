@@ -4,14 +4,16 @@ $service = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win
 $app = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7.Port\App.xaml.cs') -Raw
 $project = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7.Port\ITSeti.Maintenance.Win7.Port.csproj') -Raw
 $installer = Get-Content -LiteralPath (Join-Path $Root 'Installer-Win7.iss') -Raw
-if ($project -notmatch '<Version>2\.3\.2-beta</Version>' -or
-    $installer -notmatch 'AppVersion=2\.3\.2' -or
+if ($project -notmatch '<Version>2\.3\.3-beta</Version>' -or
+    $installer -notmatch 'AppVersion=2\.3\.3' -or
     !$service.Contains('ServiceBase.Run') -or !$service.Contains('ITSetiMaintenanceWin7') -or
     !$service.Contains('ITSeti.Maintenance.Win7.v1') -or !$service.Contains('LocalSystemSid') -or
     !$service.Contains('AuthenticatedUserSid') -or !$service.Contains('CollectWithCleanup') -or
     !$service.Contains('CollectMonitoring') -or !$service.Contains('ServerReportUploader.Upload') -or
     !$service.Contains('Win7InteractiveProcessLauncher.LaunchAsSystem') -or !$service.Contains('LaunchSystemToolAsync') -or
     !$service.Contains('RunId') -or
+    !$service.Contains('LegacyHwInfoReader.Apply') -or
+    !$project.Contains('LegacyHwInfoReader.cs') -or
     !$app.Contains('"--service"')) {
     throw 'Win7 service host is missing its SYSTEM runtime, IPC, unified maintenance or startup contract.'
 }

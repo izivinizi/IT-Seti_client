@@ -12,6 +12,15 @@ public static class CriticalMonitoringEvaluator
         if (snapshot.CpuTemperatureC is >= 90)
             issues.Add(new("cpu:temperature", "Критическая температура CPU",
                 $"Температура процессора достигла {snapshot.CpuTemperatureC:N0} °C."));
+        if (snapshot.HwInfo?.VrmTemperatureC is >= 105)
+            issues.Add(new("hwinfo:vrm-temperature", "Критическая температура VRM",
+                $"Температура VRM достигла {snapshot.HwInfo.VrmTemperatureC:N0} °C."));
+        if (snapshot.HwInfo?.Rail12V is { } rail12 && (rail12 < 10.8 || rail12 > 13.2))
+            issues.Add(new("hwinfo:rail-12v", "Критическое отклонение шины 12 В",
+                $"Напряжение шины 12 В: {rail12:N2} В."));
+        if (snapshot.HwInfo?.Rail5V is { } rail5 && (rail5 < 4.5 || rail5 > 5.5))
+            issues.Add(new("hwinfo:rail-5v", "Критическое отклонение шины 5 В",
+                $"Напряжение шины 5 В: {rail5:N2} В."));
         if (snapshot.CpuPercent is >= 98)
             issues.Add(new("cpu:load", "Критическая загрузка CPU",
                 $"Загрузка процессора достигла {snapshot.CpuPercent:N0}%."));

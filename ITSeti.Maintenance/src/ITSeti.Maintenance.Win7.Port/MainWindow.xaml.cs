@@ -127,7 +127,7 @@ namespace ITSeti.Maintenance.App
                 await PromptScheduledFullFailureAsync();
                 if (engineer)
                 {
-                    var updateStatus = Win7GitHubUpdater.ReadBackgroundStatus();
+                    var updateStatus = Win7ServerUpdater.ReadBackgroundStatus();
                     if (!string.IsNullOrWhiteSpace(updateStatus)) view.Set("ApplicationUpdateStatus", updateStatus);
                 }
                 var value = await Task.Run(() => CpuLoadSampler.Read());
@@ -252,7 +252,7 @@ namespace ITSeti.Maintenance.App
                 Progress("Проверка", snapshot.Findings.Count == 0 ? "Завершена" : "Завершена, есть замечания: " + snapshot.Findings.Count);
                 try
                 {
-                    var updateStatus = await Win7GitHubUpdater.QueueBackgroundCheckAsync();
+                    var updateStatus = await Win7ServerUpdater.QueueBackgroundCheckAsync();
                     if (engineer) view.Set("ApplicationUpdateStatus", updateStatus);
                 }
                 catch (Exception ex)

@@ -13,7 +13,7 @@ public partial class UpdateProgressWindow : Window
         InitializeComponent();
         this.runUpdate = runUpdate;
         VersionLabel.Text = string.IsNullOrWhiteSpace(targetVersion)
-            ? "Подготовка последнего выпуска GitHub"
+            ? "Подготовка обновления с сервера"
             : $"Версия {targetVersion}";
         Loaded += async (_, _) => await RunAsync();
         Closing += (_, args) =>

@@ -4,11 +4,12 @@ $serviceProject=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenanc
 $coordinator=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Service\MaintenanceServiceCoordinator.cs') -Raw
 $protocol=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\MaintenanceServiceProtocol.cs') -Raw
 $client=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\MaintenanceServiceClient.cs') -Raw
+$diagnostics=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\WindowsDiagnosticsRunner.cs') -Raw
 $install=Get-Content -LiteralPath (Join-Path $Root 'Install-Maintenance.ps1') -Raw
 $uninstall=Get-Content -LiteralPath (Join-Path $Root 'Uninstall-Maintenance.ps1') -Raw
 $builder=Get-Content -LiteralPath (Join-Path $Root 'Build-InstallPackage.ps1') -Raw
 $installer=Get-Content -LiteralPath (Join-Path $Root 'Installer.iss') -Raw
-if($serviceProject -notmatch '<Version>2\.3\.2</Version>' -or
+if($serviceProject -notmatch '<Version>2\.3\.3</Version>' -or
    !$protocol.Contains('ITSetiMaintenanceService') -or !$protocol.Contains('ITSeti.Maintenance.Service.v1') -or
    !$coordinator.Contains('BuiltinUsersSid') -or !$coordinator.Contains('PipeAccessRights.ReadWrite') -or
    !$coordinator.Contains('ResolveOperation') -or $coordinator.Contains('ProcessStartInfo(request') -or
@@ -24,8 +25,12 @@ if(!$protocol.Contains('OpenSystemTool') -or !$protocol.Contains('OpenUtility') 
    !$coordinator.Contains('SessionId') -or !$coordinator.Contains('IsAdministrativeClient') -or
    !$coordinator.Contains('IsAdministratorOnlyLaunch')) { throw 'Privileged engineering-menu IPC is missing.' }
 if(!$coordinator.Contains('MonitoringQueue') -or !$coordinator.Contains('CriticalMonitoringEvaluator') -or
-   !$coordinator.Contains('DiskReadLatencyMs') -or !$coordinator.Contains('DiskWriteLatencyMs')) {
+   !$coordinator.Contains('DiskReadLatencyMs') -or !$coordinator.Contains('DiskWriteLatencyMs') -or
+   !$coordinator.Contains('HwInfoReader.SessionRestartDue') -or !$coordinator.Contains('HwInfoReader.ResetSession')) {
     throw 'Continuous critical monitoring is missing disk latency or its protected queue.'
+}
+if (!$diagnostics.Contains('HWiNFO is owned by the SYSTEM service') -or $diagnostics.Contains('HwInfoReader.ReadCached(TimeSpan.FromMinutes(2)) ?? await HwInfoReader.ReadAsync')) {
+    throw 'Interactive diagnostics must consume the SYSTEM HWiNFO cache instead of launching the sensor tool.'
 }
 if(!$coordinator.Contains('MaintenanceServiceOperation.Cleanup => (Folder: "CleanupRequests", Pattern: "*.request")') -or
    !$coordinator.Contains('if (HasPendingRequests(operation))')) {
@@ -37,4 +42,4 @@ if(!$install.Contains("`$serviceName='ITSetiMaintenanceService'") -or !$install.
    !$builder.Contains('dotnet publish $serviceProject') -or !$installer.Contains('{#PackageRoot}\Service\*')) {
     throw 'Build, install, update, or uninstall integration for the service is incomplete.'
 }
-'PASS: service IPC, allowlisted operations, package, install and uninstall contracts'
+'PASS: service IPC, allowlisted operations, HWiNFO session reset, package, install and uninstall contracts'

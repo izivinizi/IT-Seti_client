@@ -212,21 +212,22 @@ if(!$install.Contains('ITSeti-Maintenance-Update') -or !$install.Contains('Updat
    !$updaterSource.Contains('Скачивание установщика:') -or !$updaterSource.Contains('HttpWebRequest') -or
    !$updaterSource.Contains('Пакет загружен и проверен. Готов к установке.') -or
    !$updaterSource.Contains('Split-Path $PSScriptRoot -Parent') -or
-   !$updaterSource.Contains('raw.githubusercontent.com/$repository/main/release.json') -or
-   !$updaterSource.Contains('downloadUrl') -or $updaterSource -match 'api\.github\.com|runas') {
-    throw 'Application update task must be fixed, SYSTEM-only, and validate release SHA-256.'
+   !$updaterSource.Contains('/api/v1/application-update?platform=windows') -or
+   !$updaterSource.Contains('X-Device-Key') -or !$updaterSource.Contains('sizeBytes') -or
+   !$updaterSource.Contains('sha256') -or $updaterSource -match 'github|runas') {
+    throw 'Application update task must be SYSTEM-only, server-backed, and validate release SHA-256.'
 }
 if($updaterSource.IndexOf('HttpWebRequest') -gt $updaterSource.IndexOf("Set-UpdateStatus 'Пакет загружен и проверен. Готов к установке.'") -or
    !$updaterSource.Contains('Ожидает закрытия приложения.')) {
     throw 'The package must download and pass validation before deferred installation.'
 }
-$releaseClient=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\GitHubReleaseClient.cs') -Raw
+$releaseClient=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\ServerApplicationUpdateClient.cs') -Raw
 $releaseRunner=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\ApplicationUpdateRunner.cs') -Raw
-if($releaseClient -notmatch 'raw\.githubusercontent\.com/izivinizi/IT-Seti_client/main/release\.json' -or
-   $releaseClient -match 'api\.github\.com' -or $releaseClient -notmatch 'sha256:' -or
-   $releaseClient -notmatch 'releases/download/\{tag\}/\{InstallerName\}' -or
+if($releaseClient -notmatch 'api/v1/application-update' -or
+   $releaseClient -match 'github' -or $releaseClient -notmatch 'X-Device-Key' -or
+   $releaseClient -notmatch 'sha256:' -or $releaseClient -notmatch 'api/v1/packages/' -or
    $releaseRunner -notmatch 'ITSeti-Maintenance-Update' -or $releaseRunner -match '"runas"') {
-    throw 'Rate-limit-free GitHub release manifest or no-UAC task launcher is missing.'
+    throw 'Server application catalog or no-UAC task launcher is missing.'
 }
 if($releaseRunner -notmatch 'IsReadyToInstall' -or $releaseRunner -notmatch 'AddMinutes\(30\)' -or
    !(Test-Path -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.App\UpdateProgressWindow.xaml'))) {

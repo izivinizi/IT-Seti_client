@@ -70,29 +70,35 @@ try {
     while ($errorType.InnerException) { $errorType = $errorType.InnerException }
     if ($errorType -isnot [OperationCanceledException]) { throw }
 }
-$updater = $assembly.GetType('ITSeti.Maintenance.App.Win7GitHubUpdater', $true)
+$updater = $assembly.GetType('ITSeti.Maintenance.App.Win7ServerUpdater', $true)
 $flags = [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic
-$parse = $updater.GetMethod('ParseManifest', $flags)
-if (!$parse) { throw 'Win7 manifest parser is missing.' }
+$parse = $updater.GetMethod('ParseServerPackage', $flags)
+if (!$parse) { throw 'Win7 server package parser is missing.' }
 $version = '2.3.3'
-$url = "https://github.com/izivinizi/IT-Seti_client/releases/download/v$version-win7-beta/ITSeti-Maintenance-Win7-Setup.exe"
 $manifest = [string]([ordered]@{
-    version = $version; tag = "v$version-win7-beta"; assetName = 'ITSeti-Maintenance-Win7-Setup.exe'
-    size = 12345; digest = ('sha256:' + ('a' * 64)); downloadUrl = $url
+    id = '11111111-1111-1111-1111-111111111111'; key = 'application'; platform = 'win7'; version = $version
+    fileName = 'ITSeti-Maintenance-Win7-Setup.exe'; sizeBytes = 12345; sha256 = ('a' * 64)
 } | ConvertTo-Json -Compress)
 $current = [version]'2.3.2'
-if (!$parse.Invoke($null, @($manifest, $current))) { throw 'A newer Win7 release was not offered.' }
-if ($parse.Invoke($null, @($manifest, [version]$version))) { throw 'The installed Win7 release was offered again.' }
-foreach ($bad in @($manifest.Replace($url, 'https://example.org/setup.exe'),
-                  $manifest.Replace(('a' * 64), 'invalid'))) {
-    try {
-        $null = $parse.Invoke($null, @($bad, $current))
-        throw 'An invalid Win7 release manifest was accepted.'
-    } catch {
-        $errorType = $_.Exception
-        while ($errorType.InnerException) { $errorType = $errorType.InnerException }
-        if ($errorType -isnot [IO.InvalidDataException]) { throw }
+if ($PSVersionTable.PSEdition -eq 'Desktop') {
+    if (!$parse.Invoke($null, @($manifest, $current, [uri]'https://unit.test/'))) { throw 'A newer Win7 server release was not offered.' }
+    if ($parse.Invoke($null, @($manifest, [version]$version, [uri]'https://unit.test/'))) { throw 'The installed Win7 release was offered again.' }
+    foreach ($bad in @($manifest.Replace('win7', 'windows'), $manifest.Replace(('a' * 64), 'invalid'))) {
+        try {
+            $null = $parse.Invoke($null, @($bad, $current, [uri]'https://unit.test/'))
+            throw 'An invalid Win7 server package was accepted.'
+        } catch {
+            $errorType = $_.Exception
+            while ($errorType.InnerException) { $errorType = $errorType.InnerException }
+            if ($errorType -isnot [IO.InvalidDataException]) { throw }
+        }
     }
+} else {
+    $updaterSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7.Port\Win7GitHubUpdater.cs') -Raw
+    if ($updaterSource -notmatch 'ParseServerPackage' -or $updaterSource -match 'raw\.githubusercontent|github\.com') {
+        throw 'Win7 server updater contract is missing.'
+    }
+    Write-Warning 'Win7 runtime parser invocation skipped: PowerShell 7 cannot load the .NET Framework System.Web validator; the net48 build is validated separately.'
 }
 
 $scheduledType = $assembly.GetType('ITSeti.Maintenance.Win7.ScheduledCheckRunner', $true)
@@ -167,9 +173,9 @@ if ($promptMethod.Invoke($null, $promptArguments)) {
 $backgroundWorker = $updater.GetMethod('RunBackgroundWorker', [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::Public)
 $queueWorker = $updater.GetMethod('QueueBackgroundCheckAsync', [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::Public)
 if (!$backgroundWorker -or !$queueWorker) { throw 'Background Win7 auto-update workflow is incomplete.' }
-$manifestUrl = $updater.GetField('ManifestUrl', $flags).GetRawConstantValue()
-if ($manifestUrl -ne 'https://raw.githubusercontent.com/izivinizi/IT-Seti_client/main/release-win7.json') {
-    throw 'Win7 auto-updater does not read its manifest from main.'
+$updateRoute = $updater.GetField('UpdateRoute', $flags).GetRawConstantValue()
+if ($updateRoute -ne '/api/v1/application-update?platform=win7') {
+    throw 'Win7 auto-updater does not read its package from the server.'
 }
 
 if (!$SkipUi) {

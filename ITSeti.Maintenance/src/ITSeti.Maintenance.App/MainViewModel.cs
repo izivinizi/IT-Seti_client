@@ -119,7 +119,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private string? bundledSetupDirectory;
     private bool setupInstallRunning;
     private string softwareActionStatus = "";
-    private readonly GitHubReleaseClient applicationReleaseClient = new();
+    private ServerApplicationUpdateClient? applicationReleaseClient;
     private ApplicationRelease? availableApplicationRelease;
     private bool applicationUpdateCheckRunning;
     private bool applicationUpdateRunning;
@@ -374,7 +374,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         try { return Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\CentralProcessor\0")?.GetValue("ProcessorNameString")?.ToString()?.Trim() ?? "Модель процессора не определена"; }
         catch { return "Модель процессора не определена"; }
     }
-    public string UserCpuName => UserDiagnosticSnapshot?.Full?.CpuName is { Length: > 0 } name ? name : LocalCpuName;
+    public string UserCpuName => UserDiagnosticSnapshot?.Full?.CpuName is { Length: > 0 } name ? name
+        : UserDiagnosticSnapshot?.HwInfo?.CpuName is { Length: > 0 } hwName ? hwName : LocalCpuName;
     public string UserMemoryLabel => UserSnapshot?.MemoryLabel ?? "—";
     public string UserDiskLabel => SystemDisk?.Usage ?? "—";
     public string UserDiskDetail => SystemDisk is { } disk ? $"{disk.Name} · свободно {disk.FreeBytes / 1073741824.0:N1} ГБ" : "Нет данных о диске";
@@ -615,7 +616,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public Brush CpuStatusBrush => Selected is null ? MetricNeutralBrush :
         (Selected.CpuTemperatureC ?? Selected.Full?.CpuTemperatureC) is >= 85 ? MetricCriticalBrush :
         (Selected.CpuTemperatureC ?? Selected.Full?.CpuTemperatureC) is >= 75 || Selected.Full?.ResourceSampling?.CpuHighSamples >= 5 ? MetricWarningBrush : MetricGoodBrush;
-    public string CpuDetail => $"{Selected?.Full?.CpuName ?? LocalCpuName} · {FormatCpuTemperature(Selected?.CpuTemperatureC ?? Selected?.Full?.CpuTemperatureC)}";
+    public string CpuDetail => $"{Selected?.Full?.CpuName ?? Selected?.HwInfo?.CpuName ?? LocalCpuName} · {FormatCpuTemperature(Selected?.CpuTemperatureC ?? Selected?.Full?.CpuTemperatureC)}";
     public string Gpu => Selected?.Full?.GpuName ?? "Нет данных";
     public string MemoryType => Selected?.Full?.MemoryType is { Length: > 0 } type ? type : "Тип DDR не определён";
     public string Memory => Selected?.MemoryLabel ?? "—";
@@ -940,11 +941,12 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         if (applicationUpdateCheckRunning || applicationUpdateRunning || busy && !automatic) return;
         applicationUpdateCheckRunning = true;
         availableApplicationRelease = null;
-        applicationUpdateStatus = "Проверяем GitHub…";
+        applicationUpdateStatus = "Проверяем каталог обновлений на сервере…";
         Notify();
         try
         {
             var current = typeof(MainViewModel).Assembly.GetName().Version ?? new Version(0, 0);
+            applicationReleaseClient ??= new ServerApplicationUpdateClient();
             availableApplicationRelease = await applicationReleaseClient.GetUpdateAsync(current);
             applicationUpdateStatus = availableApplicationRelease is null
                 ? "Установлена последняя версия приложения."
@@ -953,7 +955,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         catch (Exception ex)
         {
             applicationUpdateStatus = automatic
-                ? "GitHub недоступен. Проверку обновлений можно повторить во вкладке ПО."
+                ? "Сервер обновлений недоступен. Проверку можно повторить во вкладке ПО."
                 : "Не удалось проверить обновления: " + ex.Message;
         }
         finally

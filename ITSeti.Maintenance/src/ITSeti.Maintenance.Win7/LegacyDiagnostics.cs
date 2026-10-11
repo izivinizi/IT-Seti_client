@@ -95,6 +95,11 @@ namespace ITSeti.Maintenance.Win7
         public double? CpuPercent { get; set; }
         public string CpuSource { get; set; }
         public double? CpuTemperatureC { get; set; }
+        public string HwInfoVersion { get; set; }
+        public double? VrmTemperatureC { get; set; }
+        public double? Rail12V { get; set; }
+        public double? Rail5V { get; set; }
+        public double? CpuVoltageV { get; set; }
         public double? TotalMemoryGb { get; set; }
         public double? FreeMemoryGb { get; set; }
         public double? MemoryUsedPercent { get { return TotalMemoryGb > 0 ? (TotalMemoryGb - FreeMemoryGb) / TotalMemoryGb * 100 : (double?)null; } }
@@ -133,6 +138,12 @@ namespace ITSeti.Maintenance.Win7
                 "",
                 "Диски:"
             };
+            if (!string.IsNullOrWhiteSpace(HwInfoVersion) || VrmTemperatureC.HasValue || Rail12V.HasValue || Rail5V.HasValue || CpuVoltageV.HasValue)
+                lines.Add("Датчики HWiNFO: " + (string.IsNullOrWhiteSpace(HwInfoVersion) ? "" : HwInfoVersion + " · ") +
+                    "VRM " + (VrmTemperatureC.HasValue ? VrmTemperatureC.Value.ToString("N0") + " °C" : "нет данных") +
+                    ", +12 В " + (Rail12V.HasValue ? Rail12V.Value.ToString("N2") + " В" : "нет данных") +
+                    ", +5 В " + (Rail5V.HasValue ? Rail5V.Value.ToString("N2") + " В" : "нет данных") +
+                    ", Vcore/VSoC " + (CpuVoltageV.HasValue ? CpuVoltageV.Value.ToString("N2") + " В" : "нет данных"));
             foreach (var disk in Disks)
                 lines.Add(string.Format("  {0}: свободно {1:N1} из {2:N1} ГБ{3}", disk.Name,
                     disk.FreeBytes / 1073741824.0, disk.TotalBytes / 1073741824.0, disk.IsSystem ? " (системный)" : ""));

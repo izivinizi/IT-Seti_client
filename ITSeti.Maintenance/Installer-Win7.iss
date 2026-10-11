@@ -3,7 +3,7 @@
 [Setup]
 AppId={{9C83D41A-9753-4E64-8EC8-A9A324BD7D52}
 AppName=ИТ-Сети Обслуживание ПК (Windows 7 beta)
-AppVersion=2.3.2
+AppVersion=2.3.3
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance Win7
 DisableDirPage=yes
@@ -30,6 +30,7 @@ Source: "{#PackageRoot}\App\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: igno
 Source: "{#PackageRoot}\Tools\CrystalDiskInfo\*"; DestDir: "{app}\Tools\CrystalDiskInfo"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PackageRoot}\Tools\CrystalDiskMark9\*"; DestDir: "{app}\Tools\CrystalDiskMark9"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PackageRoot}\Tools\DiskSpd\*"; DestDir: "{app}\Tools\DiskSpd"; Flags: ignoreversion
+Source: "{#PackageRoot}\Tools\HWiNFO\*"; DestDir: "{app}\Tools\HWiNFO"; Flags: ignoreversion
 Source: "Connect-Server.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

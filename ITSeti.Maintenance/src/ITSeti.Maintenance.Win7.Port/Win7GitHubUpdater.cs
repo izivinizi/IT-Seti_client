@@ -16,47 +16,52 @@ namespace ITSeti.Maintenance.App
 {
     internal sealed class Win7Release
     {
+        public Guid PackageId { get; set; }
         public Version Version { get; set; }
         public long Size { get; set; }
         public string Digest { get; set; }
         public string Url { get; set; }
     }
 
-    internal static class Win7GitHubUpdater
+    internal static class Win7ServerUpdater
     {
         private const string AssetName = "ITSeti-Maintenance-Win7-Setup.exe";
-        private const string ManifestUrl = "https://raw.githubusercontent.com/izivinizi/IT-Seti_client/main/release-win7.json";
+        private const string UpdateRoute = "/api/v1/application-update?platform=win7";
         private const string UpdateTaskName = "ITSeti-Maintenance-Win7-Update";
         private static string WorkerStatusPath { get { return Path.Combine(ScheduledCheckRunner.ResultsRoot, "application-update-status.txt"); } }
 
         public static async Task<Win7Release> CheckAsync()
         {
             ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
-            string json;
-            using (var client = NewClient())
-                json = await client.DownloadStringTaskAsync(new Uri(ManifestUrl));
-            return ParseManifest(json, Assembly.GetExecutingAssembly().GetName().Version);
+            var device = ReadDevice();
+            var json = await DownloadJsonAsync(device, new Uri(device.ServerUrl, UpdateRoute));
+            return string.IsNullOrWhiteSpace(json) ? null : ParseServerPackage(json, Assembly.GetExecutingAssembly().GetName().Version, device.ServerUrl);
         }
 
-        internal static Win7Release ParseManifest(string json, Version current)
+        internal static Win7Release ParseServerPackage(string json, Version current, Uri serverUrl)
         {
             var data = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
-            if (data == null) throw new InvalidDataException("Манифест Windows 7 пуст.");
+            if (data == null) throw new InvalidDataException("Сервер вернул пустые данные обновления Windows 7.");
             var versionText = Required(data, "version");
             Version version;
             if (!Regex.IsMatch(versionText, @"^\d+\.\d+\.\d+$") || !Version.TryParse(versionText, out version))
-                throw new InvalidDataException("Неверная версия в манифесте Windows 7.");
-            var tag = "v" + versionText + "-win7-beta";
-            var url = "https://github.com/izivinizi/IT-Seti_client/releases/download/" + tag + "/" + AssetName;
-            if (Required(data, "tag") != tag || Required(data, "assetName") != AssetName || Required(data, "downloadUrl") != url)
-                throw new InvalidDataException("Манифест указывает на неподходящий установщик.");
-            var digest = Required(data, "digest");
+                throw new InvalidDataException("Сервер вернул неверную версию Windows 7.");
+            if (Required(data, "key") != "application" || Required(data, "platform") != "win7")
+                throw new InvalidDataException("Сервер вернул пакет не для Windows 7.");
+            Guid packageId;
+            if (!Guid.TryParse(Required(data, "id"), out packageId) || packageId == Guid.Empty)
+                throw new InvalidDataException("Сервер вернул неверный идентификатор установщика.");
+            var fileName = Path.GetFileName(Required(data, "fileName"));
+            if (!fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Сервер вернул неподходящий тип установщика.");
+            var digest = Required(data, "sha256");
             long size;
-            if (!Regex.IsMatch(digest, @"^sha256:[0-9a-fA-F]{64}$") ||
-                !long.TryParse(Required(data, "size"), out size) || size < 1 || size > 500000000)
+            if (!Regex.IsMatch(digest, @"^[0-9a-fA-F]{64}$") ||
+                !long.TryParse(Required(data, "sizeBytes"), out size) || size < 1 || size > 500000000)
                 throw new InvalidDataException("Размер или SHA-256 установщика некорректен.");
+            var url = new Uri(serverUrl, "api/v1/packages/" + packageId.ToString("D") + "/download").ToString();
             return version.CompareTo(new Version(current.Major, current.Minor, Math.Max(current.Build, 0))) > 0
-                ? new Win7Release { Version = version, Size = size, Digest = digest.Substring(7), Url = url }
+                ? new Win7Release { PackageId = packageId, Version = version, Size = size, Digest = digest, Url = url }
                 : null;
         }
 
@@ -67,11 +72,11 @@ namespace ITSeti.Maintenance.App
 
             try
             {
-                WriteWorkerStatus("Проверка версии приложения на GitHub...");
+                WriteWorkerStatus("Проверка версии приложения на сервере...");
                 var release = CheckAsync().GetAwaiter().GetResult();
                 if (release == null)
                 {
-                    WriteWorkerStatus("Установлена последняя версия Windows 7.");
+                    WriteWorkerStatus("Установлена последняя версия Windows 7 с сервера.");
                     return 0;
                 }
 
@@ -194,7 +199,7 @@ namespace ITSeti.Maintenance.App
         private static WebClient NewClient()
         {
             var client = new TimeLimitedWebClient();
-            client.Headers[HttpRequestHeader.UserAgent] = "ITSeti-Maintenance-Win7/2.3.2";
+            client.Headers[HttpRequestHeader.UserAgent] = "ITSeti-Maintenance-Win7/2.3.3";
             client.Headers[HttpRequestHeader.CacheControl] = "no-cache";
             return client;
         }
@@ -208,6 +213,52 @@ namespace ITSeti.Maintenance.App
                 var http = request as HttpWebRequest;
                 if (http != null) http.ReadWriteTimeout = 30000;
                 return request;
+            }
+        }
+
+        private sealed class DeviceSettings
+        {
+            public Uri ServerUrl { get; set; }
+            public string DeviceId { get; set; }
+            public string DeviceKey { get; set; }
+        }
+
+        private static DeviceSettings ReadDevice()
+        {
+            var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "ITSeti", "Maintenance", "server-device.json");
+            var data = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(path, Encoding.UTF8));
+            if (data == null) throw new InvalidDataException("Данные подключения к серверу не найдены.");
+            Uri server;
+            if (!Uri.TryCreate(Required(data, "serverUrl"), UriKind.Absolute, out server) || server.Scheme != Uri.UriSchemeHttps)
+                throw new InvalidDataException("Адрес сервера обновлений недействителен.");
+            var id = Required(data, "deviceId");
+            var key = Required(data, "deviceKey");
+            if (key.Length < 16) throw new InvalidDataException("Ключ устройства слишком короткий.");
+            return new DeviceSettings { ServerUrl = new Uri(server.AbsoluteUri.EndsWith("/") ? server.AbsoluteUri : server.AbsoluteUri + "/"), DeviceId = id, DeviceKey = key };
+        }
+
+        private static async Task<string> DownloadJsonAsync(DeviceSettings device, Uri uri)
+        {
+            var request = (HttpWebRequest)WebRequest.Create(uri);
+            request.Method = "GET";
+            request.Timeout = 30000;
+            request.ReadWriteTimeout = 30000;
+            request.UserAgent = "ITSeti-Maintenance-Win7/2.3.3";
+            request.Headers["X-Device-Id"] = device.DeviceId;
+            request.Headers["X-Device-Key"] = device.DeviceKey;
+            try
+            {
+                using (var response = (HttpWebResponse)await request.GetResponseAsync())
+                {
+                    if (response.StatusCode == HttpStatusCode.NoContent) return null;
+                    using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8)) return await reader.ReadToEndAsync();
+                }
+            }
+            catch (WebException ex) when (ex.Response is HttpWebResponse response && response.StatusCode == HttpStatusCode.NoContent)
+            {
+                response.Dispose();
+                return null;
             }
         }
 

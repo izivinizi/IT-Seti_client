@@ -299,6 +299,7 @@ namespace ITSeti.Maintenance.App
                 {
                     var sid = UserProfileCleanupBridge.ActiveConsoleUserSid();
                     var snapshot = LegacyDiagnostics.CollectWithCleanup(full, token, false, true, sid, null);
+                    LegacyHwInfoReader.Apply(snapshot);
                     SaveSnapshot(snapshot);
                     WriteStatus(new Win7ServiceStatus { State = "Completed", Operation = full ? "FullCheck" : "QuickCheck", RunId = runId,
                         StartedAtUtc = snapshot.StartedAt, FinishedAtUtc = UtcNow(), Message = "Проверка завершена службой SYSTEM.", ResultPath = ResultPath });
@@ -403,6 +404,7 @@ namespace ITSeti.Maintenance.App
             private static void CollectMonitoring()
             {
                 var snapshot = LegacyDiagnostics.CollectMonitoring(CancellationToken.None);
+                LegacyHwInfoReader.Apply(snapshot);
                 WriteAtomically(MonitoringPath, snapshot.ToJson());
                 var critical = snapshot.Findings.FindAll(IsCriticalFinding);
                 if (critical.Count == 0) return;

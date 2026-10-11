@@ -292,7 +292,7 @@
        <TextBlock Text="Обновление приложения" Style="{StaticResource SectionHeading}" Margin="0,8,0,8"/>
        <WrapPanel>
         <Button Click="CheckAppUpdates_Click" IsEnabled="{Binding CanCheckApplicationUpdates}" Padding="12,8" Margin="0,0,8,8" Cursor="Hand" Content="Проверить обновления"/>
-        <Button Click="InstallAppUpdate_Click" IsEnabled="{Binding CanInstallApplicationUpdate}" Padding="12,8" Margin="0,0,8,8" Background="#326EFF" Foreground="White" BorderThickness="0" Cursor="Hand" Content="Обновить из GitHub"/>
+        <Button Click="InstallAppUpdate_Click" IsEnabled="{Binding CanInstallApplicationUpdate}" Padding="12,8" Margin="0,0,8,8" Background="#326EFF" Foreground="White" BorderThickness="0" Cursor="Hand" Content="Обновить с сервера"/>
        </WrapPanel>
        <TextBlock Text="{Binding ApplicationUpdateStatus}" Foreground="#354A5E" TextWrapping="Wrap" Margin="0,3,0,0"/>
        <TextBlock x:Name="ApplicationUpdateHint" Text="Проверка версии также выполняется при полной диагностике." Style="{StaticResource SecondaryText}" Margin="0,3,0,0"/>

@@ -4,9 +4,9 @@
     <TargetFramework>net48</TargetFramework>
     <UseWPF>true</UseWPF>
     <AssemblyName>ITSeti.Maintenance.Win7.Port</AssemblyName>
-    <Version>2.3.2-beta</Version>
-    <AssemblyVersion>2.3.2.0</AssemblyVersion>
-    <FileVersion>2.3.2.0</FileVersion>
+    <Version>2.3.3-beta</Version>
+    <AssemblyVersion>2.3.3.0</AssemblyVersion>
+    <FileVersion>2.3.3.0</FileVersion>
     <RootNamespace>ITSeti.Maintenance.App</RootNamespace>
     <ApplicationIcon>../ITSeti.Maintenance.App/Assets/favicon.ico</ApplicationIcon>
     <LangVersion>latest</LangVersion>
@@ -25,6 +25,7 @@
     <Compile Include="../ITSeti.Maintenance.Win7/LegacyDiagnostics.cs" Link="Legacy/LegacyDiagnostics.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/CpuLoadSampler.cs" Link="Legacy/CpuLoadSampler.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/LegacyExtras.cs" Link="Legacy/LegacyExtras.cs" />
+    <Compile Include="../ITSeti.Maintenance.Win7/LegacyHwInfoReader.cs" Link="Legacy/LegacyHwInfoReader.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/LegacyHistoryStore.cs" Link="Legacy/LegacyHistoryStore.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/LegacyMaintenance.cs" Link="Legacy/LegacyMaintenance.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/LegacySoftwareAudit.cs" Link="Legacy/LegacySoftwareAudit.cs" />

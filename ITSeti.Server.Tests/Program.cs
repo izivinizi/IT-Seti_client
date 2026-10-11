@@ -65,6 +65,12 @@ static void Check(bool value, string caseName)
     Console.WriteLine("PASS " + caseName);
 }
 
+Check(PackageVersionDetector.TryParse("FileVersion 2.3.3.0", out var detectedVersion) && detectedVersion == new Version(2, 3, 3, 0),
+    "application package versions accept EXE FileVersion metadata");
+Check(PackageVersionDetector.TryParse("ITSeti-Maintenance-Setup-2.3.3.exe", out var fileNameVersion) && fileNameVersion == new Version(2, 3, 3),
+    "application package versions fall back to a semantic version in the filename");
+Check(!PackageVersionDetector.TryParse("latest", out _), "application package upload rejects undetectable versions");
+
 Check(OkdeskWebClient.ReadCreatedIssueId(Report("""{"redirect":{"redirect_path":"/issues/24447"}}""")) == 24447,
     "web creation reads the confirmed sequential ticket number");
 var webComment = Report("""{"type":"AddCommentEvent","state":"published","isPublic":true,"commentId":42,"content":"public","author":{"type":"Employee","id":10}}""");

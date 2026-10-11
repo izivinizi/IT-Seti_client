@@ -54,6 +54,10 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
             ? await CpuTemperatureCache.RequestFreshAsync(TimeSpan.FromSeconds(5), cancellationToken)
             : CpuTemperatureCache.ReadFresh(maxAge: TimeSpan.FromSeconds(45));
         temperature ??= new CpuTemperatureReading(null, "Ожидается опрос системной задачи");
+        // HWiNFO is owned by the SYSTEM service; the interactive client only consumes its cache.
+        var hwInfo = HwInfoReader.ReadCached(TimeSpan.FromMinutes(2));
+        if (hwInfo?.CpuTemperatureC is { } hwTemperature)
+            temperature = new CpuTemperatureReading(hwTemperature, $"HWiNFO · {hwInfo.Source}", hwInfo.CapturedAtUtc);
         var latency = await ReadDiskLatencyAsync(cancellationToken);
         return new DiagnosticSnapshot(Guid.NewGuid(), started, Environment.MachineName, cpu,
             memory.TotalPhysical, memory.AvailablePhysical, disks, notes, QuickDisks: physicalDisks,
@@ -61,7 +65,7 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
             WindowsEdition: windows.Edition, WindowsRelease: windows.Release, WindowsBuild: windows.Build,
             CpuTemperatureC: temperature.TemperatureC, CpuTemperatureStatus: temperature.Status,
             ActiveUptimeHours: ReadActiveUptimeHours(), DiskReadLatencyMs: latency.ReadMs,
-            DiskWriteLatencyMs: latency.WriteMs);
+            DiskWriteLatencyMs: latency.WriteMs, HwInfo: hwInfo);
     }, cancellationToken);
 
     private static async Task<(double? ReadMs, double? WriteMs)> ReadDiskLatencyAsync(CancellationToken cancellationToken)

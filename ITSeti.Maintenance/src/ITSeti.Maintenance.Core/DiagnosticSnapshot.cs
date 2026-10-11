@@ -15,7 +15,8 @@ public sealed record DiagnosticSnapshot(
     FullDiagnosticDetails? Full = null, List<PhysicalDiskDetails>? QuickDisks = null,
     DateTimeOffset? LastBootAt = null, string? WindowsEdition = null, string? WindowsRelease = null,
     int? WindowsBuild = null, double? CpuTemperatureC = null, string? CpuTemperatureStatus = null,
-    double? ActiveUptimeHours = null, double? DiskReadLatencyMs = null, double? DiskWriteLatencyMs = null)
+    double? ActiveUptimeHours = null, double? DiskReadLatencyMs = null, double? DiskWriteLatencyMs = null,
+    HwInfoSnapshot? HwInfo = null)
 {
     public double MemoryUsedPercent => TotalMemoryBytes > 0
         ? 100.0 * (TotalMemoryBytes - AvailableMemoryBytes) / TotalMemoryBytes : 0;
@@ -101,6 +102,17 @@ public sealed record ResourceSampleSummary(int Samples, int CpuHighSamples, int 
     int LowAvailableSamples, int PagingHighSamples, double CpuAverage, double MemoryAverage,
     double PagesOutputAverage, double? DiskReadLatencyMs, double? DiskWriteLatencyMs,
     long DiskReadOperations, long DiskWriteOperations, string Error);
+public sealed record HwInfoSensorReading(string Name, double Value, string Unit, string Category);
+public sealed record HwInfoSnapshot(string Source, string ToolVersion, DateTimeOffset CapturedAtUtc,
+    string? CpuName, string? Motherboard, string? BiosVersion, string? MemoryType,
+    IReadOnlyList<HwInfoSensorReading> Sensors)
+{
+    public double? CpuTemperatureC => Sensors.Where(item => item.Category == "CpuTemperature").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
+    public double? VrmTemperatureC => Sensors.Where(item => item.Category == "VrmTemperature").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
+    public double? Rail12V => Sensors.FirstOrDefault(item => item.Category == "Rail12V")?.Value;
+    public double? Rail5V => Sensors.FirstOrDefault(item => item.Category == "Rail5V")?.Value;
+    public double? CpuLoadPercent => Sensors.Where(item => item.Category == "CpuLoad").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
+}
 public sealed record FullDiagnosticDetails(string CpuName, string GpuName, bool Elevated,
     List<PhysicalDiskDetails> PhysicalDisks, List<SmartDiskDetails> SmartDisks,
     List<ProcessDetails> Processes, List<EventDetails> Events, int ProcessUnavailable, int EventUnavailable,

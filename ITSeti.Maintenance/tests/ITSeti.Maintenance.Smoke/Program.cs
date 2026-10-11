@@ -715,40 +715,44 @@ internal static class Program
     private static async Task<int> CheckUpdateClientContract()
     {
         AssertUpdateStatusVersionFiltering();
-        static string Payload(string version, string digest, string? url = null) => $$"""
-            {"version":"{{version}}","tag":"v{{version}}","assetName":"ITSeti-Maintenance-Setup.exe",
-             "size":12345,"digest":"{{digest}}","downloadUrl":"{{url ?? $"https://github.com/izivinizi/IT-Seti_client/releases/download/v{version}/ITSeti-Maintenance-Setup.exe"}}"}
+        var hwInfo = HwInfoReader.Parse("""
+            {"Version":"8.54","Sensors":[
+              {"Name":"CPU Package","Value":"62.375 °C","Unit":"°C"},
+              {"Name":"VRM MOS","Value":101.0,"Unit":"°C"},
+              {"Name":"+12V","Value":12.04,"Unit":"V"},
+              {"Name":"+5V","Value":5.01,"Unit":"V"},
+              {"Name":"Total CPU Usage","Value":17.0,"Unit":"%"}]}
+            """, "fixture");
+        if (hwInfo?.CpuTemperatureC != 62.375 || hwInfo.VrmTemperatureC != 101 ||
+            hwInfo.Rail12V != 12.04 || hwInfo.Rail5V != 5.01 || hwInfo.CpuLoadPercent != 17)
+            throw new Exception("HWiNFO sensor JSON mapping did not preserve CPU, VRM, rail and load readings");
+        Console.WriteLine("PASS: HWiNFO JSON sensor mapping and system snapshot contract.");
+        static string Payload(string version, string digest) => $$"""
+            {"id":"11111111-1111-1111-1111-111111111111","key":"application","version":"{{version}}",
+             "platform":"windows","sha256":"{{digest}}","sizeBytes":12345,"fileName":"ITSeti-Maintenance-Setup.exe"}
             """;
         static HttpClient For(string payload) => new(new FakeReleaseHandler(payload));
 
-        const string digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        var newer = new GitHubReleaseClient(For(Payload("0.9.5", digest)), "https://unit.test/latest");
+        const string digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var newer = new ServerApplicationUpdateClient(For(Payload("2.4.0", digest)), "https://unit.test/", "11111111-1111-1111-1111-111111111111", "device-key-test");
         var update = await newer.GetUpdateAsync(new Version(0, 8, 0));
-        if (update?.Version != new Version(0, 9, 5) || update.Digest != digest || update.Size != 12345 ||
-            update.DownloadUrl != "https://github.com/izivinizi/IT-Seti_client/releases/download/v0.9.5/ITSeti-Maintenance-Setup.exe")
-            throw new Exception("Valid GitHub release manifest was not accepted");
+        if (update?.Version != new Version(2, 4, 0) || update.Digest != "sha256:" + digest || update.Size != 12345 ||
+            !update.DownloadUrl.EndsWith("/api/v1/packages/11111111-1111-1111-1111-111111111111/download", StringComparison.Ordinal))
+            throw new Exception("Valid server application package was not accepted");
 
-        var current = new GitHubReleaseClient(For(Payload("0.9.5", digest)), "https://unit.test/latest");
-        if (await current.GetUpdateAsync(new Version(0, 9, 5, 0)) is not null)
-            throw new Exception("Current release was incorrectly offered as an update");
+        var current = new ServerApplicationUpdateClient(For(Payload("2.4.0", digest)), "https://unit.test/", "11111111-1111-1111-1111-111111111111", "device-key-test");
+        if (await current.GetUpdateAsync(new Version(2, 4, 0, 0)) is not null)
+            throw new Exception("Current server package was incorrectly offered as an update");
 
-        var invalid = new GitHubReleaseClient(For(Payload("0.9.5", "sha256:invalid")), "https://unit.test/latest");
+        var invalid = new ServerApplicationUpdateClient(For(Payload("2.4.0", "invalid")), "https://unit.test/", "11111111-1111-1111-1111-111111111111", "device-key-test");
         try
         {
-            await invalid.GetUpdateAsync(new Version(0, 8, 0));
-            throw new Exception("Release without a valid digest was accepted");
+            await invalid.GetUpdateAsync(new Version(2, 3, 0));
+            throw new Exception("Server package without a valid digest was accepted");
         }
         catch (InvalidDataException) { }
 
-        var untrustedUrl = new GitHubReleaseClient(For(Payload("0.9.5", digest, "https://attacker.invalid/setup.exe")), "https://unit.test/latest");
-        try
-        {
-            await untrustedUrl.GetUpdateAsync(new Version(0, 8, 0));
-            throw new Exception("Installer URL outside the trusted GitHub repository was accepted");
-        }
-        catch (InvalidDataException) { }
-
-        Console.WriteLine("PASS: GitHub release manifest version, trusted URL and SHA-256 contract.");
+        Console.WriteLine("PASS: server application catalog version, device headers, package URL and SHA-256 contract.");
         return 0;
     }
 

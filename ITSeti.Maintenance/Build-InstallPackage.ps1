@@ -17,7 +17,7 @@ if(!$outputFull.StartsWith($distRoot,[StringComparison]::OrdinalIgnoreCase)){thr
 Remove-Item -LiteralPath (Join-Path $OutputRoot 'App'),(Join-Path $OutputRoot 'Service') -Recurse -Force -ErrorAction SilentlyContinue
 & (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'tests\Test-PowerShellCompatibility.ps1') -Root $PSScriptRoot
 if($LASTEXITCODE -ne 0){throw 'Windows PowerShell compatibility check failed.'}
-$required=@('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe','PawnIO\PawnIO_setup.exe')
+$required=@('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe','PawnIO\PawnIO_setup.exe','HWiNFO\HWiNFO32.exe')
 foreach($relative in $required){if(!(Test-Path -LiteralPath (Join-Path $ToolsRoot $relative) -PathType Leaf)){throw "Missing: $relative"}}
 $appProject=Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj'
 $serviceProject=Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.Service\ITSeti.Maintenance.Service.csproj'
@@ -50,7 +50,7 @@ $destination=Join-Path $OutputRoot 'Tools'
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
 Remove-Item -LiteralPath (Join-Path $destination 'Tools.rar'),(Join-Path $OutputRoot 'App\Tools\Tools.rar') -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $destination 'Software') -Recurse -Force -ErrorAction SilentlyContinue
-foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO')) {
+foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO','HWiNFO')) {
     $source=Join-Path $ToolsRoot $folder
     if(Test-Path -LiteralPath $source -PathType Container){
         $target=Join-Path $destination $folder

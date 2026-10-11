@@ -321,12 +321,12 @@ namespace ITSeti.Maintenance.App
             if (!engineer) return;
             view.Set("CanCheckApplicationUpdates", false);
             view.Set("CanInstallApplicationUpdate", false);
-            view.Set("ApplicationUpdateStatus", "Проверка версии Windows 7...");
+            view.Set("ApplicationUpdateStatus", "Проверка версии Windows 7 на сервере...");
             try
             {
-                availableUpdate = await Win7GitHubUpdater.CheckAsync();
+                availableUpdate = await Win7ServerUpdater.CheckAsync();
                 view.Set("ApplicationUpdateStatus", availableUpdate == null
-                    ? "Установлена последняя опубликованная версия Windows 7."
+                    ? "Установлена последняя версия Windows 7 с сервера."
                     : "Доступна версия " + availableUpdate.Version + " для Windows 7.");
                 view.Set("CanInstallApplicationUpdate", availableUpdate != null);
             }
@@ -345,7 +345,7 @@ namespace ITSeti.Maintenance.App
             view.Set("CanCheckApplicationUpdates", false);
             try
             {
-                await Win7GitHubUpdater.StartInstallAsync(availableUpdate,
+                await Win7ServerUpdater.StartInstallAsync(availableUpdate,
                     new Progress<string>(message => view.Set("ApplicationUpdateStatus", message)));
                 Application.Current.Shutdown();
             }
