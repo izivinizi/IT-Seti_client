@@ -39,6 +39,7 @@ namespace ITSeti.Maintenance.App
         private bool windowClosed;
         private bool scheduledFullPromptOpen;
         private bool cpuSampling;
+        private bool serviceCheck;
         private DateTime scheduledReportStamp;
         private readonly DispatcherTimer cpuTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
 
@@ -219,9 +220,11 @@ namespace ITSeti.Maintenance.App
                     view.Set("CheckProgressPhase", message);
                     Progress("Проверка", message);
                 });
-                var snapshot = await Task.Run(() => engineer
-                    ? LegacyDiagnostics.CollectWithCleanup(full, cancellation.Token, false, true, cleanupUserSid, progress)
-                    : LegacyDiagnostics.Collect(full, cancellation.Token, false));
+                var snapshot = await RunThroughServiceAsync(full, cancellation.Token);
+                if (snapshot == null)
+                {
+                    snapshot = await Task.Run(() => LegacyDiagnostics.CollectWithCleanup(full, cancellation.Token, false, true, cleanupUserSid, progress));
+                }
                 cancellation.Token.ThrowIfCancellationRequested();
                 current = snapshot;
                 if (full && new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent())
@@ -272,6 +275,7 @@ namespace ITSeti.Maintenance.App
             finally
             {
                 running = false;
+                serviceCheck = false;
                 checkCancellation = null;
                 cancellation.Dispose();
                 foreach (var name in new[] { "IsBusy", "CheckProgressIsRunning" }) view.Set(name, false);
@@ -287,8 +291,51 @@ namespace ITSeti.Maintenance.App
         {
             if (checkCancellation == null || checkCancellation.IsCancellationRequested) return;
             checkCancellation.Cancel();
+            if (serviceCheck)
+                _ = Win7MaintenanceServiceClient.StopAsync();
             view.Set("CanStopFullCheck", false);
             view.Set("UserStatus", "Останавливаем проверку...");
+        }
+
+        private async Task<LegacySnapshot> RunThroughServiceAsync(bool full, CancellationToken cancellationToken)
+        {
+            var startedAt = DateTime.UtcNow;
+            var start = await Win7MaintenanceServiceClient.StartAsync(full);
+            if (!start.Connected) return null;
+            if (!start.Accepted) throw new InvalidOperationException(start.Message);
+            serviceCheck = true;
+            view.Set("CheckProgressPhase", "Проверка выполняется службой SYSTEM...");
+            Progress("Служба", start.Message);
+            var deadline = DateTime.UtcNow.AddHours(2);
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (DateTime.UtcNow >= deadline)
+                    throw new TimeoutException("Служба не завершила проверку за 2 часа.");
+                var status = Win7MaintenanceServiceHost.ReadStatus();
+                if (status != null)
+                {
+                    DateTime statusStarted;
+                    var currentRun = (string.IsNullOrWhiteSpace(start.RunId) || string.Equals(status.RunId, start.RunId, StringComparison.OrdinalIgnoreCase)) &&
+                        !string.IsNullOrWhiteSpace(status.StartedAtUtc) &&
+                        DateTime.TryParse(status.StartedAtUtc, null, DateTimeStyles.RoundtripKind, out statusStarted) &&
+                        statusStarted.ToUniversalTime() >= startedAt.AddSeconds(-2);
+                    if (currentRun && string.Equals(status.State, "Completed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var path = string.IsNullOrWhiteSpace(status.ResultPath) ? Win7MaintenanceServiceHost.ResultPath : status.ResultPath;
+                        if (!File.Exists(path)) throw new InvalidDataException("Служба завершила проверку без отчёта.");
+                        return new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 }
+                            .Deserialize<LegacySnapshot>(File.ReadAllText(path));
+                    }
+                    if (currentRun && string.Equals(status.State, "Stopped", StringComparison.OrdinalIgnoreCase))
+                        throw new OperationCanceledException();
+                    if (currentRun && string.Equals(status.State, "Failed", StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException(status.Error ?? status.Message ?? "Служба не завершила проверку.");
+                    if (currentRun && !string.IsNullOrWhiteSpace(status.Message))
+                        view.Set("CheckProgressPhase", status.Message);
+                }
+                await Task.Delay(500, cancellationToken);
+            }
         }
 
         private void LoadCachedReport()

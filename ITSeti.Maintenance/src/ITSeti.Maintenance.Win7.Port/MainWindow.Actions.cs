@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Globalization;
 using System.Security.Principal;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -143,6 +144,14 @@ namespace ITSeti.Maintenance.App
         private async void RunFull_Click(object sender, RoutedEventArgs e) { await CheckAsync(true); }
         private async void RunCleanup_Click(object sender, RoutedEventArgs e)
         {
+            view.Set("CleanupStatus", "Очистка запускается службой SYSTEM...");
+            var service = await Win7MaintenanceServiceClient.CleanupAsync();
+            if (service.Connected)
+            {
+                view.Set("CleanupStatus", service.Accepted ? service.Message : "Очистка не запущена: " + service.Message);
+                if (service.Accepted) await WaitForServiceActionAsync("Очистка", service.RunId);
+                return;
+            }
             await RunActionAsync("Очистка профиля и системных временных файлов", "CleanupStatus",
                 () => LegacyMaintenance.CleanupAfterFullCheck(cleanupUserSid, System.Threading.CancellationToken.None));
         }
@@ -180,16 +189,37 @@ namespace ITSeti.Maintenance.App
         private void OpenToolsFolder_Click(object sender, RoutedEventArgs e) { OpenDirectory(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Tools")); }
         private void OpenDirectory(string path) { if (Directory.Exists(path)) Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
 
-        private void LaunchDiskInfo_Click(object sender, RoutedEventArgs e) { LaunchFile(DiskInfoPath); }
-        private void LaunchDiskMark_Click(object sender, RoutedEventArgs e) { LaunchFile(DiskMarkPath); }
-        private void LaunchTreeSize_Click(object sender, RoutedEventArgs e)
+        private async void LaunchDiskInfo_Click(object sender, RoutedEventArgs e) { await LaunchUtilityAsync("CrystalDiskInfo", DiskInfoPath); }
+        private async void LaunchDiskMark_Click(object sender, RoutedEventArgs e) { await LaunchUtilityAsync("CrystalDiskMark", DiskMarkPath); }
+        private async void LaunchTreeSize_Click(object sender, RoutedEventArgs e)
         {
             try
             {
                 if (!File.Exists(TreeSizePath)) throw new FileNotFoundException("TreeSize Free не включён в установщик Windows 7.", TreeSizePath);
+                var service = await Win7MaintenanceServiceClient.LaunchUtilityAsync("TreeSize", null, Process.GetCurrentProcess().SessionId);
+                if (service.Connected)
+                {
+                    if (!service.Accepted) MessageBox.Show(this, service.Message, "Запуск TreeSize", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
                 Process.Start(new ProcessStartInfo(TreeSizePath) { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(TreeSizePath) });
             }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, "Запуск TreeSize"); }
+        }
+        private async Task LaunchUtilityAsync(string key, string fallbackPath)
+        {
+            if (!engineer) return;
+            try
+            {
+                var service = await Win7MaintenanceServiceClient.LaunchUtilityAsync(key, null, Process.GetCurrentProcess().SessionId);
+                if (service.Connected)
+                {
+                    if (!service.Accepted) MessageBox.Show(this, service.Message, "Запуск утилиты", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                LaunchFile(fallbackPath);
+            }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "Запуск утилиты"); }
         }
         private void LaunchFile(string file)
         {
@@ -202,13 +232,19 @@ namespace ITSeti.Maintenance.App
             catch (Exception ex) { MessageBox.Show(this, ex.Message, "Запуск утилиты"); }
         }
 
-        private void LaunchSystemTool_Click(object sender, RoutedEventArgs e)
+        private async void LaunchSystemTool_Click(object sender, RoutedEventArgs e)
         {
             if (!engineer) return;
             var file = (sender as Button) == null ? null : (sender as Button).Tag as string;
             if (string.IsNullOrEmpty(file)) return;
             try
             {
+                var service = await Win7MaintenanceServiceClient.LaunchSystemToolAsync(file, Process.GetCurrentProcess().SessionId);
+                if (service.Connected)
+                {
+                    if (!service.Accepted) MessageBox.Show(this, service.Message, "Системное приложение", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
                 var executable = file.EndsWith(".msc", StringComparison.OrdinalIgnoreCase) ? "mmc.exe" : file.EndsWith(".cpl", StringComparison.OrdinalIgnoreCase) ? "control.exe" : file;
                 var arguments = executable == "mmc.exe" || executable == "control.exe" && file != "control.exe" ? file : "";
                 Process.Start(new ProcessStartInfo(executable, arguments) { UseShellExecute = true, WorkingDirectory = Environment.SystemDirectory });
@@ -223,8 +259,58 @@ namespace ITSeti.Maintenance.App
         private async void RunRepair_Click(object sender, RoutedEventArgs e)
         {
             if (!engineer) return;
-            await RunActionAsync("SFC проверяет системные файлы", "StandaloneRepairStatus", LegacyMaintenance.RunSfc);
+            var service = await Win7MaintenanceServiceClient.RepairAsync();
+            if (service.Connected)
+            {
+                view.Set("StandaloneRepairStatus", service.Accepted ? service.Message : "SFC не запущен: " + service.Message);
+                if (service.Accepted) await WaitForServiceActionAsync("SFC", service.RunId);
+            }
+            else
+                await RunActionAsync("SFC проверяет системные файлы", "StandaloneRepairStatus", LegacyMaintenance.RunSfc);
             view.Set("CanOpenRepairLog", File.Exists(RepairLogPath));
+        }
+
+        private async Task WaitForServiceActionAsync(string name, string runId)
+        {
+            var started = DateTime.UtcNow;
+            var deadline = started.AddHours(2);
+            while (true)
+            {
+                if (DateTime.UtcNow >= deadline)
+                {
+                    var timeout = name + " не завершено за 2 часа. Проверьте состояние службы.";
+                    if (name == "Очистка") view.Set("CleanupStatus", timeout);
+                    else view.Set("StandaloneRepairStatus", timeout);
+                    return;
+                }
+                var status = Win7MaintenanceServiceHost.ReadStatus();
+                DateTime stamp;
+                var recent = status != null && (string.IsNullOrWhiteSpace(runId) || string.Equals(status.RunId, runId, StringComparison.OrdinalIgnoreCase)) &&
+                    DateTime.TryParse(status.StartedAtUtc, null, DateTimeStyles.RoundtripKind, out stamp) &&
+                    stamp.ToUniversalTime() >= started.AddSeconds(-2);
+                if (recent && string.Equals(status.State, "Completed", StringComparison.OrdinalIgnoreCase))
+                {
+                    var message = status.Message ?? (name + " завершено.");
+                    if (name == "Очистка") view.Set("CleanupStatus", message);
+                    else view.Set("StandaloneRepairStatus", message);
+                    return;
+                }
+                if (recent && string.Equals(status.State, "Failed", StringComparison.OrdinalIgnoreCase))
+                {
+                    var message = "Не выполнено: " + (status.Error ?? status.Message ?? "служба вернула ошибку.");
+                    if (name == "Очистка") view.Set("CleanupStatus", message);
+                    else view.Set("StandaloneRepairStatus", message);
+                    return;
+                }
+                if (recent && string.Equals(status.State, "Stopped", StringComparison.OrdinalIgnoreCase))
+                {
+                    var message = name + " остановлено пользователем.";
+                    if (name == "Очистка") view.Set("CleanupStatus", message);
+                    else view.Set("StandaloneRepairStatus", message);
+                    return;
+                }
+                await Task.Delay(500);
+            }
         }
         private void OpenRepairLog_Click(object sender, RoutedEventArgs e) { if (File.Exists(RepairLogPath)) Process.Start(new ProcessStartInfo(RepairLogPath) { UseShellExecute = true }); }
         private void ShowRepairDetails_Click(object sender, RoutedEventArgs e) { MessageBox.Show(this, Convert.ToString(view.Get("StandaloneRepairStatus")), "Восстановление"); }

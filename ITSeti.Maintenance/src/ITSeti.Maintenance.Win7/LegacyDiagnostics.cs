@@ -168,17 +168,22 @@ namespace ITSeti.Maintenance.Win7
 
         public static LegacySnapshot Collect(bool full = false, CancellationToken cancellationToken = default(CancellationToken), bool scheduled = false)
         {
-            return CollectCore(full, cancellationToken, scheduled, false, true, null, null);
+            return CollectCore(full, cancellationToken, scheduled, false, true, null, null, true);
+        }
+
+        public static LegacySnapshot CollectMonitoring(CancellationToken cancellationToken = default(CancellationToken))
+        {
+            return CollectCore(false, cancellationToken, false, false, false, null, null, false);
         }
 
         public static LegacySnapshot CollectWithCleanup(bool full, CancellationToken cancellationToken, bool scheduled,
             bool cleanupCurrentUser, string cleanupUserSid, IProgress<string> progress)
         {
-            return CollectCore(full, cancellationToken, scheduled, true, cleanupCurrentUser, progress, cleanupUserSid);
+            return CollectCore(full, cancellationToken, scheduled, true, cleanupCurrentUser, progress, cleanupUserSid, true);
         }
 
         private static LegacySnapshot CollectCore(bool full, CancellationToken cancellationToken, bool scheduled,
-            bool cleanupAfterBenchmark, bool cleanupCurrentUser, IProgress<string> progress, string cleanupUserSid)
+            bool cleanupAfterBenchmark, bool cleanupCurrentUser, IProgress<string> progress, string cleanupUserSid, bool collectSmart)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var snapshot = new LegacySnapshot
@@ -201,9 +206,13 @@ namespace ITSeti.Maintenance.Win7
             progress?.Report("Сбор сети и пользовательских процессов");
             LegacyExtras.Collect(snapshot);
             cancellationToken.ThrowIfCancellationRequested();
-            progress?.Report("Сбор SMART через системную задачу");
-            SmartTaskRunner.CollectInto(snapshot, cancellationToken, scheduled);
-            cancellationToken.ThrowIfCancellationRequested();
+            if (collectSmart)
+            {
+                progress?.Report("Сбор SMART через системную задачу");
+                SmartTaskRunner.CollectInto(snapshot, cancellationToken, scheduled);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            else snapshot.SmartSummary = "SMART обновляется планово службой.";
             MapPhysicalDisks(snapshot);
             progress?.Report("Проверка журналов Windows");
             CollectEvents(snapshot, cancellationToken);

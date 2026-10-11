@@ -4,9 +4,9 @@
     <TargetFramework>net48</TargetFramework>
     <UseWPF>true</UseWPF>
     <AssemblyName>ITSeti.Maintenance.Win7.Port</AssemblyName>
-    <Version>2.3.1-beta</Version>
-    <AssemblyVersion>2.3.1.0</AssemblyVersion>
-    <FileVersion>2.3.1.0</FileVersion>
+    <Version>2.3.2-beta</Version>
+    <AssemblyVersion>2.3.2.0</AssemblyVersion>
+    <FileVersion>2.3.2.0</FileVersion>
     <RootNamespace>ITSeti.Maintenance.App</RootNamespace>
     <ApplicationIcon>../ITSeti.Maintenance.App/Assets/favicon.ico</ApplicationIcon>
     <LangVersion>latest</LangVersion>
@@ -20,6 +20,7 @@
     <Reference Include="System.Management" />
     <Reference Include="System.Web" />
     <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.ServiceProcess" />
     <Reference Include="Microsoft.CSharp" />
     <Compile Include="../ITSeti.Maintenance.Win7/LegacyDiagnostics.cs" Link="Legacy/LegacyDiagnostics.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/CpuLoadSampler.cs" Link="Legacy/CpuLoadSampler.cs" />

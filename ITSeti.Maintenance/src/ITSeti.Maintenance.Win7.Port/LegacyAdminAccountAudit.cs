@@ -33,7 +33,7 @@ namespace ITSeti.Maintenance.App
                             if (item.SidUsage == 1 || item.SidUsage == 2)
                             {
                                 var name = Marshal.PtrToStringUni(item.DomainAndName);
-                                if (!string.IsNullOrWhiteSpace(name) && !IsAllowedLocalAccount(name)) names.Add(name);
+                                if (!string.IsNullOrWhiteSpace(name) && !IsDesignatedAdminMember(name, item.SidUsage)) names.Add(name);
                             }
                         }
                     }
@@ -50,16 +50,27 @@ namespace ITSeti.Maintenance.App
             }
         }
 
-        private static bool IsAllowedLocalAccount(string account)
+        private static bool IsDesignatedAdminMember(string account, int sidUsage)
         {
             var slash = account.LastIndexOf('\\');
-            if (slash < 0 || !account.Substring(0, slash).Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase))
-                return false;
+            if (slash < 0) return false;
             var name = account.Substring(slash + 1);
+            if (sidUsage == 2 && (name.Equals("Administrators", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("Администраторы", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("Domain Admins", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("Администраторы домена", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("Администраторы локальных машин", StringComparison.OrdinalIgnoreCase))) return true;
+            if (name.Equals("Administrator", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("Администратор", StringComparison.OrdinalIgnoreCase)) return true;
+            if (!account.Substring(0, slash).Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase)) return false;
             return name.Equals("Admin", StringComparison.OrdinalIgnoreCase)
-                || name.Equals("it-seti", StringComparison.OrdinalIgnoreCase)
-                || name.Equals("Administrator", StringComparison.OrdinalIgnoreCase)
-                || name.Equals("Администратор", StringComparison.OrdinalIgnoreCase);
+                || name.Equals("it-seti", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Kept as a small compatibility seam for the Win7 reflection contract and old reports.
+        private static bool IsAllowedLocalAccount(string account)
+        {
+            return IsDesignatedAdminMember(account, 1);
         }
 
         [StructLayout(LayoutKind.Sequential)]

@@ -8,7 +8,7 @@ $install=Get-Content -LiteralPath (Join-Path $Root 'Install-Maintenance.ps1') -R
 $uninstall=Get-Content -LiteralPath (Join-Path $Root 'Uninstall-Maintenance.ps1') -Raw
 $builder=Get-Content -LiteralPath (Join-Path $Root 'Build-InstallPackage.ps1') -Raw
 $installer=Get-Content -LiteralPath (Join-Path $Root 'Installer.iss') -Raw
-if($serviceProject -notmatch '<Version>2\.3\.1</Version>' -or
+if($serviceProject -notmatch '<Version>2\.3\.2</Version>' -or
    !$protocol.Contains('ITSetiMaintenanceService') -or !$protocol.Contains('ITSeti.Maintenance.Service.v1') -or
    !$coordinator.Contains('BuiltinUsersSid') -or !$coordinator.Contains('PipeAccessRights.ReadWrite') -or
    !$coordinator.Contains('ResolveOperation') -or $coordinator.Contains('ProcessStartInfo(request') -or

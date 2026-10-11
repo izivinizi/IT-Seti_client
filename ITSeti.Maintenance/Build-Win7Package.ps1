@@ -2,7 +2,8 @@ param(
     [switch]$SkipReleaseManifest,
     [string]$OutputBaseFilename = 'ITSeti-Maintenance-Win7-Setup',
     [string]$PackageDirectory = 'dist\Win7\Package',
-    [switch]$ReplacePackage
+    [switch]$ReplacePackage,
+    [switch]$ReplaceInstaller
 )
 $ErrorActionPreference='Stop'
 $OutputRoot=Join-Path $PSScriptRoot 'dist\Win7'
@@ -26,7 +27,10 @@ if([IO.Path]::IsPathRooted($PackageDirectory) -or $PackageDirectory -match '(^|[
     throw 'Package directory must remain inside the Win7 build workspace.'
 }
 $installer=Join-Path $OutputRoot ($OutputBaseFilename + '.exe')
-if(Test-Path -LiteralPath $installer){throw "Installer already exists and was left untouched: $installer"}
+if(Test-Path -LiteralPath $installer){
+    if(!$ReplaceInstaller){throw "Installer already exists and was left untouched: $installer"}
+    Remove-Item -LiteralPath $installer -Force
+}
 if(!(Test-Path -LiteralPath $frameworkSource -PathType Leaf)){
     New-Item -ItemType Directory -Path (Split-Path -Parent $frameworkSource) -Force | Out-Null
     Invoke-WebRequest -Uri $frameworkUrl -OutFile $frameworkSource -ErrorAction Stop
@@ -57,7 +61,10 @@ if(Test-Path -LiteralPath $packagePath){
     if(!$ReplacePackage){throw "Package already exists and was left untouched: $packagePath. Use -ReplacePackage only when rebuilding that exact package."}
     Remove-Item -LiteralPath $packagePath -Recurse -Force
 }
-dotnet publish $project -c Release -o $app -p:NuGetAudit=false
+$dotnetCommand = Get-Command dotnet -ErrorAction SilentlyContinue
+$dotnet = if($dotnetCommand){$dotnetCommand.Source}else{Join-Path $env:USERPROFILE '.dotnet10\dotnet.exe'}
+if(!(Test-Path -LiteralPath $dotnet -PathType Leaf)){throw 'dotnet SDK executable was not found.'}
+& $dotnet publish $project -c Release -o $app -p:NuGetAudit=false
 if($LASTEXITCODE -ne 0){throw 'Win7 client publish failed.'}
 New-Item -ItemType Directory -Path $tools -Force | Out-Null
 Get-ChildItem -LiteralPath $source -Force |

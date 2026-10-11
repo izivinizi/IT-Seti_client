@@ -21,18 +21,21 @@ $required=@('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\Cdm
 foreach($relative in $required){if(!(Test-Path -LiteralPath (Join-Path $ToolsRoot $relative) -PathType Leaf)){throw "Missing: $relative"}}
 $appProject=Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj'
 $serviceProject=Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.Service\ITSeti.Maintenance.Service.csproj'
-dotnet restore $appProject -r win-x64 -p:NuGetAudit=false
+$dotnetCommand = Get-Command dotnet -ErrorAction SilentlyContinue
+$dotnet = if($dotnetCommand){$dotnetCommand.Source}else{Join-Path $env:USERPROFILE '.dotnet10\dotnet.exe'}
+if(!(Test-Path -LiteralPath $dotnet -PathType Leaf)){throw 'dotnet SDK executable was not found.'}
+& $dotnet restore $appProject -r win-x64 -p:NuGetAudit=false
 if($LASTEXITCODE -ne 0){
     $cache=Join-Path $env:USERPROFILE '.nuget\packages'
     Write-Warning 'NuGet недоступен; повторяем восстановление из локального кеша.'
-    dotnet restore $appProject -r win-x64 --source $cache -p:NuGetAudit=false
+    & $dotnet restore $appProject -r win-x64 --source $cache -p:NuGetAudit=false
     if($LASTEXITCODE -ne 0){throw 'dotnet restore failed; verify the NuGet connection or local package cache.'}
 }
-dotnet restore $serviceProject -r win-x64 -p:NuGetAudit=false
+& $dotnet restore $serviceProject -r win-x64 -p:NuGetAudit=false
 if($LASTEXITCODE -ne 0){throw 'Service restore failed; verify the NuGet connection.'}
-dotnet publish $appProject -c Release -r win-x64 --self-contained true --no-restore -o (Join-Path $OutputRoot 'App')
+& $dotnet publish $appProject -c Release -r win-x64 --self-contained true --no-restore -o (Join-Path $OutputRoot 'App')
 if($LASTEXITCODE -ne 0){throw 'dotnet publish failed.'}
-dotnet publish $serviceProject -c Release -r win-x64 --self-contained true --no-restore -o (Join-Path $OutputRoot 'Service')
+& $dotnet publish $serviceProject -c Release -r win-x64 --self-contained true --no-restore -o (Join-Path $OutputRoot 'Service')
 if($LASTEXITCODE -ne 0){throw 'Service publish failed.'}
 Remove-Item -LiteralPath (Join-Path $OutputRoot 'Service\Backend') -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $OutputRoot 'App\Setup') -Recurse -Force -ErrorAction SilentlyContinue

@@ -26,7 +26,7 @@ $allowedAdmin = $adminAudit.GetMethod('IsAllowedLocalAccount',[Reflection.Bindin
 foreach($name in @('Admin','it-seti','Administrator',([string][char]0x410+[char]0x434+[char]0x43C+[char]0x438+[char]0x43D+[char]0x438+[char]0x441+[char]0x442+[char]0x440+[char]0x430+[char]0x442+[char]0x43E+[char]0x440))){
     if(!$allowedAdmin.Invoke($null,@($env:COMPUTERNAME+'\'+$name))){throw 'Designated Win7 administrator incorrectly flagged.'}
 }
-if($allowedAdmin.Invoke($null,@('OTHER-DOMAIN\Administrator'))){throw 'Win7 local admin exception must not hide domain members.'}
+if(!$allowedAdmin.Invoke($null,@('OTHER-DOMAIN\Administrator')) -or $allowedAdmin.Invoke($null,@('OTHER-DOMAIN\SupportUser'))){throw 'Win7 built-in administrator exception or foreign account detection failed.'}
 $scheduled = $assembly.GetType('ITSeti.Maintenance.Win7.ScheduledCheckRunner',$true)
 $fullDue = $scheduled.GetMethod('IsFullDue',[Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic)
 $dueRoot = Join-Path $output 'full-due-fixture'
@@ -74,13 +74,13 @@ $updater = $assembly.GetType('ITSeti.Maintenance.App.Win7GitHubUpdater', $true)
 $flags = [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic
 $parse = $updater.GetMethod('ParseManifest', $flags)
 if (!$parse) { throw 'Win7 manifest parser is missing.' }
-$version = '1.2.3'
+$version = '2.3.3'
 $url = "https://github.com/izivinizi/IT-Seti_client/releases/download/v$version-win7-beta/ITSeti-Maintenance-Win7-Setup.exe"
 $manifest = [string]([ordered]@{
     version = $version; tag = "v$version-win7-beta"; assetName = 'ITSeti-Maintenance-Win7-Setup.exe'
     size = 12345; digest = ('sha256:' + ('a' * 64)); downloadUrl = $url
 } | ConvertTo-Json -Compress)
-$current = [version]'1.2.2'
+$current = [version]'2.3.2'
 if (!$parse.Invoke($null, @($manifest, $current))) { throw 'A newer Win7 release was not offered.' }
 if ($parse.Invoke($null, @($manifest, [version]$version))) { throw 'The installed Win7 release was offered again.' }
 foreach ($bad in @($manifest.Replace($url, 'https://example.org/setup.exe'),

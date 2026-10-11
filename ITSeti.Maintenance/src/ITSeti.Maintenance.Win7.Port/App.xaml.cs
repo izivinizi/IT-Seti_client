@@ -12,6 +12,12 @@ namespace ITSeti.Maintenance.App
     {
         protected override void OnStartup(StartupEventArgs e)
         {
+            if (e.Args.Length == 1 && string.Equals(e.Args[0], "--service", StringComparison.OrdinalIgnoreCase))
+            {
+                Win7MaintenanceServiceHost.Run();
+                Shutdown(0);
+                return;
+            }
             base.OnStartup(e);
             var args = e.Args;
             if (args.Length > 0)

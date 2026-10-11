@@ -550,7 +550,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     }
 
     private static string GetVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.3.1";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.3.2";
 
     private void StopChildren()
     {

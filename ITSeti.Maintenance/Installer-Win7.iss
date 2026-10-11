@@ -3,7 +3,7 @@
 [Setup]
 AppId={{9C83D41A-9753-4E64-8EC8-A9A324BD7D52}
 AppName=ИТ-Сети Обслуживание ПК (Windows 7 beta)
-AppVersion=2.3.1
+AppVersion=2.3.2
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance Win7
 DisableDirPage=yes
@@ -41,6 +41,8 @@ Name: "{autoprograms}\Подключить ПК к серверу ИТ-Сети"
 Filename: "{app}\ITSeti.Maintenance.Win7.Port.exe"; Description: "Запустить приложение"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallRun]
+Filename: "{sys}\sc.exe"; Parameters: "stop ITSetiMaintenanceWin7"; Flags: runhidden waituntilterminated; RunOnceId: "Win7MaintenanceServiceStop"
+Filename: "{sys}\sc.exe"; Parameters: "delete ITSetiMaintenanceWin7"; Flags: runhidden waituntilterminated; RunOnceId: "Win7MaintenanceServiceDelete"
 Filename: "{app}\ITSeti.Maintenance.Win7.Port.exe"; Parameters: "--unregister-smart-task"; Flags: runhidden waituntilterminated; RunOnceId: "Win7SmartTask"
 
 [Code]
@@ -79,8 +81,21 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ExitCode: Integer;
+  I: Integer;
 begin
   Result := '';
+  if Exec(ExpandConstant('{sys}\sc.exe'), 'query ITSetiMaintenanceWin7', '', SW_HIDE,
+    ewWaitUntilTerminated, ExitCode) and (ExitCode = 0) then
+  begin
+    Exec(ExpandConstant('{sys}\sc.exe'), 'stop ITSetiMaintenanceWin7', '', SW_HIDE,
+      ewWaitUntilTerminated, ExitCode);
+    for I := 1 to 120 do
+    begin
+      if not (Exec(ExpandConstant('{sys}\sc.exe'), 'query ITSetiMaintenanceWin7', '', SW_HIDE,
+        ewWaitUntilTerminated, ExitCode) and (ExitCode = 0)) then Break;
+      Sleep(250);
+    end;
+  end;
   if IsDotNetInstalled(net48, 0) then Exit;
 
   ExtractTemporaryFile('NDP48-x86-x64-AllOS-ENU.exe');
@@ -115,6 +130,7 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   ExitCode: Integer;
   ConnectCode: Integer;
+  ServiceParams: String;
 begin
   if CurStep = ssInstall then
   begin
@@ -128,6 +144,23 @@ begin
     end;
   end;
   if CurStep <> ssPostInstall then Exit;
+  ServiceParams := 'create ITSetiMaintenanceWin7 binPath= "' +
+    ExpandConstant('{app}\ITSeti.Maintenance.Win7.Port.exe') +
+    '" --service start= auto obj= LocalSystem DisplayName= "ИТ-Сети Обслуживание Windows 7"';
+  if not Exec(ExpandConstant('{sys}\sc.exe'), 'query ITSetiMaintenanceWin7', '', SW_HIDE,
+    ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
+  begin
+    if not Exec(ExpandConstant('{sys}\sc.exe'), ServiceParams, '', SW_HIDE,
+      ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
+      RaiseException('Не удалось установить службу обслуживания Windows 7 (код ' + IntToStr(ExitCode) + ').');
+  end
+  else if not Exec(ExpandConstant('{sys}\sc.exe'),
+    'config ITSetiMaintenanceWin7 binPath= "' + ExpandConstant('{app}\ITSeti.Maintenance.Win7.Port.exe') +
+    '" --service start= auto obj= LocalSystem', '', SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
+    RaiseException('Не удалось обновить службу обслуживания Windows 7 (код ' + IntToStr(ExitCode) + ').');
+  if not Exec(ExpandConstant('{sys}\sc.exe'), 'start ITSetiMaintenanceWin7', '', SW_HIDE,
+    ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
+    RaiseException('Не удалось запустить службу обслуживания Windows 7 (код ' + IntToStr(ExitCode) + ').');
   ExitCode := -1;
   if not Exec(ExpandConstant('{app}\ITSeti.Maintenance.Win7.Port.exe'), '--register-smart-task', '', SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
     RaiseException('Не удалось зарегистрировать задачу SMART. Подробности: ' + ExpandConstant('{app}\SmartTaskSetup.error.txt'));
