@@ -187,6 +187,21 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public string AdminRmsLabel => identity.RmsId ?? "Не найден";
     public string AdminAnyDeskLabel => identity.AnyDeskId ?? "Не найден";
     private static string ServerDevicePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance", "server-device.json");
+    public bool IsServerConnectionConfigured
+    {
+        get
+        {
+            try
+            {
+                if (!File.Exists(ServerDevicePath)) return false;
+                using var document = JsonDocument.Parse(File.ReadAllText(ServerDevicePath));
+                var root = document.RootElement;
+                return root.TryGetProperty("deviceId", out var deviceId) && !string.IsNullOrWhiteSpace(deviceId.GetString())
+                    && root.TryGetProperty("deviceKey", out var deviceKey) && !string.IsNullOrWhiteSpace(deviceKey.GetString());
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException) { return false; }
+        }
+    }
     public bool IsServerAssignmentConfigured
     {
         get
@@ -205,7 +220,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         }
     }
     public string ServerAssignmentLabel => IsServerAssignmentConfigured ? "Компания и объект: настроены" : "Компания и объект: не настроены";
-    public string ServerConnectionLabel => IsServerAssignmentConfigured ? "Сервер: подключён" : "Сервер: не подключён";
+    public string ServerConnectionLabel => IsServerConnectionConfigured ? "Сервер: подключён" : "Сервер: не подключён";
     public bool HasInventoryNumber => identity.InventoryNumber is not null;
     public bool HasRmsId => identity.RmsId is not null;
     public bool HasAnyDeskId => identity.AnyDeskId is not null;

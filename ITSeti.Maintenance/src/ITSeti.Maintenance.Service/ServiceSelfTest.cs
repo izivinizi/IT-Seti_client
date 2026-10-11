@@ -1,5 +1,6 @@
 using System.IO.Pipes;
 using System.Text;
+using System.Text.Json;
 using ITSeti.Maintenance.Infrastructure;
 
 namespace ITSeti.Maintenance.Service;
@@ -16,16 +17,17 @@ internal static class ServiceSelfTest
                          "InstalledOrganizationSetup.ps1", "Upload-Reports.ps1", "ServerSoftware.ps1", "Set-WindowsAutomaticUpdates.ps1" })
                 await File.WriteAllTextAsync(Path.Combine(root, name), "exit 0");
             var status = Path.Combine(root, "status.json");
-            using var coordinator = new MaintenanceServiceCoordinator(root, status);
+            var pipeName = MaintenanceServiceProtocol.PipeName + ".SelfTest." + Guid.NewGuid().ToString("N");
+            using var coordinator = new MaintenanceServiceCoordinator(root, status, pipeName);
             coordinator.ValidateInstallation();
             using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             var running = coordinator.RunAsync(cancellation.Token);
-            await SendOversizedRequestAsync(cancellation.Token);
+            await SendOversizedRequestAsync(pipeName, cancellation.Token);
             MaintenanceServiceCallResult ping = MaintenanceServiceCallResult.Unavailable("not attempted");
             for (var attempt = 0; attempt < 20 && !ping.Connected; attempt++)
             {
                 await Task.Delay(100);
-                ping = await MaintenanceServiceClient.PingAsync(cancellation.Token);
+                ping = await PingAsync(pipeName, cancellation.Token);
             }
             if (!ping.Accepted) throw new InvalidOperationException("Проверка канала службы не прошла: " + ping.Message);
             cancellation.Cancel();
@@ -44,13 +46,29 @@ internal static class ServiceSelfTest
         }
     }
 
-    private static async Task SendOversizedRequestAsync(CancellationToken cancellationToken)
+    private static async Task SendOversizedRequestAsync(string pipeName, CancellationToken cancellationToken)
     {
-        await using var pipe = new NamedPipeClientStream(".", MaintenanceServiceProtocol.PipeName,
+        await using var pipe = new NamedPipeClientStream(".", pipeName,
             PipeDirection.InOut, PipeOptions.Asynchronous);
         await pipe.ConnectAsync(cancellationToken);
         await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
         await writer.WriteLineAsync(new string('x', MaintenanceServiceProtocol.MaximumMessageCharacters + 1));
         await Task.Delay(100, cancellationToken);
+    }
+
+    private static async Task<MaintenanceServiceCallResult> PingAsync(string pipeName, CancellationToken cancellationToken)
+    {
+        await using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await pipe.ConnectAsync(cancellationToken);
+        await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+        using var reader = new StreamReader(pipe, Encoding.UTF8, true, leaveOpen: true);
+        await writer.WriteLineAsync(JsonSerializer.Serialize(new MaintenanceServiceRequest("ping"),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        var line = await reader.ReadLineAsync(cancellationToken);
+        var response = string.IsNullOrWhiteSpace(line) ? null : JsonSerializer.Deserialize<MaintenanceServiceResponse>(line,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return response is null
+            ? MaintenanceServiceCallResult.Unavailable("Служба не вернула ответ.")
+            : new MaintenanceServiceCallResult(true, response.Success, response.Message);
     }
 }

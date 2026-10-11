@@ -19,14 +19,17 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     private readonly SemaphoreSlim temperatureLock = new(1, 1);
     private readonly string backendRoot;
     private readonly string statusPath;
+    private readonly string pipeName;
     private DateTimeOffset lastTemperatureProbe = DateTimeOffset.MinValue;
     private DateTimeOffset lastUpload = DateTimeOffset.MinValue;
     private DateTimeOffset lastCatalogRefresh = DateTimeOffset.MinValue;
 
-    public MaintenanceServiceCoordinator(string? backendRootOverride = null, string? statusPathOverride = null)
+    public MaintenanceServiceCoordinator(string? backendRootOverride = null, string? statusPathOverride = null,
+        string? pipeNameOverride = null)
     {
         backendRoot = backendRootOverride ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Backend"));
         statusPath = statusPathOverride ?? Path.Combine(DataRoot, "Service", "status.json");
+        pipeName = pipeNameOverride ?? MaintenanceServiceProtocol.PipeName;
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -59,7 +62,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         }
     }
 
-    private static NamedPipeServerStream CreatePipe()
+    private NamedPipeServerStream CreatePipe()
     {
         var security = new PipeSecurity();
         security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
@@ -68,7 +71,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             PipeAccessRights.FullControl, AccessControlType.Allow));
         security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null),
             PipeAccessRights.ReadWrite, AccessControlType.Allow));
-        return NamedPipeServerStreamAcl.Create(MaintenanceServiceProtocol.PipeName, PipeDirection.InOut, 8,
+        return NamedPipeServerStreamAcl.Create(pipeName, PipeDirection.InOut, 8,
             PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 4096, 4096, security);
     }
 

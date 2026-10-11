@@ -127,10 +127,15 @@ function Save-DeviceKey([object]$result, [long]$companyId, $siteId) {
     try {
         $acl = New-Object Security.AccessControl.FileSecurity
         $acl.SetAccessRuleProtection($true, $false)
-        foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
+        foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-32-545')) {
             $sid = New-Object Security.Principal.SecurityIdentifier($sidText)
+            $rights = if ($sidText -eq 'S-1-5-32-545') {
+                [Security.AccessControl.FileSystemRights]::Read
+            } else {
+                [Security.AccessControl.FileSystemRights]::FullControl
+            }
             $rule = New-Object Security.AccessControl.FileSystemAccessRule -ArgumentList @(
-                $sid, [Security.AccessControl.FileSystemRights]::FullControl,
+                $sid, $rights,
                 [Security.AccessControl.AccessControlType]::Allow)
             $acl.AddAccessRule($rule)
         }

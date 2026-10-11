@@ -1,5 +1,21 @@
 param([string]$Root = (Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference='Stop'
+$connectSource=[IO.File]::ReadAllText((Join-Path $Root 'Connect-Server.ps1'),[Text.Encoding]::UTF8)
+$installSource=[IO.File]::ReadAllText((Join-Path $Root 'Install-Maintenance.ps1'),[Text.Encoding]::UTF8)
+$viewModelSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainViewModel.cs'),[Text.Encoding]::UTF8)
+if(!$connectSource.Contains("foreach (`$sidText in @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-32-545'))") -or
+   !$connectSource.Contains("if (`$sidText -eq 'S-1-5-32-545')") -or
+   !$connectSource.Contains('[Security.AccessControl.FileSystemRights]::Read')){
+    throw 'New enrollment files must be readable, but not writable, by standard users.'
+}
+if(!$installSource.Contains("`$enrollmentFile=Join-Path `$data 'server-device.json'") -or
+   !$installSource.Contains("'*S-1-5-32-545:R'")){
+    throw 'Installer does not repair read access to an existing enrollment file.'
+}
+if($viewModelSource -notmatch 'public bool IsServerConnectionConfigured' -or
+   $viewModelSource -notmatch 'ServerConnectionLabel => IsServerConnectionConfigured'){
+    throw 'Server connection status is still coupled to company/site assignment.'
+}
 $fixture=Join-Path ([IO.Path]::GetTempPath()) ('ITSeti-enrollment-'+[Guid]::NewGuid().ToString('N'))
 $directory=Join-Path $fixture 'ITSeti\Maintenance'
 [void][IO.Directory]::CreateDirectory($directory)

@@ -97,6 +97,11 @@ $securityRoot=Join-Path $env:ProgramData 'ITSeti'
 $installStage='Настройка доступа к данным обслуживания'
 & icacls.exe $securityRoot /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Could not secure ProgramData root.'}
+$enrollmentFile=Join-Path $data 'server-device.json'
+if(Test-Path -LiteralPath $enrollmentFile -PathType Leaf){
+    & icacls.exe $enrollmentFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:R' | Out-Null
+    if($LASTEXITCODE -ne 0){throw 'Could not preserve access to the existing server enrollment.'}
+}
 $cleanupQueue=Join-Path $data 'CleanupRequests'
 & icacls.exe $cleanupQueue /grant:r '*S-1-5-32-545:(OI)(CI)M' | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Could not allow cleanup requests.'}
