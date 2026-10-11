@@ -10,7 +10,7 @@ try {
     $total=[double](Get-WmiObject Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory
     $sampleCount=[int][math]::Floor($Seconds/$Interval)+1
     $cpuValues=@();$memoryValues=@();$pageValues=@()
-    $cpuHigh=0;$memoryHigh=0;$lowAvailable=0;$pagingHigh=0
+    $cpuHigh=0;$cpuCritical=0;$memoryHigh=0;$memoryCritical=0;$lowAvailable=0;$pagingHigh=0
     $readTicks=0.0;$writeTicks=0.0;$readOps=0.0;$writeOps=0.0
     $previousDisk=$null;$diskFrequency=0.0
     $sampleClock=[Diagnostics.Stopwatch]::StartNew()
@@ -28,7 +28,9 @@ try {
         $pagesOut=[double]$memory.PagesOutputPerSec
         $cpuValues+=@($cpuPercent);$memoryValues+=@($usedPercent);$pageValues+=@($pagesOut)
         if($cpuPercent -ge 90){$cpuHigh++}
+        if($cpuPercent -ge 98){$cpuCritical++}
         if($usedPercent -ge 90){$memoryHigh++}
+        if($usedPercent -ge 98){$memoryCritical++}
         if($availableMb -lt 500){$lowAvailable++}
         if($pagesOut -ge 100){$pagingHigh++}
         if($disk -and $previousDisk -and !(Get-Process DiskSpd* -ErrorAction SilentlyContinue)) {
@@ -50,6 +52,7 @@ try {
         $previousDisk=$disk
         $progressResult=@{
             Samples=$index+1;CpuHighSamples=$cpuHigh;MemoryHighSamples=$memoryHigh
+            CpuCriticalSamples=$cpuCritical;MemoryCriticalSamples=$memoryCritical
             LowAvailableSamples=$lowAvailable;PagingHighSamples=$pagingHigh
             CpuAverage=[math]::Round(($cpuValues | Measure-Object -Average).Average,1)
             MemoryAverage=[math]::Round(($memoryValues | Measure-Object -Average).Average,1)
@@ -65,6 +68,7 @@ try {
     }
     $result=@{
         Samples=$sampleCount;CpuHighSamples=$cpuHigh;MemoryHighSamples=$memoryHigh
+        CpuCriticalSamples=$cpuCritical;MemoryCriticalSamples=$memoryCritical
         LowAvailableSamples=$lowAvailable;PagingHighSamples=$pagingHigh
         CpuAverage=[math]::Round(($cpuValues | Measure-Object -Average).Average,1)
         MemoryAverage=[math]::Round(($memoryValues | Measure-Object -Average).Average,1)
@@ -75,7 +79,7 @@ try {
     }
     $result | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $RunRoot 'resource-sample.json') -Encoding UTF8
 } catch {
-    @{Samples=0;CpuHighSamples=0;MemoryHighSamples=0;LowAvailableSamples=0;PagingHighSamples=0
+    @{Samples=0;CpuHighSamples=0;MemoryHighSamples=0;CpuCriticalSamples=0;MemoryCriticalSamples=0;LowAvailableSamples=0;PagingHighSamples=0
         CpuAverage=0;MemoryAverage=0;PagesOutputAverage=0;DiskReadLatencyMs=$null;DiskWriteLatencyMs=$null
         DiskReadOperations=0;DiskWriteOperations=0;Error=$_.Exception.Message} |
         ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $RunRoot 'resource-sample.json') -Encoding UTF8

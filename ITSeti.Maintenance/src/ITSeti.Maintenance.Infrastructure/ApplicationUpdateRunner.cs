@@ -93,6 +93,20 @@ public sealed class ApplicationUpdateRunner
         throw new TimeoutException("Системная задача не сообщила о готовности установщика за 30 минут. Подробности доступны в журнале обновления.");
     }
 
+    public async Task<bool> TryStartScheduledUpdateAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await RunTaskCommandAsync("/Query", cancellationToken);
+            await RunTaskCommandAsync("/Run", cancellationToken);
+            return true;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or TimeoutException)
+        {
+            return false;
+        }
+    }
+
     private static async Task RunTaskCommandAsync(string operation, CancellationToken cancellationToken)
     {
         using var process = new Process

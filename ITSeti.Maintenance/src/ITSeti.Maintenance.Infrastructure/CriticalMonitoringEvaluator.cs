@@ -9,6 +9,13 @@ public static class CriticalMonitoringEvaluator
     public static IReadOnlyList<CriticalMonitoringIssue> Evaluate(DiagnosticSnapshot snapshot)
     {
         var issues = new List<CriticalMonitoringIssue>();
+        foreach (var sensor in snapshot.HwInfo?.AlertingSensors.Where(item => item.IsCritical) ?? [])
+        {
+            var identity = "hwinfo:critical:" + sensor.Name.ToLowerInvariant();
+            var status = string.IsNullOrWhiteSpace(sensor.Status) ? "критическое состояние" : sensor.Status;
+            issues.Add(new(identity, "HWiNFO сообщает критическое состояние",
+                $"{sensor.Name}: {status} ({sensor.Value:N2} {sensor.Unit})."));
+        }
         if (snapshot.CpuTemperatureC is >= HwInfoThresholds.CpuCriticalC)
             issues.Add(new("cpu:temperature", "Критическая температура CPU",
                 $"Температура процессора достигла {snapshot.CpuTemperatureC:N0} °C."));
@@ -30,6 +37,15 @@ public static class CriticalMonitoringEvaluator
         if (snapshot.MemoryUsedPercent >= 98)
             issues.Add(new("memory:load", "Критическая загрузка памяти",
                 $"Используется {snapshot.MemoryUsedPercent:N0}% оперативной памяти."));
+        if (snapshot.Full?.ResourceSampling is { Samples: >= 6, Error: "" } sample)
+        {
+            if (sample.CpuCriticalSamples >= 3)
+                issues.Add(new("cpu:load-sustained", "Критическая загрузка CPU за 30 секунд",
+                    $"Загрузка 98% и выше в {sample.CpuCriticalSamples} из {sample.Samples} замеров."));
+            if (sample.MemoryCriticalSamples >= 3)
+                issues.Add(new("memory:load-sustained", "Критическая загрузка памяти за 30 секунд",
+                    $"Загрузка памяти 98% и выше в {sample.MemoryCriticalSamples} из {sample.Samples} замеров."));
+        }
         foreach (var disk in snapshot.Disks.Where(item => item.TotalBytes >= 50L * 1073741824 &&
                      item.FreeBytes < 5L * 1073741824))
             issues.Add(new("space:" + disk.Name.TrimEnd('\\').ToLowerInvariant(),

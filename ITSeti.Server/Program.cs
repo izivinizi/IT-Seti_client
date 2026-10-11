@@ -441,7 +441,7 @@ app.MapGet("/api/v1/ticket-updates", async (HttpRequest request, NpgsqlDataSourc
     return Results.Ok(new { activeCount, cursor, cursorId, hasMore, messages });
 });
 
-app.MapGet("/api/v1/tickets", async (HttpRequest request, NpgsqlDataSource db) =>
+app.MapGet("/api/v1/tickets", async (HttpRequest request, NpgsqlDataSource db, IConfiguration configuration) =>
 {
     if (!await DeviceKeys.AuthenticateSupportAsync(request, db) ||
         !Guid.TryParse(request.Headers[DeviceKeys.IdHeader].ToString(), out var deviceId)) return Results.Unauthorized();
@@ -458,6 +458,7 @@ app.MapGet("/api/v1/tickets", async (HttpRequest request, NpgsqlDataSource db) =
         requestId = reader.GetGuid(0), title = reader.GetString(1), description = reader.GetString(2),
         service = TicketServices.Names.GetValueOrDefault(reader.GetString(3), reader.GetString(3)),
         status = reader.GetString(4), issueId = reader.IsDBNull(5) ? (long?)null : reader.GetInt64(5),
+        issueUrl = reader.IsDBNull(5) ? null : OkdeskLinks.IssueUrl(configuration, reader.GetInt64(5)),
         createdAt = reader.GetDateTime(6), error = reader.IsDBNull(7) ? null : reader.GetString(7), workflowState = reader.GetString(8),
         remoteStatus = reader.IsDBNull(9) ? null : reader.GetString(9)
     });
@@ -523,7 +524,7 @@ app.MapGet("/api/v1/tickets/{requestId:guid}/attachments/{fileId:guid}", async (
     return Results.File(reader.GetFieldValue<byte[]>(2), reader.GetString(1), reader.GetString(0));
 });
 
-app.MapGet("/api/v1/tickets/{requestId:guid}", async (Guid requestId, HttpRequest request, NpgsqlDataSource db) =>
+app.MapGet("/api/v1/tickets/{requestId:guid}", async (Guid requestId, HttpRequest request, NpgsqlDataSource db, IConfiguration configuration) =>
 {
     if (!await DeviceKeys.AuthenticateSupportAsync(request, db) ||
         !Guid.TryParse(request.Headers[DeviceKeys.IdHeader].ToString(), out var deviceId)) return Results.Unauthorized();
@@ -534,7 +535,8 @@ app.MapGet("/api/v1/tickets/{requestId:guid}", async (Guid requestId, HttpReques
     command.Parameters.AddWithValue("device", deviceId);
     await using var reader = await command.ExecuteReaderAsync();
     if (!await reader.ReadAsync()) return Results.NotFound();
-    return Results.Ok(new { requestId, status = reader.GetString(0), issueId = reader.IsDBNull(1) ? (long?)null : reader.GetInt64(1) });
+    var issueId = reader.IsDBNull(1) ? (long?)null : reader.GetInt64(1);
+    return Results.Ok(new { requestId, status = reader.GetString(0), issueId, issueUrl = issueId is { } value ? OkdeskLinks.IssueUrl(configuration, value) : null });
 });
 
 app.MapPost("/api/v1/tickets", async (HttpRequest request, CreateTicketRequest body, NpgsqlDataSource db) =>

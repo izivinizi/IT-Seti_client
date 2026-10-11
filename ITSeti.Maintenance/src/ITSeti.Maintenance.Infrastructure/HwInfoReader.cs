@@ -136,7 +136,15 @@ public static class HwInfoReader
             {
                 var fullName = string.IsNullOrWhiteSpace(context) ? label : context + " / " + label;
                 var category = Classify(fullName, unit);
-                if (category is not null) readings.Add(new(fullName, reading, unit, category));
+                if (category is not null)
+                {
+                    var sensorStatus = ReadSensorStatus(element);
+                    var isCritical = ReadFlag(element, "critical", "isCritical", "criticalAlarm", "isCriticalAlarm")
+                        || IsCriticalStatus(sensorStatus);
+                    var isWarning = ReadFlag(element, "warning", "isWarning", "warningAlarm", "isWarningAlarm")
+                        || IsWarningStatus(sensorStatus);
+                    readings.Add(new(fullName, reading, unit, category, sensorStatus, isWarning, isCritical));
+                }
             }
             foreach (var property in element.EnumerateObject())
             {
@@ -176,6 +184,31 @@ public static class HwInfoReader
                 property.Value.ValueKind == JsonValueKind.String) return property.Value.GetString();
         return null;
     }
+
+    private static string? ReadSensorStatus(JsonElement element) =>
+        ReadText(element, "status", "state", "health", "condition", "severity", "alarm", "alert");
+
+    private static bool ReadFlag(JsonElement element, params string[] names)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (!names.Any(name => property.Name.Equals(name, StringComparison.OrdinalIgnoreCase))) continue;
+            if (property.Value.ValueKind == JsonValueKind.True) return true;
+            if (property.Value.ValueKind != JsonValueKind.String) continue;
+            var value = property.Value.GetString();
+            if (string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase) || value == "1") return true;
+        }
+        return false;
+    }
+
+    private static bool IsCriticalStatus(string? status) =>
+        !string.IsNullOrWhiteSpace(status) && Regex.IsMatch(status,
+            "critical|crit|alarm|failed|failure|bad|опас|крит", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static bool IsWarningStatus(string? status) =>
+        !string.IsNullOrWhiteSpace(status) && Regex.IsMatch(status,
+            "warning|warn|attention|предуп|вним", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static double? ReadNumber(JsonElement element, params string[] names)
     {

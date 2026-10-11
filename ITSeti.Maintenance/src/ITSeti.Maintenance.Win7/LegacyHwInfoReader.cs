@@ -21,6 +21,17 @@ namespace ITSeti.Maintenance.Win7
         public double? Rail12V { get; set; }
         public double? Rail5V { get; set; }
         public double? CpuVoltageV { get; set; }
+        public List<LegacyHwInfoAlert> Alerts { get; set; } = new List<LegacyHwInfoAlert>();
+    }
+
+    internal sealed class LegacyHwInfoAlert
+    {
+        public string Name { get; set; }
+        public double Value { get; set; }
+        public string Unit { get; set; }
+        public string Status { get; set; }
+        public bool IsWarning { get; set; }
+        public bool IsCritical { get; set; }
     }
 
     internal static class LegacyHwInfoReader
@@ -71,6 +82,12 @@ namespace ITSeti.Maintenance.Win7
             AddTemperatureFinding(snapshot, data.PchTemperatureC, 70, 80, "PCH");
             AddRailFinding(snapshot, data.Rail12V, 10.8, 13.2, "+12 В");
             AddRailFinding(snapshot, data.Rail5V, 4.5, 5.5, "+5 В");
+            foreach (var alert in data.Alerts ?? new List<LegacyHwInfoAlert>())
+            {
+                var level = alert.IsCritical ? "критично" : "предупреждение";
+                snapshot.Findings.Add("HWiNFO " + level + ": " + alert.Name + " " + alert.Value.ToString("N2") + " " + (alert.Unit ?? "") +
+                    (string.IsNullOrWhiteSpace(alert.Status) ? "" : " (" + alert.Status + ")."));
+            }
         }
 
         private static void AddTemperatureFinding(LegacySnapshot snapshot, double? value, double warning, double critical, string name)
@@ -178,6 +195,11 @@ namespace ITSeti.Maintenance.Win7
                 {
                     var name = string.IsNullOrWhiteSpace(context) ? label : context + " / " + label;
                     var lower = name.ToLowerInvariant();
+                    var sensorStatus = Text(dictionary, "status", "state", "health", "condition", "severity", "alarm", "alert");
+                    var isCritical = Flag(dictionary, "critical", "isCritical", "criticalAlarm", "isCriticalAlarm") || IsCriticalStatus(sensorStatus);
+                    var isWarning = Flag(dictionary, "warning", "isWarning", "warningAlarm", "isWarningAlarm") || IsWarningStatus(sensorStatus);
+                    if (isCritical || isWarning)
+                        result.Alerts.Add(new LegacyHwInfoAlert { Name = name, Value = value.Value, Unit = unit, Status = sensorStatus, IsWarning = isWarning, IsCritical = isCritical });
                     if ((unit.IndexOf("c", StringComparison.OrdinalIgnoreCase) >= 0 || lower.Contains("temperature") || lower.Contains("temp")) &&
                         (lower.Contains("cpu") || lower.Contains("processor") || lower.Contains("package") || lower.Contains("tctl") || lower.Contains("tdie")))
                         result.CpuTemperatureC = Max(result.CpuTemperatureC, value);
@@ -210,6 +232,28 @@ namespace ITSeti.Maintenance.Win7
                 if (names.Any(name => string.Equals(item.Key, name, StringComparison.OrdinalIgnoreCase)) && item.Value is string)
                     return Convert.ToString(item.Value);
             return null;
+        }
+
+        private static bool Flag(IDictionary<string, object> values, params string[] names)
+        {
+            foreach (var item in values)
+                if (names.Any(name => string.Equals(item.Key, name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    if (item.Value is bool boolean) return boolean;
+                    var text = Convert.ToString(item.Value);
+                    if (string.Equals(text, "true", StringComparison.OrdinalIgnoreCase) || string.Equals(text, "yes", StringComparison.OrdinalIgnoreCase) || text == "1") return true;
+                }
+            return false;
+        }
+
+        private static bool IsCriticalStatus(string status)
+        {
+            return !string.IsNullOrWhiteSpace(status) && Regex.IsMatch(status, "critical|crit|alarm|failed|failure|bad|опас|крит", RegexOptions.IgnoreCase);
+        }
+
+        private static bool IsWarningStatus(string status)
+        {
+            return !string.IsNullOrWhiteSpace(status) && Regex.IsMatch(status, "warning|warn|attention|предуп|вним", RegexOptions.IgnoreCase);
         }
 
         private static double? Number(IDictionary<string, object> values, params string[] names)

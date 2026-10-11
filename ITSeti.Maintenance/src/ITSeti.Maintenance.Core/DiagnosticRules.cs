@@ -88,6 +88,7 @@ public static class DiagnosticRules
         }
         AddRailIssue(issues, "12 В", snapshot.HwInfo?.Rail12V, HwInfoThresholds.Rail12WarningMinV, HwInfoThresholds.Rail12WarningMaxV, HwInfoThresholds.Rail12CriticalMinV, HwInfoThresholds.Rail12CriticalMaxV);
         AddRailIssue(issues, "5 В", snapshot.HwInfo?.Rail5V, HwInfoThresholds.Rail5WarningMinV, HwInfoThresholds.Rail5WarningMaxV, HwInfoThresholds.Rail5CriticalMinV, HwInfoThresholds.Rail5CriticalMaxV);
+        AddHwInfoAlerts(issues, snapshot.HwInfo);
         if (snapshot.TotalMemoryBytes > 0)
         {
             var total = snapshot.TotalMemoryBytes / 1073741824.0;
@@ -110,8 +111,12 @@ public static class DiagnosticRules
                 issues.Add(new("Память почти постоянно занята", detail, "Warning"));
             }
         }
-        if (sample is not null && sample.CpuHighSamples >= 5)
+        if (sample is not null && sample.CpuCriticalSamples >= 3)
+            issues.Add(new("Критическая загрузка процессора", $"Нагрузка держалась на уровне 98% и выше в {sample.CpuCriticalSamples} из {sample.Samples} замеров за 30 секунд.", "Critical"));
+        else if (sample is not null && sample.CpuHighSamples >= 5)
             issues.Add(new("Процессор долго работал на пределе", "Нагрузка держалась выше 90% большую часть проверки. Из-за этого программы могут отвечать медленно.", "Warning"));
+        if (sample is not null && sample.MemoryCriticalSamples >= 3)
+            issues.Add(new("Критическая загрузка памяти", $"ОЗУ было занято на 98% и выше в {sample.MemoryCriticalSamples} из {sample.Samples} замеров за 30 секунд.", "Critical"));
         foreach (var disk in snapshot.Disks.Where(d => d.TotalBytes >= 50L * 1073741824 && d.FreeBytes < 15L * 1073741824))
         {
             var severe = disk.FreeBytes < 5L * 1073741824;
@@ -165,6 +170,26 @@ public static class DiagnosticRules
             issues.Add(new($"Отклонение шины {label}", $"HWiNFO показывает {voltage:N2} В. Номинал стоит перепроверить под нагрузкой.", "Warning"));
     }
 
+    private static void AddHwInfoAlerts(ICollection<UserIssue> issues, HwInfoSnapshot? hwInfo)
+    {
+        foreach (var sensor in hwInfo?.AlertingSensors ?? [])
+        {
+            var severity = sensor.IsCritical ? "Critical" : "Warning";
+            var label = sensor.IsCritical ? "критическое состояние" : "предупреждение";
+            var status = string.IsNullOrWhiteSpace(sensor.Status) ? "датчик сообщил об отклонении" : sensor.Status;
+            issues.Add(new($"HWiNFO: {label} · {sensor.Name}",
+                $"HWiNFO сообщает «{status}»: {sensor.Value:N2} {sensor.Unit}.", severity));
+        }
+    }
+
+    private static IEnumerable<string> GetHwInfoAlertFindings(HwInfoSnapshot? hwInfo)
+    {
+        return hwInfo?.AlertingSensors.Select(sensor =>
+            $"HWiNFO: {(sensor.IsCritical ? "критическое состояние" : "предупреждение")} · {sensor.Name}: " +
+            (string.IsNullOrWhiteSpace(sensor.Status) ? "датчик сообщил об отклонении" : sensor.Status) +
+            $" ({sensor.Value:N2} {sensor.Unit}).") ?? [];
+    }
+
     public static IReadOnlyList<string> GetFindings(DiagnosticSnapshot snapshot, bool includeDiskLinkWarnings = true)
     {
         var findings = new List<string>();
@@ -186,8 +211,11 @@ public static class DiagnosticRules
             else if (pchTemperature >= HwInfoThresholds.PchWarningC) findings.Add($"PCH: температура {pchTemperature:N0} °C достигла порога {HwInfoThresholds.PchWarningC:N0} °C.");
         AddRailFinding(findings, "12 В", snapshot.HwInfo?.Rail12V, HwInfoThresholds.Rail12WarningMinV, HwInfoThresholds.Rail12WarningMaxV, HwInfoThresholds.Rail12CriticalMinV, HwInfoThresholds.Rail12CriticalMaxV);
         AddRailFinding(findings, "5 В", snapshot.HwInfo?.Rail5V, HwInfoThresholds.Rail5WarningMinV, HwInfoThresholds.Rail5WarningMaxV, HwInfoThresholds.Rail5CriticalMinV, HwInfoThresholds.Rail5CriticalMaxV);
+        findings.AddRange(GetHwInfoAlertFindings(snapshot.HwInfo));
         if (sample?.CpuHighSamples >= 5) findings.Add($"CPU: ≥90% в {sample.CpuHighSamples} из {sample.Samples} замеров за 30 секунд");
+        if (sample?.CpuCriticalSamples >= 3) findings.Add($"CPU: ≥98% в {sample.CpuCriticalSamples} из {sample.Samples} замеров за 30 секунд");
         if (sample?.MemoryHighSamples >= 5) findings.Add($"ОЗУ: ≥90% в {sample.MemoryHighSamples} из {sample.Samples} замеров за 30 секунд");
+        if (sample?.MemoryCriticalSamples >= 3) findings.Add($"ОЗУ: ≥98% в {sample.MemoryCriticalSamples} из {sample.Samples} замеров за 30 секунд");
         if (sample is not null && sample.LowAvailableSamples >= 5 && sample.PagingHighSamples >= 3)
             findings.Add("ОЗУ: менее 500 МБ доступно и активная подкачка");
         if (snapshot.TotalMemoryBytes > 0 && snapshot.TotalMemoryBytes <= 4.5 * 1073741824) findings.Add("ОЗУ: 4 ГБ или меньше");

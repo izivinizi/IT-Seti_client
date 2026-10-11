@@ -722,11 +722,14 @@ internal static class Program
               {"Name":"PCH","Value":72.0,"Unit":"°C"},
               {"Name":"+12V","Value":12.04,"Unit":"V"},
               {"Name":"+5V","Value":5.01,"Unit":"V"},
-              {"Name":"Total CPU Usage","Value":17.0,"Unit":"%"}]}
+              {"Name":"Total CPU Usage","Value":17.0,"Unit":"%"},
+              {"Name":"CPU Package Alarm","Value":95.0,"Unit":"°C","Status":"Critical"}]}
             """, "fixture");
         if (hwInfo?.CpuTemperatureC != 62.375 || hwInfo.VrmTemperatureC != 101 || hwInfo.PchTemperatureC != 72 ||
             hwInfo.Rail12V != 12.04 || hwInfo.Rail5V != 5.01 || hwInfo.CpuLoadPercent != 17)
             throw new Exception("HWiNFO sensor JSON mapping did not preserve CPU, VRM, rail and load readings");
+        if (hwInfo.AlertingSensors.Count != 1 || !hwInfo.AlertingSensors[0].IsCritical)
+            throw new Exception("HWiNFO explicit critical sensor status was not preserved");
         Console.WriteLine("PASS: HWiNFO JSON sensor mapping and system snapshot contract.");
         static string Payload(string version, string digest) => $$"""
             {"id":"11111111-1111-1111-1111-111111111111","key":"application","version":"{{version}}",

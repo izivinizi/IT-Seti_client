@@ -4,15 +4,19 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Navigation;
+using System.Diagnostics;
 using Microsoft.Win32;
 
 namespace ITSeti.Maintenance.App;
 
 public partial class MyTicketsDialog : Window
 {
-    private sealed record Ticket(Guid Id, string Title, string State, long? IssueId, string Description, DateTime? CreatedAt, string? RemoteStatus = null, string? WorkflowState = null)
+    private sealed record Ticket(Guid Id, string Title, string State, long? IssueId, string Description, DateTime? CreatedAt, string? RemoteStatus = null, string? WorkflowState = null, string? IssueUrl = null)
     {
         public bool IsClosed => WorkflowState is "completed" or "cancelled" or "canceled" or "closed" or "resolved";
         public string StateLabel => RemoteStatus ?? (State switch
@@ -28,6 +32,18 @@ public partial class MyTicketsDialog : Window
             "failed" => "Принята · ошибка отправки в Okdesk",
             _ => "Принята"
         });
+        public Brush StateBrush
+        {
+            get
+            {
+                var value = (RemoteStatus + " " + WorkflowState + " " + State).ToLowerInvariant();
+                if (value.Contains("cancel") || value.Contains("отмен") || value.Contains("reject") || value.Contains("ошиб")) return Brushes.Firebrick;
+                if (value.Contains("complete") || value.Contains("resolved") || value.Contains("closed") || value.Contains("выполн")) return Brushes.ForestGreen;
+                if (value.Contains("queue") || value.Contains("ожида") || value.Contains("sending")) return new SolidColorBrush(Color.FromRgb(184, 113, 0));
+                if (value.Contains("open") || value.Contains("работ") || value.Contains("принят")) return new SolidColorBrush(Color.FromRgb(36, 94, 190));
+                return Brushes.SlateGray;
+            }
+        }
     }
     private sealed record Message(string Author, string Date, string Content, bool IsEngineer, IReadOnlyList<Attachment> Attachments);
     private sealed record Attachment(Guid Id, string FileName, Guid? MessageId);
@@ -67,7 +83,8 @@ public partial class MyTicketsDialog : Window
                 item.TryGetProperty("description", out var description) ? description.GetString() ?? "" : "",
                 item.TryGetProperty("createdAt", out var created) ? created.GetDateTime() : null,
                 item.TryGetProperty("remoteStatus", out var remote) ? remote.GetString() : null,
-                item.TryGetProperty("workflowState", out var workflowState) ? workflowState.GetString() : null)).ToArray();
+                item.TryGetProperty("workflowState", out var workflowState) ? workflowState.GetString() : null,
+                item.TryGetProperty("issueUrl", out var issueUrl) && issueUrl.ValueKind != JsonValueKind.Null ? issueUrl.GetString() : null)).ToArray();
             var tickets = (Ticket[])Tickets.ItemsSource;
             hasOpenTickets = tickets.Any(ticket => !ticket.IsClosed);
             if (hasOpenTickets && !isClosed) refreshTimer.Start(); else refreshTimer.Stop();
@@ -93,7 +110,7 @@ public partial class MyTicketsDialog : Window
         try
         {
             TicketHeader.Text = ticket.Title;
-            TicketState.Text = ticket.StateLabel + (ticket.IssueId.HasValue ? $" · Okdesk #{ticket.IssueId}" : "");
+            SetTicketState(ticket);
             using var client = ServerSupportClient.Open() ?? throw new InvalidOperationException("Компьютер не подключён к серверу.");
             using var data = await client.GetAsync($"/api/v1/tickets/{ticket.Id}/messages");
             if (request != selectionRequest) return;
@@ -115,6 +132,32 @@ public partial class MyTicketsDialog : Window
             StatusText.Text = "";
         }
         catch (Exception ex) { if (request == selectionRequest) StatusText.Text = ex.Message; }
+    }
+
+    private void SetTicketState(Ticket ticket)
+    {
+        TicketState.Inlines.Clear();
+        TicketState.Foreground = ticket.StateBrush;
+        TicketState.Inlines.Add(new Run(ticket.StateLabel));
+        if (ticket.IssueId is not { } issueId) return;
+        TicketState.Inlines.Add(new Run(" · "));
+        if (Uri.TryCreate(ticket.IssueUrl, UriKind.Absolute, out var uri))
+        {
+            var link = new Hyperlink(new Run($"Okdesk #{issueId}")) { NavigateUri = uri };
+            link.RequestNavigate += OkdeskLink_RequestNavigate;
+            TicketState.Inlines.Add(link);
+        }
+        else TicketState.Inlines.Add(new Run($"Okdesk #{issueId}"));
+    }
+
+    private void OkdeskLink_RequestNavigate(object? sender, RequestNavigateEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
+            e.Handled = true;
+        }
+        catch (Exception ex) { StatusText.Text = "Не удалось открыть заявку Okdesk: " + ex.Message; }
     }
 
     private async void Send_Click(object sender, RoutedEventArgs e)

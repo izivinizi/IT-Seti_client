@@ -1211,6 +1211,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                     RecordProgress("Сервер", "Отчёт сохранён локально; отправка будет повторена: " + ex.Message);
             }
             await ReloadAsync();
+            await TriggerApplicationUpdateAfterCheckAsync(userMode);
             LastFullSucceeded = true;
             status = quickMode ? "Быстрая полная проверка завершена. Результат сохранён" : "Полная проверка завершена. Результат сохранён";
             if (!userMode)
@@ -1265,6 +1266,22 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         }
         catch (Exception ex) { RecordProgress("Ошибка", ex.Message, generation); if (generation == checkProgressGeneration) checkProgressPhase = "Завершено с ошибкой"; }
         finally { if (generation == checkProgressGeneration) { checkProgressActive = false; Notify(); } }
+    }
+
+    private async Task TriggerApplicationUpdateAfterCheckAsync(bool userMode)
+    {
+        try
+        {
+            await CheckApplicationUpdatesAsync(automatic: true);
+            if (FullDiagnosticsRunner.IsInstalled && await new ApplicationUpdateRunner().TryStartScheduledUpdateAsync())
+            {
+                if (!userMode) RecordProgress("Обновление", "Проверка обновлений через сервер запущена");
+            }
+        }
+        catch (Exception ex)
+        {
+            if (!userMode) RecordProgress("Обновление", "Не удалось запустить проверку обновлений: " + ex.Message);
+        }
     }
 
     private async Task RunCleanupCoreAsync(bool background, int? generation = null)
@@ -1401,6 +1418,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             try { await ServerReportQueue.EnqueueAsync(snapshot); }
             catch (Exception ex) { RecordProgress("Сервер", "Отчёт сохранён локально; отправка будет повторена: " + ex.Message); }
             await ReloadAsync();
+            await TriggerApplicationUpdateAfterCheckAsync(userMode: true);
             status = "Быстрая проверка завершена. Результат сохранён";
         }
         catch (Exception ex) { status = $"Ошибка проверки или сохранения: {ex.Message}"; }

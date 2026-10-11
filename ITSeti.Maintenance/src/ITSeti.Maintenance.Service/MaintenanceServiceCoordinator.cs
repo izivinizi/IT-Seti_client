@@ -477,7 +477,8 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
                 VrmTemperatureC = hwInfo.VrmTemperatureC,
                 PchTemperatureC = hwInfo.PchTemperatureC,
                 Rail12V = hwInfo.Rail12V,
-                Rail5V = hwInfo.Rail5V
+                Rail5V = hwInfo.Rail5V,
+                AlertingSensors = hwInfo.AlertingSensors
             } : null,
             snapshot.ActiveUptimeHours,
             snapshot.DiskReadLatencyMs,

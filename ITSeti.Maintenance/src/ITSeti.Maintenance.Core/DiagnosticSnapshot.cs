@@ -101,8 +101,10 @@ public sealed record DiskBenchmark(string Drive, string MediaType, double? Read,
 public sealed record ResourceSampleSummary(int Samples, int CpuHighSamples, int MemoryHighSamples,
     int LowAvailableSamples, int PagingHighSamples, double CpuAverage, double MemoryAverage,
     double PagesOutputAverage, double? DiskReadLatencyMs, double? DiskWriteLatencyMs,
-    long DiskReadOperations, long DiskWriteOperations, string Error);
-public sealed record HwInfoSensorReading(string Name, double Value, string Unit, string Category);
+    long DiskReadOperations, long DiskWriteOperations, string Error,
+    int CpuCriticalSamples = 0, int MemoryCriticalSamples = 0);
+public sealed record HwInfoSensorReading(string Name, double Value, string Unit, string Category,
+    string? Status = null, bool IsWarning = false, bool IsCritical = false);
 public sealed record HwInfoSnapshot(string Source, string ToolVersion, DateTimeOffset CapturedAtUtc,
     string? CpuName, string? Motherboard, string? BiosVersion, string? MemoryType,
     IReadOnlyList<HwInfoSensorReading> Sensors)
@@ -114,6 +116,7 @@ public sealed record HwInfoSnapshot(string Source, string ToolVersion, DateTimeO
     public double? Rail5V => Sensors.FirstOrDefault(item => item.Category == "Rail5V")?.Value;
     public double? CpuVoltageV => Sensors.Where(item => item.Category == "CpuVoltage").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
     public double? CpuLoadPercent => Sensors.Where(item => item.Category == "CpuLoad").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
+    public IReadOnlyList<HwInfoSensorReading> AlertingSensors => Sensors.Where(item => item.IsWarning || item.IsCritical).ToArray();
 }
 public sealed record FullDiagnosticDetails(string CpuName, string GpuName, bool Elevated,
     List<PhysicalDiskDetails> PhysicalDisks, List<SmartDiskDetails> SmartDisks,
