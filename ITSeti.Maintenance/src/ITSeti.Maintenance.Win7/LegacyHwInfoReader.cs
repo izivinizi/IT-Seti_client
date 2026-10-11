@@ -17,6 +17,7 @@ namespace ITSeti.Maintenance.Win7
         public DateTime CapturedAtUtc { get; set; }
         public double? CpuTemperatureC { get; set; }
         public double? VrmTemperatureC { get; set; }
+        public double? PchTemperatureC { get; set; }
         public double? Rail12V { get; set; }
         public double? Rail5V { get; set; }
         public double? CpuVoltageV { get; set; }
@@ -57,6 +58,7 @@ namespace ITSeti.Maintenance.Win7
             if (data == null) return;
             snapshot.HwInfoVersion = data.ToolVersion;
             snapshot.VrmTemperatureC = data.VrmTemperatureC;
+            snapshot.PchTemperatureC = data.PchTemperatureC;
             snapshot.Rail12V = data.Rail12V;
             snapshot.Rail5V = data.Rail5V;
             snapshot.CpuVoltageV = data.CpuVoltageV;
@@ -65,14 +67,17 @@ namespace ITSeti.Maintenance.Win7
                 snapshot.CpuTemperatureC = data.CpuTemperatureC;
                 snapshot.CpuSource = "HWiNFO · служба SYSTEM";
             }
-            AddCriticalFinding(snapshot, data.VrmTemperatureC, 105, "VRM");
+            AddTemperatureFinding(snapshot, data.VrmTemperatureC, 80, 95, "VRM");
+            AddTemperatureFinding(snapshot, data.PchTemperatureC, 70, 80, "PCH");
             AddRailFinding(snapshot, data.Rail12V, 10.8, 13.2, "+12 В");
             AddRailFinding(snapshot, data.Rail5V, 4.5, 5.5, "+5 В");
         }
 
-        private static void AddCriticalFinding(LegacySnapshot snapshot, double? value, double threshold, string name)
+        private static void AddTemperatureFinding(LegacySnapshot snapshot, double? value, double warning, double critical, string name)
         {
-            if (value >= threshold) snapshot.Findings.Add("HWiNFO критично: " + name + " " + value.Value.ToString("N0") + " °C.");
+            if (!value.HasValue) return;
+            if (value.Value >= critical) snapshot.Findings.Add("HWiNFO критично: " + name + " " + value.Value.ToString("N0") + " °C.");
+            else if (value.Value >= warning) snapshot.Findings.Add("HWiNFO предупреждение: " + name + " " + value.Value.ToString("N0") + " °C.");
         }
 
         private static void AddRailFinding(LegacySnapshot snapshot, double? value, double min, double max, string name)
@@ -157,7 +162,7 @@ namespace ITSeti.Maintenance.Win7
             var root = new JavaScriptSerializer { MaxJsonLength = 8 * 1024 * 1024 }.DeserializeObject(json);
             var result = new LegacyHwInfoData { Source = source, CapturedAtUtc = DateTime.UtcNow, ToolVersion = FindText(root, "version") ?? "" };
             Walk(root, "", result);
-            return result.CpuTemperatureC.HasValue || result.VrmTemperatureC.HasValue || result.Rail12V.HasValue || result.Rail5V.HasValue
+            return result.CpuTemperatureC.HasValue || result.VrmTemperatureC.HasValue || result.PchTemperatureC.HasValue || result.Rail12V.HasValue || result.Rail5V.HasValue
                 ? result : null;
         }
 
@@ -179,6 +184,9 @@ namespace ITSeti.Maintenance.Win7
                     else if ((unit.IndexOf("c", StringComparison.OrdinalIgnoreCase) >= 0 || lower.Contains("temperature") || lower.Contains("temp")) &&
                         (lower.Contains("vrm") || lower.Contains("mos") || lower.Contains("vr loop")))
                         result.VrmTemperatureC = Max(result.VrmTemperatureC, value);
+                    else if ((unit.IndexOf("c", StringComparison.OrdinalIgnoreCase) >= 0 || lower.Contains("temperature") || lower.Contains("temp")) &&
+                        (lower.Contains("pch") || lower.Contains("chipset") || lower.Contains("southbridge") || lower.Contains("platform controller")))
+                        result.PchTemperatureC = Max(result.PchTemperatureC, value);
                     else if (unit.Trim().Equals("V", StringComparison.OrdinalIgnoreCase) || lower.Contains("voltage") || lower.Contains(" vcore"))
                     {
                         if (lower.Contains("12v") || lower.Contains("+12")) result.Rail12V = value;

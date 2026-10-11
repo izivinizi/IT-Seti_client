@@ -614,8 +614,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public string Status => status;
     public string Cpu => Selected?.CpuLabel ?? "—";
     public Brush CpuStatusBrush => Selected is null ? MetricNeutralBrush :
-        (Selected.CpuTemperatureC ?? Selected.Full?.CpuTemperatureC) is >= 85 ? MetricCriticalBrush :
-        (Selected.CpuTemperatureC ?? Selected.Full?.CpuTemperatureC) is >= 75 || Selected.Full?.ResourceSampling?.CpuHighSamples >= 5 ? MetricWarningBrush : MetricGoodBrush;
+        (Selected.CpuTemperatureC ?? Selected.Full?.CpuTemperatureC) is >= HwInfoThresholds.CpuCriticalC ? MetricCriticalBrush :
+        (Selected.CpuTemperatureC ?? Selected.Full?.CpuTemperatureC) is >= HwInfoThresholds.CpuWarningC || Selected.Full?.ResourceSampling?.CpuHighSamples >= 5 ? MetricWarningBrush : MetricGoodBrush;
     public string CpuDetail => $"{Selected?.Full?.CpuName ?? Selected?.HwInfo?.CpuName ?? LocalCpuName} · {FormatCpuTemperature(Selected?.CpuTemperatureC ?? Selected?.Full?.CpuTemperatureC)}";
     public string Gpu => Selected?.Full?.GpuName ?? "Нет данных";
     public string MemoryType => Selected?.Full?.MemoryType is { Length: > 0 } type ? type : "Тип DDR не определён";

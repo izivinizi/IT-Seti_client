@@ -97,6 +97,7 @@ namespace ITSeti.Maintenance.Win7
         public double? CpuTemperatureC { get; set; }
         public string HwInfoVersion { get; set; }
         public double? VrmTemperatureC { get; set; }
+        public double? PchTemperatureC { get; set; }
         public double? Rail12V { get; set; }
         public double? Rail5V { get; set; }
         public double? CpuVoltageV { get; set; }
@@ -138,9 +139,10 @@ namespace ITSeti.Maintenance.Win7
                 "",
                 "Диски:"
             };
-            if (!string.IsNullOrWhiteSpace(HwInfoVersion) || VrmTemperatureC.HasValue || Rail12V.HasValue || Rail5V.HasValue || CpuVoltageV.HasValue)
+            if (!string.IsNullOrWhiteSpace(HwInfoVersion) || VrmTemperatureC.HasValue || PchTemperatureC.HasValue || Rail12V.HasValue || Rail5V.HasValue || CpuVoltageV.HasValue)
                 lines.Add("Датчики HWiNFO: " + (string.IsNullOrWhiteSpace(HwInfoVersion) ? "" : HwInfoVersion + " · ") +
                     "VRM " + (VrmTemperatureC.HasValue ? VrmTemperatureC.Value.ToString("N0") + " °C" : "нет данных") +
+                    ", PCH " + (PchTemperatureC.HasValue ? PchTemperatureC.Value.ToString("N0") + " °C" : "нет данных") +
                     ", +12 В " + (Rail12V.HasValue ? Rail12V.Value.ToString("N2") + " В" : "нет данных") +
                     ", +5 В " + (Rail5V.HasValue ? Rail5V.Value.ToString("N2") + " В" : "нет данных") +
                     ", Vcore/VSoC " + (CpuVoltageV.HasValue ? CpuVoltageV.Value.ToString("N2") + " В" : "нет данных"));

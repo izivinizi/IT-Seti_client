@@ -68,19 +68,26 @@ public static class DiagnosticRules
             issues.Add(new("Версия Windows устарела", $"Установлена {FormatWindows(snapshot)}. Это ниже Windows 10 версии 1809 (сборка 17763); система давно не получает актуальную поддержку и обновления безопасности.", "Warning"));
         var sample = full?.ResourceSampling is { Samples: >= 6, Error: "" } complete ? complete : null;
         var cpuTemperature = snapshot.CpuTemperatureC ?? full?.CpuTemperatureC;
-        if (cpuTemperature is >= 85)
+        if (cpuTemperature is >= HwInfoThresholds.CpuCriticalC)
             issues.Add(new("Критически высокая температура процессора", $"Датчик показывает {cpuTemperature:N0} °C. Дайте компьютеру остыть и проверьте охлаждение.", "Critical"));
-        else if (cpuTemperature is >= 75)
+        else if (cpuTemperature is >= HwInfoThresholds.CpuWarningC)
             issues.Add(new("Повышенная температура процессора", $"Датчик показывает {cpuTemperature:N0} °C. Проверьте охлаждение, если температура держится высокой.", "Warning"));
         if (snapshot.HwInfo?.VrmTemperatureC is { } vrmTemperature)
         {
-            if (vrmTemperature >= 105)
+            if (vrmTemperature >= HwInfoThresholds.VrmCriticalC)
                 issues.Add(new("Критическая температура VRM", $"HWiNFO показывает {vrmTemperature:N0} °C на VRM/MOS.", "Critical"));
-            else if (vrmTemperature >= 90)
+            else if (vrmTemperature >= HwInfoThresholds.VrmWarningC)
                 issues.Add(new("Повышенная температура VRM", $"HWiNFO показывает {vrmTemperature:N0} °C на VRM/MOS.", "Warning"));
         }
-        AddRailIssue(issues, "12 В", snapshot.HwInfo?.Rail12V, 11.4, 12.6, 10.8, 13.2);
-        AddRailIssue(issues, "5 В", snapshot.HwInfo?.Rail5V, 4.75, 5.25, 4.5, 5.5);
+        if (snapshot.HwInfo?.PchTemperatureC is { } pchTemperature)
+        {
+            if (pchTemperature >= HwInfoThresholds.PchCriticalC)
+                issues.Add(new("Критическая температура PCH", $"HWiNFO показывает {pchTemperature:N0} °C на чипсете.", "Critical"));
+            else if (pchTemperature >= HwInfoThresholds.PchWarningC)
+                issues.Add(new("Повышенная температура PCH", $"HWiNFO показывает {pchTemperature:N0} °C на чипсете.", "Warning"));
+        }
+        AddRailIssue(issues, "12 В", snapshot.HwInfo?.Rail12V, HwInfoThresholds.Rail12WarningMinV, HwInfoThresholds.Rail12WarningMaxV, HwInfoThresholds.Rail12CriticalMinV, HwInfoThresholds.Rail12CriticalMaxV);
+        AddRailIssue(issues, "5 В", snapshot.HwInfo?.Rail5V, HwInfoThresholds.Rail5WarningMinV, HwInfoThresholds.Rail5WarningMaxV, HwInfoThresholds.Rail5CriticalMinV, HwInfoThresholds.Rail5CriticalMaxV);
         if (snapshot.TotalMemoryBytes > 0)
         {
             var total = snapshot.TotalMemoryBytes / 1073741824.0;
@@ -167,15 +174,18 @@ public static class DiagnosticRules
             findings.Add($"Windows ниже версии 1809: {FormatWindows(snapshot)}.");
         var sample = snapshot.Full?.ResourceSampling is { Samples: >= 6, Error: "" } complete ? complete : null;
         var cpuTemperature = snapshot.CpuTemperatureC ?? snapshot.Full?.CpuTemperatureC;
-        if (cpuTemperature is >= 85)
-            findings.Add($"CPU: критически высокая температура {cpuTemperature:N0} °C (порог 85 °C).");
-        else if (cpuTemperature is >= 75)
-            findings.Add($"CPU: температура {cpuTemperature:N0} °C достигла порога 75 °C.");
+        if (cpuTemperature is >= HwInfoThresholds.CpuCriticalC)
+            findings.Add($"CPU: критически высокая температура {cpuTemperature:N0} °C (порог {HwInfoThresholds.CpuCriticalC:N0} °C).");
+        else if (cpuTemperature is >= HwInfoThresholds.CpuWarningC)
+            findings.Add($"CPU: температура {cpuTemperature:N0} °C достигла порога {HwInfoThresholds.CpuWarningC:N0} °C.");
         if (snapshot.HwInfo?.VrmTemperatureC is { } vrmTemperature)
-            if (vrmTemperature >= 105) findings.Add($"VRM/MOS: критическая температура {vrmTemperature:N0} °C (порог 105 °C).");
-            else if (vrmTemperature >= 90) findings.Add($"VRM/MOS: температура {vrmTemperature:N0} °C достигла порога 90 °C.");
-        AddRailFinding(findings, "12 В", snapshot.HwInfo?.Rail12V, 11.4, 12.6, 10.8, 13.2);
-        AddRailFinding(findings, "5 В", snapshot.HwInfo?.Rail5V, 4.75, 5.25, 4.5, 5.5);
+            if (vrmTemperature >= HwInfoThresholds.VrmCriticalC) findings.Add($"VRM/MOS: критическая температура {vrmTemperature:N0} °C (порог {HwInfoThresholds.VrmCriticalC:N0} °C).");
+            else if (vrmTemperature >= HwInfoThresholds.VrmWarningC) findings.Add($"VRM/MOS: температура {vrmTemperature:N0} °C достигла порога {HwInfoThresholds.VrmWarningC:N0} °C.");
+        if (snapshot.HwInfo?.PchTemperatureC is { } pchTemperature)
+            if (pchTemperature >= HwInfoThresholds.PchCriticalC) findings.Add($"PCH: критическая температура {pchTemperature:N0} °C (порог {HwInfoThresholds.PchCriticalC:N0} °C).");
+            else if (pchTemperature >= HwInfoThresholds.PchWarningC) findings.Add($"PCH: температура {pchTemperature:N0} °C достигла порога {HwInfoThresholds.PchWarningC:N0} °C.");
+        AddRailFinding(findings, "12 В", snapshot.HwInfo?.Rail12V, HwInfoThresholds.Rail12WarningMinV, HwInfoThresholds.Rail12WarningMaxV, HwInfoThresholds.Rail12CriticalMinV, HwInfoThresholds.Rail12CriticalMaxV);
+        AddRailFinding(findings, "5 В", snapshot.HwInfo?.Rail5V, HwInfoThresholds.Rail5WarningMinV, HwInfoThresholds.Rail5WarningMaxV, HwInfoThresholds.Rail5CriticalMinV, HwInfoThresholds.Rail5CriticalMaxV);
         if (sample?.CpuHighSamples >= 5) findings.Add($"CPU: ≥90% в {sample.CpuHighSamples} из {sample.Samples} замеров за 30 секунд");
         if (sample?.MemoryHighSamples >= 5) findings.Add($"ОЗУ: ≥90% в {sample.MemoryHighSamples} из {sample.Samples} замеров за 30 секунд");
         if (sample is not null && sample.LowAvailableSamples >= 5 && sample.PagingHighSamples >= 3)

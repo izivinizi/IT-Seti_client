@@ -386,7 +386,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         {
             try
             {
-                if (DateTimeOffset.UtcNow - lastTemperatureProbe >= TimeSpan.FromMinutes(1))
+                if (DateTimeOffset.UtcNow - lastTemperatureProbe >= TimeSpan.FromSeconds(30))
                 {
                     await RefreshTemperatureAsync(cancellationToken);
                     lastTemperatureProbe = DateTimeOffset.UtcNow;
@@ -416,7 +416,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             {
                 await WriteServiceErrorAsync(ex);
             }
-            await Task.Delay(TimeSpan.FromMinutes(1), cancellationToken);
+            await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
         }
     }
 
@@ -469,6 +469,16 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             snapshot.WindowsBuild,
             snapshot.CpuTemperatureC,
             snapshot.CpuTemperatureStatus,
+            HWiNFO = snapshot.HwInfo is { } hwInfo ? new
+            {
+                hwInfo.ToolVersion,
+                hwInfo.CapturedAtUtc,
+                CpuTemperatureC = hwInfo.CpuTemperatureC,
+                VrmTemperatureC = hwInfo.VrmTemperatureC,
+                PchTemperatureC = hwInfo.PchTemperatureC,
+                Rail12V = hwInfo.Rail12V,
+                Rail5V = hwInfo.Rail5V
+            } : null,
             snapshot.ActiveUptimeHours,
             snapshot.DiskReadLatencyMs,
             snapshot.DiskWriteLatencyMs,

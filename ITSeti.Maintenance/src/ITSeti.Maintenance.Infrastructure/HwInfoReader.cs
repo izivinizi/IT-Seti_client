@@ -156,6 +156,7 @@ public static class HwInfoReader
         if (unit.Contains("c", StringComparison.OrdinalIgnoreCase) || lower.Contains("temperature") || lower.Contains("temp"))
         {
             if (lower.Contains("vrm") || lower.Contains("mos") || lower.Contains("vr loop")) return "VrmTemperature";
+            if (lower.Contains("pch") || lower.Contains("chipset") || lower.Contains("southbridge") || lower.Contains("platform controller")) return "PchTemperature";
             if (lower.Contains("cpu") || lower.Contains("processor") || lower.Contains("package") || lower.Contains("tctl") || lower.Contains("tdie")) return "CpuTemperature";
             return null;
         }

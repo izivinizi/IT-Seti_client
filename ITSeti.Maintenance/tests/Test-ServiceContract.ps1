@@ -26,7 +26,8 @@ if(!$protocol.Contains('OpenSystemTool') -or !$protocol.Contains('OpenUtility') 
    !$coordinator.Contains('IsAdministratorOnlyLaunch')) { throw 'Privileged engineering-menu IPC is missing.' }
 if(!$coordinator.Contains('MonitoringQueue') -or !$coordinator.Contains('CriticalMonitoringEvaluator') -or
    !$coordinator.Contains('DiskReadLatencyMs') -or !$coordinator.Contains('DiskWriteLatencyMs') -or
-   !$coordinator.Contains('HwInfoReader.SessionRestartDue') -or !$coordinator.Contains('HwInfoReader.ResetSession')) {
+   !$coordinator.Contains('HwInfoReader.SessionRestartDue') -or !$coordinator.Contains('HwInfoReader.ResetSession') -or
+   !$coordinator.Contains('TimeSpan.FromSeconds(30)')) {
     throw 'Continuous critical monitoring is missing disk latency or its protected queue.'
 }
 if (!$diagnostics.Contains('HWiNFO is owned by the SYSTEM service') -or $diagnostics.Contains('HwInfoReader.ReadCached(TimeSpan.FromMinutes(2)) ?? await HwInfoReader.ReadAsync')) {

@@ -12,12 +12,14 @@ $binary = Join-Path $Root 'Tools\HWiNFO\HWiNFO32.exe'
 if (!(Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Bundled HWiNFO32.exe is missing.' }
 if (!$reader.Contains('Tools", "HWiNFO", "HWiNFO32.exe') -or
     !$reader.Contains('SessionLifetime') -or !$reader.Contains('SessionRestartDue') -or
-    !$reader.Contains('ResetSession') -or !$reader.Contains('CreateNoWindow = true')) {
+    !$reader.Contains('ResetSession') -or !$reader.Contains('CreateNoWindow = true') -or
+    !$reader.Contains('PchTemperature')) {
     throw 'HWiNFO reader does not prove packaged discovery, hidden execution and session reset.'
 }
 if (!$win7Reader.Contains('Tools", "HWiNFO", "HWiNFO32.exe') -or
     !$win7Reader.Contains('SessionLifetime') -or !$win7Reader.Contains('SessionRestartDue') -or
-    !$win7Reader.Contains('ResetSession') -or !$win7Reader.Contains('CreateNoWindow = true')) {
+    !$win7Reader.Contains('ResetSession') -or !$win7Reader.Contains('CreateNoWindow = true') -or
+    !$win7Reader.Contains('PchTemperatureC')) {
     throw 'Win7 HWiNFO reader does not prove service execution and session reset.'
 }
 if (!$builder.Contains("'HWiNFO\HWiNFO32.exe'") -or !$builder.Contains("'HWiNFO'))")) {

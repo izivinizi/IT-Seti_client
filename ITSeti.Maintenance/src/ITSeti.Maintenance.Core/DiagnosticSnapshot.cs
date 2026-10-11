@@ -109,8 +109,10 @@ public sealed record HwInfoSnapshot(string Source, string ToolVersion, DateTimeO
 {
     public double? CpuTemperatureC => Sensors.Where(item => item.Category == "CpuTemperature").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
     public double? VrmTemperatureC => Sensors.Where(item => item.Category == "VrmTemperature").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
+    public double? PchTemperatureC => Sensors.Where(item => item.Category == "PchTemperature").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
     public double? Rail12V => Sensors.FirstOrDefault(item => item.Category == "Rail12V")?.Value;
     public double? Rail5V => Sensors.FirstOrDefault(item => item.Category == "Rail5V")?.Value;
+    public double? CpuVoltageV => Sensors.Where(item => item.Category == "CpuVoltage").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
     public double? CpuLoadPercent => Sensors.Where(item => item.Category == "CpuLoad").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
 }
 public sealed record FullDiagnosticDetails(string CpuName, string GpuName, bool Elevated,

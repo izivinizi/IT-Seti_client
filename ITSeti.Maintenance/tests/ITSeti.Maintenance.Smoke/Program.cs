@@ -719,11 +719,12 @@ internal static class Program
             {"Version":"8.54","Sensors":[
               {"Name":"CPU Package","Value":"62.375 °C","Unit":"°C"},
               {"Name":"VRM MOS","Value":101.0,"Unit":"°C"},
+              {"Name":"PCH","Value":72.0,"Unit":"°C"},
               {"Name":"+12V","Value":12.04,"Unit":"V"},
               {"Name":"+5V","Value":5.01,"Unit":"V"},
               {"Name":"Total CPU Usage","Value":17.0,"Unit":"%"}]}
             """, "fixture");
-        if (hwInfo?.CpuTemperatureC != 62.375 || hwInfo.VrmTemperatureC != 101 ||
+        if (hwInfo?.CpuTemperatureC != 62.375 || hwInfo.VrmTemperatureC != 101 || hwInfo.PchTemperatureC != 72 ||
             hwInfo.Rail12V != 12.04 || hwInfo.Rail5V != 5.01 || hwInfo.CpuLoadPercent != 17)
             throw new Exception("HWiNFO sensor JSON mapping did not preserve CPU, VRM, rail and load readings");
         Console.WriteLine("PASS: HWiNFO JSON sensor mapping and system snapshot contract.");
@@ -994,6 +995,23 @@ internal static class Program
         if (!DiagnosticRules.GetUserIssues(snapshot with { Full = null, CpuTemperatureC = 85 })
             .Any(issue => issue.Severity == "Critical" && issue.Title.Contains("температура")))
             throw new Exception("CPU temperature from the independent sensor reader was ignored");
+        var pchWarning = snapshot with
+        {
+            HwInfo = new HwInfoSnapshot("fixture", "8.54", DateTimeOffset.UtcNow, null, null, null, null,
+                [new HwInfoSensorReading("PCH", 72, "°C", "PchTemperature")])
+        };
+        if (!DiagnosticRules.GetUserIssues(pchWarning).Any(issue => issue.Severity == "Warning" && issue.Title.Contains("PCH")))
+            throw new Exception("PCH warning threshold failed");
+        var pchCritical = pchWarning with
+        {
+            HwInfo = pchWarning.HwInfo! with
+            {
+                Sensors = [new HwInfoSensorReading("PCH", 80, "°C", "PchTemperature")]
+            }
+        };
+        if (!DiagnosticRules.GetUserIssues(pchCritical).Any(issue => issue.Severity == "Critical" && issue.Title.Contains("PCH")) ||
+            !CriticalMonitoringEvaluator.Evaluate(pchCritical).Any(issue => issue.Identity == "hwinfo:pch-temperature"))
+            throw new Exception("PCH critical threshold or monitoring identity failed");
         var lowSpace = snapshot with { Disks = [new DiskSnapshot("C:\\", 100L * 1073741824, 14L * 1073741824)] };
         if (!DiagnosticRules.GetUserIssues(lowSpace).Any(i => i.Title.Contains("места") && i.Severity == "Warning")) throw new Exception("15 GB space warning missing");
         if (DiagnosticRules.GetUserIssues(lowSpace with { Disks = [new DiskSnapshot("C:\\", 49L * 1073741824, 1L * 1073741824)] })
