@@ -240,6 +240,7 @@ $updateSource=[IO.File]::ReadAllText($updatePolicy,[Text.Encoding]::UTF8)
 if($updateSource -notmatch 'original-policy\.json' -or $updateSource -notmatch 'ChangedExternally' -or $updateSource -notmatch 'NoAutoUpdate') {throw 'Windows Update policy worker must preserve and protect the existing setting.'}
 if(!$entry.Contains('[switch]$Quick') -or !$entry.Contains('[switch]$SmartOnly') -or
    $entry.Contains('-SkipResourceSampling:$Quick') -or $entry.Contains('-SkipDiskBenchmark:$Quick') -or
+   $entry.Contains('$workerArgs += ''-UserMode''') -or
    !$entry.Contains('$workerArgs') -or !$entry.Contains('-SkipDiskBenchmark') -or
    !$entry.Contains('last-quick-run.txt') -or !$entry.Contains('TimeSpan]::FromDays(14)') -or
    !$entry.Contains('latest-quick.txt') -or !$entry.Contains('latest-smart.txt') -or !$entry.Contains('last-smart-run.txt') -or !$entry.Contains('latest-full.txt')) {

@@ -96,7 +96,8 @@ foreach($file in @('FullCheckWorker.ps1','HeadlessDiskWorker.ps1','ResourceSampl
 }
 $env:ITSETI_CPU_TEMPERATURE_FILE=$cpuTemperatureFile
 $workerArgs=@('-RunRoot',$run,'-ToolsRoot',$tools,'-HeadlessDiskSpd','-TrustedTools')
-if($Quick -or $SmartOnly){$workerArgs += '-UserMode'}
+# Installed checks are always launched by SYSTEM (the service or the SYSTEM task).
+# Keep SMART and DiskSpd enabled for user-requested checks without asking for UAC.
 if($SmartOnly){$workerArgs += '-SkipResourceSampling';$workerArgs += '-SkipDiskBenchmark'}
 & ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $run 'FullCheckWorker.ps1'),[Text.Encoding]::UTF8))) @workerArgs
 Remove-Item Env:ITSETI_CPU_TEMPERATURE_FILE -ErrorAction SilentlyContinue
