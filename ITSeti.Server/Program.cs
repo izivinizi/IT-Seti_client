@@ -83,6 +83,7 @@ builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>
         Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
     options.KnownIPNetworks.Clear();
     options.KnownProxies.Clear();
+    options.ForwardLimit = 1;
 });
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 1024L * 1024 * 1024);
 
@@ -94,7 +95,8 @@ app.UseStaticFiles();
 app.UseRouting();
 app.Use(async (context, next) =>
 {
-    var traced = context.Request.Path == "/api/v1/enroll" || context.Request.Path == "/api/v1/assignment";
+    var traced = context.Request.Path == "/api/v1/enroll" || context.Request.Path == "/api/v1/auto-enroll" ||
+        context.Request.Path == "/api/v1/assignment";
     if (!traced) { await next(); return; }
     var diagnostics = context.RequestServices.GetRequiredService<EnrollmentDiagnostics>();
     context.Response.Headers["X-Request-Id"] = context.TraceIdentifier;
@@ -203,15 +205,16 @@ app.MapPost("/api/v1/enroll", async (HttpRequest request, EnrollRequest body, Np
     var id = Guid.NewGuid();
     var key = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
     var supportKey = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
+    var clientIp = AutomaticIpEnrollment.Normalize(request.HttpContext.Connection.RemoteIpAddress);
     await using (var insert = new NpgsqlCommand("""
-        INSERT INTO devices(id,computer_name,serial_number,hardware_fingerprint,inventory_number,company_id,service_object_id,api_key_hash,support_key_hash,created_at,last_seen_at)
-        VALUES(@id,@name,@serial,@fingerprint,@inventory,@company,@site,@key,@support,now(),now())
+        INSERT INTO devices(id,computer_name,serial_number,hardware_fingerprint,inventory_number,company_id,service_object_id,api_key_hash,support_key_hash,last_ip,created_at,last_seen_at)
+        VALUES(@id,@name,@serial,@fingerprint,@inventory,@company,@site,@key,@support,@ip::inet,now(),now())
         ON CONFLICT (hardware_fingerprint) WHERE hardware_fingerprint IS NOT NULL
         DO UPDATE SET computer_name=EXCLUDED.computer_name,
             serial_number=COALESCE(NULLIF(EXCLUDED.serial_number,''),devices.serial_number),
             inventory_number=EXCLUDED.inventory_number,company_id=EXCLUDED.company_id,
             service_object_id=EXCLUDED.service_object_id,api_key_hash=EXCLUDED.api_key_hash,
-            support_key_hash=EXCLUDED.support_key_hash,last_seen_at=now()
+            support_key_hash=EXCLUDED.support_key_hash,last_ip=EXCLUDED.last_ip,last_seen_at=now()
         RETURNING id
         """, connection, transaction))
     {
@@ -224,11 +227,115 @@ app.MapPost("/api/v1/enroll", async (HttpRequest request, EnrollRequest body, Np
         insert.Parameters.Add("site", NpgsqlDbType.Bigint).Value = (object?)body.SiteId ?? DBNull.Value;
         insert.Parameters.AddWithValue("key", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))));
         insert.Parameters.AddWithValue("support", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(supportKey))));
+        insert.Parameters.Add("ip", NpgsqlDbType.Text).Value = (object?)clientIp ?? DBNull.Value;
         id = (Guid)(await insert.ExecuteScalarAsync())!;
     }
     await transaction.CommitAsync();
     diagnostics.Record(request.HttpContext, 200, "enrolled_or_existing_device_reused", body);
     return Results.Ok(new { deviceId = id, deviceKey = key, supportKey });
+}).RequireRateLimiting("registration");
+
+app.MapPost("/api/v1/auto-enroll", async (HttpRequest request, AutoEnrollRequest body, NpgsqlDataSource db,
+    IConfiguration configuration, EnrollmentDiagnostics diagnostics) =>
+{
+    if (!configuration.GetValue("AutomaticIpEnrollmentEnabled", false)) return Results.NotFound();
+    if (string.IsNullOrWhiteSpace(body.ComputerName))
+        return diagnostics.Reject(request.HttpContext, 400, "automatic_computer_name_missing", "Не удалось определить имя компьютера.");
+    var fingerprint = DeviceIdentity.CreateFingerprint(body.SerialNumber, body.HardwareUuid);
+    if (fingerprint is null)
+        return diagnostics.Reject(request.HttpContext, 400, "automatic_hardware_identity_unusable",
+            "Для автоматического подключения нужен серийный номер или аппаратный UUID.");
+    var clientIp = AutomaticIpEnrollment.Normalize(request.HttpContext.Connection.RemoteIpAddress);
+    if (clientIp is null) return Results.NotFound();
+
+    await using var connection = await db.OpenConnectionAsync(request.HttpContext.RequestAborted);
+    await using var transaction = await connection.BeginTransactionAsync(request.HttpContext.RequestAborted);
+    IpAssignment? assignment = null;
+    var existingId = (Guid?)null;
+    await using (var existing = new NpgsqlCommand("""
+        SELECT d.id,d.company_id,d.service_object_id,d.last_ip::text
+        FROM devices d JOIN companies c ON c.id=d.company_id AND c.active
+        LEFT JOIN service_objects s ON s.id=d.service_object_id AND s.company_id=d.company_id AND s.active
+        WHERE d.hardware_fingerprint=@fingerprint AND (d.service_object_id IS NULL OR s.id IS NOT NULL)
+        """, connection, transaction))
+    {
+        existing.Parameters.AddWithValue("fingerprint", fingerprint);
+        await using var reader = await existing.ExecuteReaderAsync(request.HttpContext.RequestAborted);
+        if (await reader.ReadAsync(request.HttpContext.RequestAborted))
+        {
+            existingId = reader.GetGuid(0);
+            var previousIp = reader.IsDBNull(3) ? null : reader.GetString(3);
+            if (!AutomaticIpEnrollment.CanReuseExisting(previousIp, clientIp))
+                return Results.Conflict(new { error = "Адрес компьютера изменился. Подтвердите подключение паролем." });
+            assignment = new(reader.GetInt64(1), reader.IsDBNull(2) ? null : reader.GetInt64(2));
+        }
+    }
+    if (assignment is null)
+    {
+        var candidates = new List<IpAssignment>();
+        await using var infer = new NpgsqlCommand("""
+            SELECT DISTINCT d.company_id,d.service_object_id
+            FROM devices d JOIN companies c ON c.id=d.company_id AND c.active
+            LEFT JOIN service_objects s ON s.id=d.service_object_id AND s.company_id=d.company_id AND s.active
+            WHERE d.last_ip=@ip::inet AND d.last_seen_at>=now()-interval '120 days'
+              AND (d.service_object_id IS NULL OR s.id IS NOT NULL)
+            LIMIT 2
+            """, connection, transaction);
+        infer.Parameters.AddWithValue("ip", clientIp);
+        await using var reader = await infer.ExecuteReaderAsync(request.HttpContext.RequestAborted);
+        while (await reader.ReadAsync(request.HttpContext.RequestAborted))
+            candidates.Add(new(reader.GetInt64(0), reader.IsDBNull(1) ? null : reader.GetInt64(1)));
+        assignment = AutomaticIpEnrollment.ResolveUnique(candidates);
+        if (assignment is null)
+            return Results.Conflict(new { error = "Для этого IP нет одной однозначной компании и объекта. Выберите их вручную." });
+    }
+
+    var id = existingId ?? Guid.NewGuid();
+    var key = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
+    var supportKey = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
+    var affected = 0;
+    if (existingId.HasValue)
+    {
+        await using var update = new NpgsqlCommand("""
+            UPDATE devices SET computer_name=@name,
+              serial_number=COALESCE(NULLIF(@serial,''),serial_number),inventory_number=@inventory,
+              api_key_hash=@key,support_key_hash=@support,last_ip=@ip::inet,last_seen_at=now()
+            WHERE id=@id AND last_ip=@ip::inet
+            """, connection, transaction);
+        update.Parameters.AddWithValue("id", id);
+        update.Parameters.AddWithValue("name", body.ComputerName.Trim());
+        update.Parameters.Add("serial", NpgsqlDbType.Text).Value = (object?)body.SerialNumber?.Trim() ?? DBNull.Value;
+        update.Parameters.Add("inventory", NpgsqlDbType.Text).Value = (object?)body.InventoryNumber ?? DBNull.Value;
+        update.Parameters.AddWithValue("key", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))));
+        update.Parameters.AddWithValue("support", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(supportKey))));
+        update.Parameters.AddWithValue("ip", clientIp);
+        affected = await update.ExecuteNonQueryAsync(request.HttpContext.RequestAborted);
+    }
+    else
+    {
+        await using var insert = new NpgsqlCommand("""
+            INSERT INTO devices(id,computer_name,serial_number,hardware_fingerprint,inventory_number,company_id,
+              service_object_id,api_key_hash,support_key_hash,last_ip,created_at,last_seen_at)
+            VALUES(@id,@name,@serial,@fingerprint,@inventory,@company,@site,@key,@support,@ip::inet,now(),now())
+            ON CONFLICT (hardware_fingerprint) WHERE hardware_fingerprint IS NOT NULL DO NOTHING
+            """, connection, transaction);
+        insert.Parameters.AddWithValue("id", id);
+        insert.Parameters.AddWithValue("name", body.ComputerName.Trim());
+        insert.Parameters.Add("serial", NpgsqlDbType.Text).Value = (object?)body.SerialNumber?.Trim() ?? DBNull.Value;
+        insert.Parameters.AddWithValue("fingerprint", fingerprint);
+        insert.Parameters.Add("inventory", NpgsqlDbType.Text).Value = (object?)body.InventoryNumber ?? DBNull.Value;
+        insert.Parameters.AddWithValue("company", assignment.CompanyId);
+        insert.Parameters.Add("site", NpgsqlDbType.Bigint).Value = (object?)assignment.SiteId ?? DBNull.Value;
+        insert.Parameters.AddWithValue("key", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))));
+        insert.Parameters.AddWithValue("support", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(supportKey))));
+        insert.Parameters.AddWithValue("ip", clientIp);
+        affected = await insert.ExecuteNonQueryAsync(request.HttpContext.RequestAborted);
+    }
+    if (affected != 1)
+        return Results.Conflict(new { error = "Регистрация этого компьютера изменилась. Подключите его вручную." });
+    await transaction.CommitAsync(request.HttpContext.RequestAborted);
+    diagnostics.Record(request.HttpContext, 200, existingId.HasValue ? "automatic_existing_device_reused" : "automatic_ip_assignment_reused");
+    return Results.Ok(new { deviceId=id, deviceKey=key, supportKey, companyId=assignment.CompanyId, siteId=assignment.SiteId });
 }).RequireRateLimiting("registration");
 
 app.MapPost("/api/v1/support-key", async (HttpRequest request, NpgsqlDataSource db) =>
@@ -270,7 +377,8 @@ app.MapPut("/api/v1/assignment", async (HttpRequest request, UpdateAssignmentReq
         return diagnostics.Reject(request.HttpContext, 400, "invalid_assignment_fields", "Выберите компанию и объект из списка.");
     await using var connection = await db.OpenConnectionAsync();
     await using var command = new NpgsqlCommand("""
-        UPDATE devices SET company_id=@company,service_object_id=@site,inventory_number=@inventory
+        UPDATE devices SET company_id=@company,service_object_id=@site,inventory_number=@inventory,
+          last_ip=COALESCE(@ip::inet,last_ip),last_seen_at=now()
         WHERE id=@id AND EXISTS(SELECT 1 FROM companies WHERE id=@company AND active)
           AND (@site IS NULL OR EXISTS(SELECT 1 FROM service_objects WHERE id=@site AND company_id=@company AND active))
         """, connection);
@@ -278,6 +386,8 @@ app.MapPut("/api/v1/assignment", async (HttpRequest request, UpdateAssignmentReq
     command.Parameters.AddWithValue("company", body.CompanyId);
     command.Parameters.Add("site", NpgsqlDbType.Bigint).Value = (object?)body.SiteId ?? DBNull.Value;
     command.Parameters.Add("inventory", NpgsqlDbType.Text).Value = (object?)body.InventoryNumber ?? DBNull.Value;
+    command.Parameters.Add("ip", NpgsqlDbType.Text).Value =
+        (object?)AutomaticIpEnrollment.Normalize(request.HttpContext.Connection.RemoteIpAddress) ?? DBNull.Value;
     return await command.ExecuteNonQueryAsync() == 1 ? Results.Ok(new { updated = true })
         : diagnostics.Reject(request.HttpContext, 400, "company_site_missing_inactive_or_mismatch", "Компания или объект недоступны.");
 });
@@ -671,7 +781,7 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
     await using (var update = new NpgsqlCommand("""
         UPDATE devices SET computer_name=@name, os_name=@os, os_version=@version,
             inventory_number=CASE WHEN @inventory IS NULL THEN inventory_number ELSE @inventory END,
-            last_seen_at=now()
+            last_ip=COALESCE(@ip::inet,last_ip),last_seen_at=now()
         WHERE id=@id
         """, connection, transaction))
     {
@@ -680,6 +790,8 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
         update.Parameters.AddWithValue("version", (object?)version ?? DBNull.Value);
         update.Parameters.Add("inventory", NpgsqlDbType.Text).Value = inventory is { Length: 4 } ? inventory : DBNull.Value;
         update.Parameters.AddWithValue("id", deviceId);
+        update.Parameters.Add("ip", NpgsqlDbType.Text).Value =
+            (object?)AutomaticIpEnrollment.Normalize(request.HttpContext.Connection.RemoteIpAddress) ?? DBNull.Value;
         await update.ExecuteNonQueryAsync();
     }
     await transaction.CommitAsync();
@@ -1083,6 +1195,7 @@ static string LoginPage(string token, string? error = null) => $$"""
 """;
 
 public sealed record EnrollRequest(long CompanyId, long? SiteId, string ComputerName, string? SerialNumber, string? HardwareUuid, string? InventoryNumber);
+public sealed record AutoEnrollRequest(string ComputerName, string? SerialNumber, string? HardwareUuid, string? InventoryNumber);
 public sealed record UpdateAssignmentRequest(long CompanyId, long? SiteId, string? InventoryNumber);
 public sealed record CreateTicketRequest(Guid RequestId, string? Title, string? ServiceCode, string? Description,
     IReadOnlyList<TicketAttachmentInput>? Attachments = null);

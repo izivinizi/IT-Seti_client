@@ -147,6 +147,57 @@ function Save-DeviceKey([object]$result, [long]$companyId, $siteId) {
     }
 }
 
+function Get-LocalEnrollmentBody {
+    $inventoryFile = Join-Path $env:ProgramData 'ITSeti\Maintenance\inventory.txt'
+    $inventory = if (Test-Path -LiteralPath $inventoryFile -PathType Leaf) {
+        [IO.File]::ReadAllText($inventoryFile).Trim()
+    } else { $null }
+    $serialNumber = $null
+    $hardwareUuid = $null
+    try {
+        $bios = Get-WmiObject -Class Win32_BIOS -ErrorAction Stop | Select-Object -First 1
+        $serialNumber = [string]$bios.SerialNumber
+    } catch { }
+    try {
+        $product = Get-WmiObject -Class Win32_ComputerSystemProduct -ErrorAction Stop | Select-Object -First 1
+        $hardwareUuid = [string]$product.UUID
+    } catch { }
+    return @{
+        computerName = $env:COMPUTERNAME
+        serialNumber = $serialNumber
+        hardwareUuid = $hardwareUuid
+        inventoryNumber = $inventory
+    }
+}
+
+function Invoke-AutomaticEnrollment([object]$body) {
+    $request = [Net.HttpWebRequest][Net.WebRequest]::Create($serverUrl + '/api/v1/auto-enroll')
+    $request.Method = 'POST'
+    $request.AllowAutoRedirect = $false
+    $request.Timeout = 6000
+    $request.ReadWriteTimeout = 6000
+    $request.ContentType = 'application/json; charset=utf-8'
+    $bytes = [Text.Encoding]::UTF8.GetBytes($script:serializer.Serialize($body))
+    $request.ContentLength = $bytes.Length
+    $stream = $request.GetRequestStream()
+    try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+    try { $response = [Net.HttpWebResponse]$request.GetResponse() }
+    catch [Net.WebException] {
+        $failedResponse = [Net.HttpWebResponse]$_.Exception.Response
+        if ($failedResponse -and [int]$failedResponse.StatusCode -in @(400,404,409)) {
+            $failedResponse.Dispose()
+            return $null
+        }
+        throw (New-Object InvalidOperationException((Format-ServerError $_.Exception)))
+    }
+    try {
+        if ($response.StatusCode -ne [Net.HttpStatusCode]::OK) { return $null }
+        $reader = New-Object IO.StreamReader($response.GetResponseStream(), [Text.Encoding]::UTF8)
+        try { return $script:serializer.DeserializeObject($reader.ReadToEnd()) }
+        finally { $reader.Dispose() }
+    } finally { $response.Dispose() }
+}
+
 if ($VerifyOnly) {
     $password = [Environment]::GetEnvironmentVariable('ITSETI_REGISTRATION_PASSWORD', 'Process')
     if ([string]::IsNullOrEmpty($password)) { throw 'Test password is missing.' }
@@ -180,6 +231,23 @@ public static class AssignmentConsole {
 }
 '@
 [void][AssignmentConsole]::ShowWindow([AssignmentConsole]::GetConsoleWindow(), 0)
+
+if (!(Test-Path -LiteralPath $deviceFile -PathType Leaf)) {
+    try {
+        $automatic = Invoke-AutomaticEnrollment (Get-LocalEnrollmentBody)
+        if ($automatic) {
+            Save-DeviceKey $automatic ([long]$automatic['companyId']) $automatic['siteId']
+            Save-SupportKey $automatic
+            exit 0
+        }
+    }
+    catch {
+        try {
+            $automaticError = Join-Path (Split-Path $deviceFile -Parent) 'server-auto-enroll-error.txt'
+            [IO.File]::WriteAllText($automaticError, ([DateTimeOffset]::Now.ToString('O') + ' ' + $_.Exception.Message), [Text.Encoding]::UTF8)
+        } catch { }
+    }
+}
 $script:existing = Test-Path -LiteralPath $deviceFile -PathType Leaf
 $script:currentDevice = if ($script:existing) { $script:serializer.DeserializeObject([IO.File]::ReadAllText($deviceFile)) } else { $null }
 
@@ -409,28 +477,11 @@ $connectButton.Add_Click({
     try {
         $companyId = [long]$script:visibleCompanies[$companyBox.SelectedIndex]['id']
         $siteId = if ($siteBox.SelectedIndex -eq 0) { $null } else { [long]$script:visibleSites[$siteBox.SelectedIndex]['id'] }
-        $inventoryFile = Join-Path $env:ProgramData 'ITSeti\Maintenance\inventory.txt'
-        $inventory = if (Test-Path -LiteralPath $inventoryFile -PathType Leaf) {
-            [IO.File]::ReadAllText($inventoryFile).Trim()
-        } else { $null }
-        $serialNumber = $null
-        $hardwareUuid = $null
-        try {
-            $bios = Get-WmiObject -Class Win32_BIOS -ErrorAction Stop | Select-Object -First 1
-            $serialNumber = [string]$bios.SerialNumber
-        } catch { }
-        try {
-            $product = Get-WmiObject -Class Win32_ComputerSystemProduct -ErrorAction Stop | Select-Object -First 1
-            $hardwareUuid = [string]$product.UUID
-        } catch { }
-        $body = @{
-            companyId = $companyId
-            siteId = $siteId
-            computerName = $env:COMPUTERNAME
-            serialNumber = $serialNumber
-            hardwareUuid = $hardwareUuid
-            inventoryNumber = $inventory
-        }
+        $body = Get-LocalEnrollmentBody
+        $body['companyId'] = $companyId
+        $body['siteId'] = $siteId
+        $serialNumber = $body['serialNumber']
+        $hardwareUuid = $body['hardwareUuid']
         if ($script:existing) {
             try {
                 [void](Invoke-DeviceRequest '/api/v1/assignment' 'PUT' $body)

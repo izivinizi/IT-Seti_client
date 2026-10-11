@@ -21,6 +21,11 @@ if ($connect -notmatch 'companyBox\.Add_TextUpdate' -or $connect -notmatch 'site
 if ($connect -match 'elseif\s*\(\$script:visibleCompanies\.Count\s*-gt\s*0\)\s*\{\s*\$companyBox\.SelectedIndex\s*=\s*0') {
     throw 'New device enrollment must not silently select the first company.'
 }
+if ($connect -notmatch '/api/v1/auto-enroll' -or
+    $connect -notmatch 'Invoke-AutomaticEnrollment \(Get-LocalEnrollmentBody\)' -or
+    $connect -notmatch 'Save-DeviceKey \$automatic') {
+    throw 'A new PC must try unambiguous IP assignment before asking for the registration password.'
+}
 
 $installer = [IO.File]::ReadAllText((Join-Path $Root 'Installer.iss'))
 $win7Installer = [IO.File]::ReadAllText((Join-Path $Root 'Installer-Win7.iss'))
@@ -55,6 +60,11 @@ if ($serverProgram -notmatch 'MapGet\("/device-options"' -or
     $serverProgram -notmatch 'fingerprint is null' -or
     $serverJs -match 'device\.name|alert\.computer|ticket\.computer') {
     throw 'PC selection and serial-based identification are not consistently wired through the server UI.'
+}
+if ($serverProgram -notmatch 'MapPost\("/api/v1/auto-enroll"' -or
+    $serverProgram -notmatch 'AutomaticIpEnrollment\.ResolveUnique' -or
+    $serverProgram -notmatch 'AutomaticIpEnrollment\.CanReuseExisting\(previousIp, clientIp\)') {
+    throw 'IP enrollment must be assignment-only, unambiguous, and unable to re-key an existing PC from a different IP.'
 }
 if ($database -notmatch 'DROP INDEX IF EXISTS ix_devices_hardware_fingerprint' -or
     $database -notmatch 'SELECT id,serial_number FROM devices WHERE serial_number IS NOT NULL' -or

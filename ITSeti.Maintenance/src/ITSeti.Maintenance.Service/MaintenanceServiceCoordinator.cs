@@ -238,7 +238,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         {
             running.TryRemove(new KeyValuePair<MaintenanceServiceOperation, Process>(operation, process));
             process.Dispose();
-            if (operation == MaintenanceServiceOperation.OrganizationSetup && HasPendingOrganizationRequest())
+            if (HasPendingRequests(operation))
             {
                 try { StartOperation(operation); }
                 catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
@@ -247,12 +247,19 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         }
     }
 
-    private static bool HasPendingOrganizationRequest()
+    private static bool HasPendingRequests(MaintenanceServiceOperation operation)
     {
         try
         {
-            var queue = Path.Combine(DataRoot, "OrganizationSetupRequests");
-            return Directory.Exists(queue) && Directory.EnumerateFiles(queue, "*.json").Any();
+            var request = operation switch
+            {
+                MaintenanceServiceOperation.Cleanup => (Folder: "CleanupRequests", Pattern: "*.request"),
+                MaintenanceServiceOperation.OrganizationSetup => (Folder: "OrganizationSetupRequests", Pattern: "*.json"),
+                _ => default
+            };
+            if (request.Folder is null) return false;
+            var queue = Path.Combine(DataRoot, request.Folder);
+            return Directory.Exists(queue) && Directory.EnumerateFiles(queue, request.Pattern).Any();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
     }

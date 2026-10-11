@@ -1052,6 +1052,10 @@ internal static class Program
         var cleanup = await File.ReadAllTextAsync(Path.Combine(backend, "Cleanup.ps1"));
         foreach (var category in new[] { "Recycle Bin", "Temporary Files", "Thumbnail Cache", "Internet Cache Files", "D3D Shader Cache", "Delivery Optimization Files", "Update Cleanup", "Device Driver Packages" })
             if (!cleanup.Contains(category, StringComparison.Ordinal)) throw new Exception("Missing cleanup category: " + category);
+        if (!cleanup.Contains("Remove-CleanupProfile $profile", StringComparison.Ordinal) ||
+            cleanup.Contains("Профиль очистки оставлен", StringComparison.Ordinal) ||
+            !cleanup.Contains("-WindowStyle Hidden", StringComparison.Ordinal))
+            throw new Exception("Cleanup profiles must always be removed and SYSTEM cleanmgr must stay non-interactive");
         var allowedPath = Path.Combine(backend, "allowed-processes.json");
         if (!File.Exists(allowedPath)) throw new Exception("Process allowlist was not included in the app");
         using var allowlist = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(allowedPath));

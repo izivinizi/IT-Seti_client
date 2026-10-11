@@ -27,23 +27,20 @@ function Invoke-OriginalUserCleanup([string]$Folder,[string]$SignalRoot=$Folder)
     if(!(Test-Path -LiteralPath (Join-Path $Folder 'ready.txt'))){throw 'Пользовательский процесс не подтвердил запуск.'}
     if(Get-Process cleanmgr,dism,sfc -ErrorAction SilentlyContinue){throw 'Уже идёт очистка или восстановление Windows.'}
     $profile=New-CleanupProfile $script:UserCleanupNames
-    $complete=$false
-    $signalled=$false
     try {
         $signal=Join-Path $SignalRoot 'go.txt'
         $stream=New-Object IO.FileStream($signal,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
         try {$bytes=[Text.Encoding]::ASCII.GetBytes([string]$profile.Number); $stream.Write($bytes,0,$bytes.Length)} finally {$stream.Dispose()}
-        $signalled=$true
         $deadline=(Get-Date).AddHours(2)
         while(!(Test-Path -LiteralPath (Join-Path $Folder 'done.txt'))) {
             if((Get-Date) -gt $deadline){throw 'Пользовательская очистка не завершилась за 2 часа; следующие этапы не запущены.'}
             Start-Sleep -Seconds 3
         }
-        $complete=$true
         'Пользовательский этап завершён.'
     } finally {
-        if($complete -or !$signalled){Remove-CleanupProfile $profile}
-        else {Write-Host ('Профиль очистки оставлен до завершения процесса: '+$profile.Flag)}
+        # cleanmgr reads the profile at startup. Leaving StateFlags behind after a
+        # timeout can make a later unrelated cleanup use this application's list.
+        Remove-CleanupProfile $profile
     }
 }
 function Invoke-Cleanup([switch]$Preview) {
@@ -74,7 +71,7 @@ function Invoke-Cleanup([switch]$Preview) {
     $changed = @()
     try {
         foreach($key in $selected) { New-ItemProperty -LiteralPath $key.PSPath -Name $flag -PropertyType DWord -Value 2 | Out-Null; $changed += $key.PSPath }
-        $p = Start-Process -FilePath $cleanmgr -ArgumentList "/sagerun:$profile" -WindowStyle Normal -PassThru -Wait
+        $p = Start-Process -FilePath $cleanmgr -ArgumentList "/sagerun:$profile" -WindowStyle Hidden -PassThru -Wait
         Write-Host "Штатная очистка завершила работу, код: $($p.ExitCode)."
     } finally { foreach($key in $changed) { Remove-ItemProperty -LiteralPath $key -Name $flag -ErrorAction Continue } }
     $changes=@(Get-WmiObject Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object {

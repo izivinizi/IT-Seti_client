@@ -40,6 +40,7 @@ public static class Database
                 support_key_hash text,
                 os_name text,
                 os_version text,
+                last_ip inet,
                 created_at timestamptz NOT NULL,
                 last_seen_at timestamptz
             );
@@ -47,7 +48,9 @@ public static class Database
             ALTER TABLE devices ALTER COLUMN service_object_id DROP NOT NULL;
             ALTER TABLE devices ADD COLUMN IF NOT EXISTS support_key_hash text;
             ALTER TABLE devices ADD COLUMN IF NOT EXISTS hardware_fingerprint text;
+            ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_ip inet;
             CREATE UNIQUE INDEX IF NOT EXISTS ix_devices_support_key ON devices(support_key_hash) WHERE support_key_hash IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS ix_devices_last_ip_seen ON devices(last_ip,last_seen_at DESC) WHERE last_ip IS NOT NULL;
             CREATE TABLE IF NOT EXISTS ticket_requests (
                 request_id uuid PRIMARY KEY,
                 device_id uuid NOT NULL REFERENCES devices(id) ON DELETE CASCADE,

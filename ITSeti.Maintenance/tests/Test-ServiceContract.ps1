@@ -18,6 +18,10 @@ if($serviceProject -notmatch '<Version>2\.3\.1</Version>' -or
 foreach($operation in @('FullCheck','QuickCheck','ScheduledFullCheck','Cleanup','Repair','OrganizationSetup','UploadReports','RefreshSoftwareCatalog','ProbeTemperature','DisableWindowsUpdates','RestoreWindowsUpdates')) {
     if(!$coordinator.Contains('MaintenanceServiceOperation.'+$operation)){throw "Service operation is missing: $operation"}
 }
+if(!$coordinator.Contains('MaintenanceServiceOperation.Cleanup => (Folder: "CleanupRequests", Pattern: "*.request")') -or
+   !$coordinator.Contains('if (HasPendingRequests(operation))')) {
+    throw 'Cleanup requests arriving during an active service run must be picked up by a follow-up run.'
+}
 if(!$install.Contains("`$serviceName='ITSetiMaintenanceService'") -or !$install.Contains('New-Service -Name $serviceName') -or
    !$install.Contains('start= delayed-auto') -or !$install.Contains('Start-Service -Name $serviceName') -or
    !$uninstall.Contains("`$serviceName='ITSetiMaintenanceService'") -or !$uninstall.Contains('sc.exe delete $serviceName') -or

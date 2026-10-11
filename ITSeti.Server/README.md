@@ -46,6 +46,8 @@ The server records each report as JSONB and keeps a compact indexed summary for 
 
 The browser portal has Computers, Monitoring, Tickets, and Software/Updates views. Computers are displayed by the inventory number entered during installation, with company, service object and PC selectors. BIOS serial numbers and Windows host names are not the visible device identity. Enrollment requires a usable BIOS serial or hardware UUID as an internal fingerprint so reinstalls cannot create an unkeyed duplicate. On startup, the server recalculates fingerprints from usable serials, merges records for the same fingerprint, and reattaches their check history, alerts, and tickets to the canonical device record. Inventory numbers alone are not used to merge devices because they may be unset or repeated.
 
+With `AutomaticIpEnrollmentEnabled=true`, a new hardware fingerprint may reuse a company/object only when recently connected devices from the same forwarded client IP all have one identical assignment. IP is never the PC identity. Existing hardware is re-keyed automatically only from its previously recorded IP; changed or ambiguous addresses require the registration password and a manual selection.
+
 ## Pilot limits
 
 The current VPS has 1 GiB of memory. Compose limits database, API, and proxy memory and connections for a pilot. Before enrolling all 3,000 computers, monitor peak memory, report upload bursts, package egress, database growth, and backup restore time. Roll out large packages by company/object batches.

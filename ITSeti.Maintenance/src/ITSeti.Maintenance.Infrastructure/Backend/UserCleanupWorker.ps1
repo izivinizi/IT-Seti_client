@@ -93,7 +93,8 @@ try {
                 $start.FileName=Join-Path $env:windir 'System32\cleanmgr.exe'
                 $start.Arguments='/sagerun:'+([int]$value)
                 $start.UseShellExecute=$false
-                $start.CreateNoWindow=$false
+                $start.CreateNoWindow=$true
+                $start.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
                 $p=[Diagnostics.Process]::Start($start)
                 $p.WaitForExit()
                 if($p.ExitCode -ne 0){throw ('cleanmgr: код '+$p.ExitCode)}

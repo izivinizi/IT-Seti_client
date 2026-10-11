@@ -135,6 +135,15 @@ Check(DeviceIdentity.CreateFingerprint("Default String", "{12345678-1234-1234-12
     DeviceIdentity.CreateFingerprint(null, "12345678123412341234123456789ABC"), "generic serial falls back to stable hardware UUID");
 Check(DeviceIdentity.CreateFingerprint("To Be Filled By O.E.M.", "00000000-0000-0000-0000-000000000000") is null,
     "placeholder hardware identifiers do not merge computers");
+Check(AutomaticIpEnrollment.Normalize(System.Net.IPAddress.Parse("::ffff:192.0.2.15")) == "192.0.2.15",
+    "automatic enrollment normalizes proxy IPv4-mapped addresses");
+Check(AutomaticIpEnrollment.ResolveUnique([new(10, 20), new(10, 20)]) == new IpAssignment(10, 20),
+    "one IP assignment can be reused for a new hardware fingerprint");
+Check(AutomaticIpEnrollment.ResolveUnique([new(10, 20), new(10, 21)]) is null,
+    "an IP shared by multiple objects never chooses an assignment silently");
+Check(AutomaticIpEnrollment.CanReuseExisting("::ffff:192.0.2.15", "192.0.2.15") &&
+    !AutomaticIpEnrollment.CanReuseExisting("192.0.2.15", "192.0.2.16"),
+    "existing hardware is re-keyed only from its previously recorded IP");
 
 var first = Report("""
     {"Notes":["CPU: температура 78 °C достигла порога 75 °C."],"Full":{"Events":[

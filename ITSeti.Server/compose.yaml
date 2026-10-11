@@ -32,6 +32,7 @@ services:
       BootstrapAdminUser: ${BOOTSTRAP_ADMIN_USER:?Set BOOTSTRAP_ADMIN_USER}
       BootstrapAdminPassword: ${BOOTSTRAP_ADMIN_PASSWORD:?Set BOOTSTRAP_ADMIN_PASSWORD}
       RegistrationPasswordHash: ${REGISTRATION_PASSWORD_HASH:-}
+      AutomaticIpEnrollmentEnabled: ${AUTOMATIC_IP_ENROLLMENT_ENABLED:-true}
       OkdeskBaseUrl: ${OKDESK_BASE_URL:-https://it-seti.okdesk.ru}
       OkdeskApiToken: ${OKDESK_API_TOKEN:-}
       OkdeskTransport: ${OKDESK_TRANSPORT:-api}
