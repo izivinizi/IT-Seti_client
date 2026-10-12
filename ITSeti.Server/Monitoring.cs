@@ -16,25 +16,61 @@ public static class Monitoring
 
     public static IReadOnlyList<MonitorIssue> NewIssues(JsonElement current, JsonElement? previous, JsonElement? previousEvents = null, bool includeWarnings = false)
     {
-        if (previous is null) return [];
+        if (previous is null)
+        {
+            var isConfirmedServiceAlert = JsonRead.String(current, "KindLabel", "Kind", "kind") == "Постоянный мониторинг" &&
+                JsonRead.Property(current, "DiagnosticIssues") is { ValueKind: JsonValueKind.Array };
+            return Extract(current).Where(issue => issue.Category == "identity" || isConfirmedServiceAlert && issue.Severity == 1).ToArray();
+        }
         var currentIssues = Extract(current);
         var eventBaseline = previousEvents ?? previous;
         var oldIssues = Extract(previous.Value).Where(i => i.Category != "event")
             .Concat(eventBaseline is null ? [] : Extract(eventBaseline.Value).Where(i => i.Category == "event"));
         var oldKeys = oldIssues.Select(i => i.Category + "|" + i.Identity + "|" + i.Severity).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var hadEventBaseline = eventBaseline is not null && EventArray(eventBaseline.Value) is { ValueKind: JsonValueKind.Array };
-        return currentIssues.Where(i => (i.Severity == 1 || includeWarnings) && (i.Category != "event" || hadEventBaseline) &&
+        return currentIssues.Where(i => (i.Category == "identity" || i.Severity == 1 || includeWarnings) && (i.Category != "event" || hadEventBaseline) &&
             !oldKeys.Contains(i.Category + "|" + i.Identity + "|" + i.Severity)).ToArray();
+    }
+
+    public static MonitorIssue? RmsChangeIssue(string? previous, string? current)
+    {
+        previous = previous?.Trim();
+        current = current?.Trim();
+        if (string.IsNullOrWhiteSpace(previous) || string.IsNullOrWhiteSpace(current) ||
+            string.Equals(previous, current, StringComparison.OrdinalIgnoreCase)) return null;
+        return new("identity", "rms-id", "Изменился номер RMS", $"Ранее: {Clip(previous, 80)} · сейчас: {Clip(current, 80)}", 2);
+    }
+
+    public static MonitorIssue DuplicateInventoryIssue(string inventory, IEnumerable<string> otherComputerNames)
+    {
+        var names = otherComputerNames.Select(name => Clip(name.Trim(), 100)).Where(name => name.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase).Take(5).ToArray();
+        return new("identity", "inventory:" + inventory, "Инвентарный номер используется несколькими ПК",
+            $"Номер {Clip(inventory, 80)} уже указан у: {string.Join(", ", names)}.", 2);
     }
 
     private static IReadOnlyList<MonitorIssue> Extract(JsonElement report)
     {
         var issues = new Dictionary<string, MonitorIssue>(StringComparer.OrdinalIgnoreCase);
+        var serverIdentityIssues = JsonRead.Property(report, "ServerIdentityIssues", "serverIdentityIssues");
+        if (serverIdentityIssues is { ValueKind: JsonValueKind.Array })
+            foreach (var item in serverIdentityIssues.Value.EnumerateArray())
+            {
+                var identity = JsonRead.String(item, "Identity") ?? "identity:unknown";
+                var issue = new MonitorIssue("identity", identity,
+                    JsonRead.String(item, "Title") ?? "Проблема идентификации ПК",
+                    Clip(JsonRead.String(item, "Detail") ?? "", 700), 2);
+                issues.TryAdd(issue.Category + "|" + issue.Identity, issue);
+            }
         var clientIssues = JsonRead.Property(report, "DiagnosticIssues");
         if (clientIssues is { ValueKind: JsonValueKind.Array })
-            return clientIssues.Value.EnumerateArray().Where(i => JsonRead.String(i, "Severity") is "Critical" or "Warning")
+        {
+            foreach (var issue in clientIssues.Value.EnumerateArray().Where(i => JsonRead.String(i, "Severity") is "Critical" or "Warning")
                 .Select(i => ClientIssue(JsonRead.String(i, "Title") ?? "", JsonRead.String(i, "Detail") ?? "",
-                    JsonRead.String(i, "Severity") == "Critical" ? (short)1 : (short)2)).ToArray();
+                    JsonRead.String(i, "Severity") == "Critical" ? (short)1 : (short)2)))
+                issues.TryAdd(issue.Category + "|" + issue.Identity, issue);
+            return issues.Values.ToArray();
+        }
         if (JsonRead.Property(report, "Notes") is { ValueKind: JsonValueKind.Array } &&
             JsonRead.Property(report, "Disks") is { ValueKind: JsonValueKind.Array })
         {

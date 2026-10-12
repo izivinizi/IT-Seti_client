@@ -66,8 +66,8 @@ namespace ITSeti.Maintenance.App
             view.Set("UserIssueDetail", findings.Count == 0 ? "" : "Обнаружено: " + findings.Count);
             view.Set("UserCoverage", userUnavailable.Count == 0 ? "" : "Недоступные показатели: " + string.Join("; ", userUnavailable));
             view.Set("HasMoreUserIssues", false);
-            view.Set("HasLowDiskSpace", findings.Any(x => x.IndexOf("места", StringComparison.OrdinalIgnoreCase) >= 0));
-            view.Set("HasEngineerLowDiskSpace", System.IO.File.Exists(TreeSizePath) && findings.Any(x => x.IndexOf("места", StringComparison.OrdinalIgnoreCase) >= 0));
+            view.Set("HasLowDiskSpace", findings.Any(x => x.IndexOf("системном диске", StringComparison.OrdinalIgnoreCase) >= 0));
+            view.Set("HasEngineerLowDiskSpace", System.IO.File.Exists(TreeSizePath) && disks.Any(x => x.TotalBytes >= 50L * 1073741824 && x.FreeBytes < 15L * 1073741824));
             view.Set("UserStatus", findings.Count > 0 ? "Проверка завершена. Есть замечания: " + findings.Count : userUnavailable.Count > 0 ? "Проверка завершена. Часть показателей недоступна." : "Проверка завершена. Замечаний нет.");
             view.Set("Status", "Проверка от " + (s.CheckedAt ?? "") + " · " + (s.Kind ?? ""));
             view.Set("UserLiveSummary", "");
@@ -111,7 +111,8 @@ namespace ITSeti.Maintenance.App
             var volumes = Rows(disks.Select(x => new Win7Row { Name = x.Name }));
             view.Set("TreeSizeVolumes", volumes);
             view.Set("SelectedTreeSizeVolume", volumes.FirstOrDefault(x => system != null && x.Name == system.Name));
-            view.Set("NetworkAdapters", Rows((s.Network ?? new List<LegacyNetworkAdapter>()).Select(x => new Win7Row { Name = x.Name, Type = x.Kind, Status = x.Status, LinkSpeed = x.Speed, Addresses = x.Addresses })));
+            RenderNetwork(s);
+            RenderHwInfoSensors(s);
             view.Set("Processes", Rows((s.Processes ?? new List<LegacyProcess>()).Select(x => new Win7Row { Name = x.Name,
                 Description = x.Path == null || x.Path == "нет доступа" ? "Нет доступа" : System.IO.Path.GetFileName(x.Path),
                 Publisher = x.Signer ?? "—", Signature = x.Signature ?? "Не проверена",
@@ -126,6 +127,79 @@ namespace ITSeti.Maintenance.App
                 view.Set("CheckProgressPhase", "Последняя проверка от " + s.CheckedAt);
             }
             RenderEvents();
+        }
+
+        private void RenderLiveMonitoring(LegacySnapshot s)
+        {
+            var cpu = s.CpuPercent;
+            var temperature = s.CpuTemperatureC.HasValue ? " · " + s.CpuTemperatureC.Value.ToString("N0") + " °C" : " · температура недоступна";
+            var memoryUsed = s.MemoryUsedPercent;
+            view.Set("Cpu", CpuValue(cpu));
+            view.Set("CpuDetail", (current == null ? "Процессор" : current.CpuName ?? "Процессор") + temperature + " · HWiNFO");
+            view.Set("CpuStatusBrush", !cpu.HasValue ? Blue : s.CpuTemperatureC >= 85 ? Red : s.CpuTemperatureC >= 75 ? Amber : Green);
+            view.Set("UserCpuLabel", CpuValue(cpu));
+            view.Set("UserCpuValue", cpu ?? 0d);
+            view.Set("UserCpuNameAndTemperature", (current == null ? "Процессор" : current.CpuName ?? "Процессор") + temperature);
+            view.Set("Memory", Value(memoryUsed, "%"));
+            view.Set("MemoryDetail", s.TotalMemoryGb.HasValue
+                ? "Свободно " + s.FreeMemoryGb.GetValueOrDefault().ToString("N1") + " из " + s.TotalMemoryGb.Value.ToString("N1") + " ГБ"
+                : "Нет данных");
+            view.Set("MemoryStatusBrush", memoryUsed >= 98 ? Red : memoryUsed >= 90 ? Amber : Green);
+            view.Set("UserMemoryLabel", Value(memoryUsed, "%"));
+            view.Set("UserMemoryValue", memoryUsed ?? 0d);
+            view.Set("UserMemoryDetail", s.FreeMemoryGb.HasValue ? "Свободно " + s.FreeMemoryGb.Value.ToString("N1") + " ГБ" : "Нет данных");
+            var system = (s.Disks ?? new List<LegacyDisk>()).FirstOrDefault(x => x.IsSystem);
+            if (system != null && system.TotalBytes > 0)
+            {
+                var used = 100.0 * (system.TotalBytes - system.FreeBytes) / system.TotalBytes;
+                view.Set("DiskCount", used.ToString("N0") + "%");
+                view.Set("DiskDetail", system.Name + " · свободно " + Gb(system.FreeBytes));
+                view.Set("DiskStatusBrush", system.FreeBytes < 5L * 1073741824 ? Red : system.FreeBytes < 15L * 1073741824 ? Amber : Green);
+                view.Set("UserDiskLabel", used.ToString("N0") + "%");
+                view.Set("UserDiskValue", used);
+                view.Set("UserDiskDetail", system.Name + " · свободно " + Gb(system.FreeBytes));
+            }
+            RenderNetwork(s);
+            RenderHwInfoSensors(s);
+            view.Set("UserLiveSummary", "Данные службы · " + s.CheckedAt + " · HWiNFO");
+        }
+
+        private void RenderNetwork(LegacySnapshot s)
+        {
+            var adapters = s.Network ?? new List<LegacyNetworkAdapter>();
+            view.Set("NetworkAdapters", Rows(adapters.Select(x => new Win7Row
+            {
+                Name = x.Name, Type = x.Kind, Status = x.Status, LinkSpeed = x.Speed, MacAddress = x.MacAddress, Addresses = x.Addresses
+            })));
+            var first = adapters.FirstOrDefault();
+            if (first != null)
+            {
+                view.Set("UserIpLabel", first.Addresses);
+                view.Set("UserIpTooltip", first.Name + " · MAC " + (string.IsNullOrWhiteSpace(first.MacAddress) ? "не определён" : first.MacAddress));
+            }
+        }
+
+        private void RenderHwInfoSensors(LegacySnapshot s)
+        {
+            var captured = s.CheckedAt ?? "нет данных";
+            var rows = new List<Win7Row>();
+            AddSensor(rows, "Производительность", "Загрузка CPU", s.CpuPercent, "%", captured, "N0");
+            AddSensor(rows, "Производительность", "Загрузка памяти", s.MemoryUsedPercent, "%", captured, "N0");
+            AddSensor(rows, "Температура", "CPU", s.CpuTemperatureC, "°C", captured, "N0");
+            AddSensor(rows, "Температура", "VRM", s.VrmTemperatureC, "°C", captured, "N0");
+            AddSensor(rows, "Температура", "PCH", s.PchTemperatureC, "°C", captured, "N0");
+            AddSensor(rows, "Напряжение", "+12 В", s.Rail12V, "В", captured, "N2");
+            AddSensor(rows, "Напряжение", "+5 В", s.Rail5V, "В", captured, "N2");
+            AddSensor(rows, "Напряжение", "+3,3 В", s.Rail3V, "В", captured, "N2");
+            AddSensor(rows, "Напряжение", "Vcore / VSoC", s.CpuVoltageV, "В", captured, "N2");
+            view.Set("HwInfoSensors", Rows(rows));
+        }
+
+        private static void AddSensor(ICollection<Win7Row> rows, string category, string name, double? value,
+            string unit, string captured, string format)
+        {
+            if (!value.HasValue) return;
+            rows.Add(new Win7Row { Category = category, Name = name, Value = value.Value.ToString(format) + " " + unit, CapturedAt = captured });
         }
 
         private void RenderEvents()

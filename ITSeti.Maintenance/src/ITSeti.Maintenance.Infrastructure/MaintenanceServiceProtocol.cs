@@ -14,6 +14,8 @@ public enum MaintenanceServiceOperation
     ProbeTemperature,
     DisableWindowsUpdates,
     RestoreWindowsUpdates,
+    DisableWindowsDefender,
+    EnableWindowsDefender,
     OpenSystemTool,
     OpenUtility
 }

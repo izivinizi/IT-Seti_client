@@ -48,7 +48,7 @@ namespace ITSeti.Maintenance.App
             OpenLowSpaceScanButton.Visibility = File.Exists(TreeSizePath) ? Visibility.Visible : Visibility.Collapsed;
             var definitions = new[] {
                 new[] { "Управление компьютером", "compmgmt.msc" }, new[] { "Групповые политики", "gpedit.msc" },
-                new[] { "Терминал", "cmd.exe" }, new[] { "Панель управления", "control.exe" },
+                new[] { "Панель управления", "control.exe" },
                 new[] { "Программы", "appwiz.cpl" }, new[] { "Сетевые адаптеры", "ncpa.cpl" },
                 new[] { "Сведения о системе", "msinfo32.exe" } };
             view.Set("SystemTools", Rows(definitions.Select(x => new Win7Row { Key = x[1], Title = x[0], Icon = "●", Available = true, ToolTip = x[0] })));
@@ -360,11 +360,7 @@ namespace ITSeti.Maintenance.App
 
         private void ShowAdminPrompt_Click(object sender, RoutedEventArgs e)
         {
-            AdminPassword.Clear();
-            AdminVisiblePassword.Clear();
-            AdminError.Visibility = Visibility.Collapsed;
-            AdminUnlock.Visibility = Visibility.Visible;
-            AdminPassword.Focus();
+            UnlockAdmin_Click(sender, e);
         }
         private void CancelAdmin_Click(object sender, RoutedEventArgs e) { AdminUnlock.Visibility = Visibility.Collapsed; }
         private void ExitAdmin_Click(object sender, RoutedEventArgs e) { Close(); }
@@ -389,19 +385,12 @@ namespace ITSeti.Maintenance.App
         }
         private void UnlockAdmin_Click(object sender, RoutedEventArgs e)
         {
-            var password = AdminVisiblePassword.Visibility == Visibility.Visible ? AdminVisiblePassword.Text : AdminPassword.Password;
-            AdminPassword.Clear();
-            AdminVisiblePassword.Clear();
-            if (!string.Equals(password, "itseti", StringComparison.Ordinal))
+            if (engineer) return;
+            try
             {
-                ShowAdminError("Неверный пароль инженера.");
-                AdminPassword.Focus();
-                return;
+                EngineerLauncher.Bootstrap(cleanupUserSid);
             }
-            engineer = true;
-            SetEngineerMode(true);
-            RefreshSoftware();
-            if (current != null) Render(current);
+            catch (Exception ex) { view.Set("Status", "Не удалось открыть инженерский режим: " + ex.Message); }
         }
         private void ShowAdminError(string text) { AdminError.Text = text; AdminError.Visibility = Visibility.Visible; }
     }

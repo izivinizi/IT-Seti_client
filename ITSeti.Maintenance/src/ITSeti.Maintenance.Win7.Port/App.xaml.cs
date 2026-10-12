@@ -55,7 +55,7 @@ namespace ITSeti.Maintenance.App
 #if DEBUG
             if (args.Length >= 2 && args[0] == "--preview-admin") preview = args[1];
 #endif
-            var engineer = elevated && args.Contains("--engineer");
+            var engineer = elevated;
 #if DEBUG
             engineer |= args.Length >= 2 && args[0] == "--preview-admin";
 #endif

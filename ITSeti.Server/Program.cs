@@ -55,6 +55,8 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
     options.AccessDeniedPath = "/login";
 });
 builder.Services.AddAuthorization();
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
+    options.MultipartBodyLengthLimit = 1024L * 1024 * 1024 + 16L * 1024 * 1024);
 builder.Services.AddRateLimiter(options =>
 {
     options.AddFixedWindowLimiter("login", limiter =>
@@ -85,7 +87,7 @@ builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>
     options.KnownProxies.Clear();
     options.ForwardLimit = 1;
 });
-builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 1024L * 1024 * 1024);
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 1024L * 1024 * 1024 + 16L * 1024 * 1024);
 
 var app = builder.Build();
 await Database.InitializeAsync(dataSource, builder.Configuration, app.Services.GetRequiredService<PasswordHasher<PortalAdmin>>());
@@ -118,7 +120,7 @@ app.Use(async (context, next) =>
     var limit = context.Request.Path.StartsWithSegments("/api/v1/check-runs")
         ? 12L * 1024 * 1024
         : context.Request.Path.StartsWithSegments("/api/v1/tickets") ? 16L * 1024 * 1024
-        : context.Request.Path.StartsWithSegments("/api/admin/packages") ? 1024L * 1024 * 1024 : (long?)null;
+        : context.Request.Path.StartsWithSegments("/api/admin/packages") ? 1024L * 1024 * 1024 + 16L * 1024 * 1024 : (long?)null;
     var feature = context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
     if (limit.HasValue && feature is { IsReadOnly: false }) feature.MaxRequestBodySize = limit.Value;
     await next();
@@ -259,7 +261,7 @@ app.MapPost("/api/v1/auto-enroll", async (HttpRequest request, AutoEnrollRequest
     IpAssignment? assignment = null;
     var existingId = (Guid?)null;
     await using (var existing = new NpgsqlCommand("""
-        SELECT d.id,d.company_id,d.service_object_id,d.last_ip::text
+        SELECT d.id,d.company_id,d.service_object_id
         FROM devices d JOIN companies c ON c.id=d.company_id AND c.active
         LEFT JOIN service_objects s ON s.id=d.service_object_id AND s.company_id=d.company_id AND s.active
         WHERE d.hardware_fingerprint=@fingerprint AND (d.service_object_id IS NULL OR s.id IS NOT NULL)
@@ -270,9 +272,8 @@ app.MapPost("/api/v1/auto-enroll", async (HttpRequest request, AutoEnrollRequest
         if (await reader.ReadAsync(request.HttpContext.RequestAborted))
         {
             existingId = reader.GetGuid(0);
-            var previousIp = reader.IsDBNull(3) ? null : reader.GetString(3);
-            if (clientIp is null || !AutomaticIpEnrollment.CanReuseExisting(previousIp, clientIp))
-                return Results.Conflict(new { error = "Адрес компьютера изменился. Подтвердите подключение паролем." });
+            if (clientIp is null || !AutomaticIpEnrollment.CanReuseExisting(null, clientIp))
+                return Results.Conflict(new { error = "Не удалось определить допустимый IP-адрес компьютера." });
             assignment = new(reader.GetInt64(1), reader.IsDBNull(2) ? null : reader.GetInt64(2));
         }
     }
@@ -313,7 +314,7 @@ app.MapPost("/api/v1/auto-enroll", async (HttpRequest request, AutoEnrollRequest
             UPDATE devices SET computer_name=@name,
               serial_number=COALESCE(NULLIF(@serial,''),serial_number),inventory_number=@inventory,
               api_key_hash=@key,support_key_hash=@support,last_ip=@ip::inet,last_seen_at=now()
-            WHERE id=@id AND last_ip=@ip::inet
+            WHERE id=@id
             """, connection, transaction);
         update.Parameters.AddWithValue("id", id);
         update.Parameters.AddWithValue("name", body.ComputerName.Trim());
@@ -633,11 +634,16 @@ app.MapPost("/api/v1/tickets", async (HttpRequest request, CreateTicketRequest b
     OkdeskIssue issue;
     try { issue = TicketServices.Build(body.Title ?? "", body.Description ?? "", body.ServiceCode ?? "", companyId, siteId); }
     catch (ArgumentException) { return Results.BadRequest(new { error = "Проверьте тему, описание и сервис заявки." }); }
+    string? computerInfo;
+    try { computerInfo = TicketServices.FormatComputerInfo(body.ComputerInfo); }
+    catch (ArgumentException) { return Results.BadRequest(new { error = "Данные компьютера превышают допустимый размер." }); }
     IReadOnlyList<TicketAttachment> files;
     try { files = TicketAttachments.Decode(body.Attachments); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-    var signature = JsonSerializer.Serialize(issue) + string.Concat(files.Select(file => file.FileName + ":" +
-        Convert.ToHexString(SHA256.HashData(file.Bytes))));
+    var signature = JsonSerializer.Serialize(new { issue, computerInfo, attachments = files.Select(file => new
+    {
+        file.FileName, hash = Convert.ToHexString(SHA256.HashData(file.Bytes))
+    }) });
     var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature)));
     await using var transaction = await connection.BeginTransactionAsync();
     int inserted;
@@ -692,6 +698,18 @@ app.MapPost("/api/v1/tickets", async (HttpRequest request, CreateTicketRequest b
         attachment.Parameters.AddWithValue("type", file.ContentType);
         attachment.Parameters.Add("bytes", NpgsqlDbType.Bytea).Value = file.Bytes;
         await attachment.ExecuteNonQueryAsync();
+    }
+    if (computerInfo is not null)
+    {
+        await using var message = new NpgsqlCommand("""
+            INSERT INTO ticket_messages(id,request_id,direction,content,payload_hash,state)
+            VALUES(@id,@request,'user',@content,@hash,'queued')
+            """, connection, transaction);
+        message.Parameters.AddWithValue("id", Guid.NewGuid());
+        message.Parameters.AddWithValue("request", body.RequestId);
+        message.Parameters.AddWithValue("content", computerInfo);
+        message.Parameters.AddWithValue("hash", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(computerInfo))));
+        await message.ExecuteNonQueryAsync();
     }
     await transaction.CommitAsync();
     return Results.Json(new { requestId = body.RequestId, status = "queued", issueId = (long?)null }, statusCode: 202);
@@ -819,6 +837,7 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
     await using var connection = await db.OpenConnectionAsync();
     await using var transaction = await connection.BeginTransactionAsync();
     IReadOnlyList<MonitorIssue> newIssues;
+    var identityIssues = new List<MonitorIssue>();
     await using (var previous = new NpgsqlCommand("""
         SELECT
           (SELECT details::text FROM check_runs WHERE device_id=@device AND started_at<@started
@@ -837,6 +856,42 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
         // The report keeps warnings for the detailed PC view. The monitoring feed
         // is intentionally reserved for newly detected critical issues.
         newIssues = Monitoring.NewIssues(report.RootElement, previousReport?.RootElement, previousEvents?.RootElement, includeWarnings: false);
+    }
+    var currentRms = JsonRead.String(report.RootElement, "RmsId", "rmsId");
+    if (!string.IsNullOrWhiteSpace(currentRms))
+    {
+        await using var previousRms = new NpgsqlCommand("""
+            SELECT NULLIF(details->>'RmsId','') FROM check_runs
+            WHERE device_id=@device AND started_at<@started AND NULLIF(details->>'RmsId','') IS NOT NULL
+            ORDER BY started_at DESC,received_at DESC LIMIT 1
+            """, connection, transaction);
+        previousRms.Parameters.AddWithValue("device", deviceId);
+        previousRms.Parameters.AddWithValue("started", started);
+        var oldRms = (string?)await previousRms.ExecuteScalarAsync();
+        if (Monitoring.RmsChangeIssue(oldRms, currentRms) is { } changedRms) identityIssues.Add(changedRms);
+    }
+    var normalizedInventory = InventoryNumbers.Normalize(inventory);
+    if (normalizedInventory is not null)
+    {
+        await using var duplicateInventory = new NpgsqlCommand("""
+            SELECT computer_name FROM devices
+            WHERE id<>@device AND NULLIF(LTRIM(REGEXP_REPLACE(UPPER(COALESCE(inventory_number,'')), '[^[:alnum:]]', '', 'g'),'0'),'')=@inventory
+            ORDER BY computer_name LIMIT 6
+            """, connection, transaction);
+        duplicateInventory.Parameters.AddWithValue("device", deviceId);
+        duplicateInventory.Parameters.AddWithValue("inventory", normalizedInventory);
+        var duplicateNames = new List<string>();
+        await using (var duplicateReader = await duplicateInventory.ExecuteReaderAsync())
+            while (await duplicateReader.ReadAsync()) duplicateNames.Add(duplicateReader.IsDBNull(0) ? "неизвестен" : duplicateReader.GetString(0));
+        if (duplicateNames.Count > 0)
+            identityIssues.Add(Monitoring.DuplicateInventoryIssue(inventory!, duplicateNames));
+    }
+    newIssues = newIssues.Concat(identityIssues).ToArray();
+    if (identityIssues.Count > 0)
+    {
+        var detailObject = JsonNode.Parse(raw)!.AsObject();
+        detailObject["ServerIdentityIssues"] = JsonSerializer.SerializeToNode(identityIssues);
+        raw = detailObject.ToJsonString();
     }
     int inserted;
     await using (var insert = new NpgsqlCommand("""
@@ -897,7 +952,7 @@ app.MapGet("/api/v1/updates", async (HttpRequest request, NpgsqlDataSource db) =
     if (!await DeviceKeys.AuthenticateAsync(request, db)) return Results.Unauthorized();
     await using var connection = await db.OpenConnectionAsync();
     await using var command = new NpgsqlCommand("""
-        SELECT id,package_key,version,platform,sha256,size_bytes,download_name
+        SELECT id,package_key,version,platform,sha256,size_bytes,download_name,product_name
         FROM packages WHERE is_latest ORDER BY package_key,platform
         """, connection);
     await using var reader = await command.ExecuteReaderAsync();
@@ -906,7 +961,7 @@ app.MapGet("/api/v1/updates", async (HttpRequest request, NpgsqlDataSource db) =
     {
         id = reader.GetGuid(0), key = reader.GetString(1), version = reader.GetString(2),
         platform = reader.GetString(3), sha256 = reader.GetString(4), sizeBytes = reader.GetInt64(5),
-        fileName = reader.GetString(6)
+        fileName = reader.GetString(6), name = reader.GetString(7)
     });
     return Results.Ok(rows);
 });
@@ -919,7 +974,7 @@ app.MapGet("/api/v1/application-update", async (HttpRequest request, NpgsqlDataS
 
     await using var connection = await db.OpenConnectionAsync();
     await using var command = new NpgsqlCommand("""
-        SELECT id,package_key,version,platform,sha256,size_bytes,download_name
+        SELECT id,package_key,version,platform,sha256,size_bytes,download_name,product_name
         FROM packages WHERE is_latest AND package_key='application' AND platform=@platform
         LIMIT 1
         """, connection);
@@ -930,7 +985,7 @@ app.MapGet("/api/v1/application-update", async (HttpRequest request, NpgsqlDataS
     {
         id = reader.GetGuid(0), key = reader.GetString(1), version = reader.GetString(2),
         platform = reader.GetString(3), sha256 = reader.GetString(4), sizeBytes = reader.GetInt64(5),
-        fileName = reader.GetString(6)
+        fileName = reader.GetString(6), name = reader.GetString(7)
     });
 });
 
@@ -1057,19 +1112,50 @@ admin.MapGet("/device-options", async (NpgsqlDataSource db, string? q, long? com
     });
     return Results.Ok(new { items = rows.Take(5000), hasMore = rows.Count > 5000 });
 });
+admin.MapGet("/computer-tree", async (NpgsqlDataSource db, long? companyId) =>
+{
+    await using var connection = await db.OpenConnectionAsync();
+    await using var command = companyId is null
+        ? new NpgsqlCommand("""
+            SELECT c.id,c.name,NULL::text,count(d.id)
+            FROM companies c LEFT JOIN devices d ON d.company_id=c.id
+            WHERE c.active GROUP BY c.id,c.name ORDER BY c.name,c.id
+            """, connection)
+        : new NpgsqlCommand("""
+            SELECT s.id,s.name,s.address,count(d.id)
+            FROM service_objects s LEFT JOIN devices d ON d.service_object_id=s.id AND d.company_id=s.company_id
+            WHERE s.active AND s.company_id=@company GROUP BY s.id,s.name,s.address
+            UNION ALL
+            SELECT NULL::bigint,'Без объекта',NULL,count(*)
+            FROM devices WHERE company_id=@company AND service_object_id IS NULL HAVING count(*)>0
+            ORDER BY 2,1
+            """, connection);
+    if (companyId is not null) command.Parameters.Add("company", NpgsqlDbType.Bigint).Value = companyId.Value;
+    await using var reader = await command.ExecuteReaderAsync();
+    var items = new List<object>();
+    while (await reader.ReadAsync()) items.Add(new
+    {
+        id = reader.IsDBNull(0) ? (long?)null : reader.GetInt64(0),
+        name = reader.GetString(1),
+        address = reader.IsDBNull(2) ? null : reader.GetString(2),
+        computers = reader.GetInt64(3)
+    });
+    return Results.Ok(new { items });
+});
 admin.MapGet("/devices", async (NpgsqlDataSource db, string? q, long? companyId, long? siteId, Guid? deviceId, int? page, bool? unassignedSite) =>
 {
     var offset = Math.Clamp(page ?? 0, 0, 10000) * 100;
+    var deviceInventory = InventoryNumbers.SqlExpression("upper(regexp_replace(coalesce(d.inventory_number,''), '[^[:alnum:]]', '', 'g'))");
     await using var connection = await db.OpenConnectionAsync();
-    await using var command = new NpgsqlCommand("""
+    await using var command = new NpgsqlCommand($"""
         SELECT d.id,d.serial_number,d.inventory_number,d.os_name,d.os_version,d.last_seen_at,
                c.name,s.name,d.company_id,d.service_object_id,
                (SELECT r.started_at FROM check_runs r WHERE r.device_id=d.id ORDER BY r.started_at DESC,r.received_at DESC LIMIT 1),
                (SELECT r.details FROM check_runs r WHERE r.device_id=d.id ORDER BY r.started_at DESC,r.received_at DESC LIMIT 1),
                d.tickets_blocked,
-               (SELECT count(*) FROM okdesk_equipment e WHERE e.normalized_inventory_number=nullif(ltrim(regexp_replace(upper(coalesce(d.inventory_number,'')), '[^[:alnum:]]', '', 'g'),'0'),'')),
-               (SELECT e.company_id FROM okdesk_equipment e WHERE e.normalized_inventory_number=nullif(ltrim(regexp_replace(upper(coalesce(d.inventory_number,'')), '[^[:alnum:]]', '', 'g'),'0'),'') ORDER BY e.id LIMIT 1),
-               (SELECT e.service_object_id FROM okdesk_equipment e WHERE e.normalized_inventory_number=nullif(ltrim(regexp_replace(upper(coalesce(d.inventory_number,'')), '[^[:alnum:]]', '', 'g'),'0'),'') ORDER BY e.id LIMIT 1)
+               (SELECT count(*) FROM okdesk_equipment e WHERE e.normalized_inventory_number={deviceInventory}),
+               (SELECT e.company_id FROM okdesk_equipment e WHERE e.normalized_inventory_number={deviceInventory} ORDER BY e.id LIMIT 1),
+               (SELECT e.service_object_id FROM okdesk_equipment e WHERE e.normalized_inventory_number={deviceInventory} ORDER BY e.id LIMIT 1)
         FROM devices d LEFT JOIN companies c ON c.id=d.company_id LEFT JOIN service_objects s ON s.id=d.service_object_id
         WHERE (@q IS NULL OR coalesce(d.serial_number,'') ILIKE '%'||@q||'%' OR coalesce(d.inventory_number,'') ILIKE '%'||@q||'%' OR d.id::text ILIKE '%'||@q||'%')
           AND (@company IS NULL OR d.company_id=@company) AND (@site IS NULL OR d.service_object_id=@site)
@@ -1105,7 +1191,7 @@ admin.MapGet("/devices", async (NpgsqlDataSource db, string? q, long? companyId,
         {
             0 => "missing_in_okdesk",
             > 1 => "ambiguous",
-            _ when reader.GetInt64(14) != reader.GetInt64(8) ||
+            _ when reader.IsDBNull(14) || reader.GetInt64(14) != reader.GetInt64(8) ||
                    (reader.IsDBNull(15) ? (long?)null : reader.GetInt64(15)) != (reader.IsDBNull(9) ? (long?)null : reader.GetInt64(9)) => "other_object",
             _ => "matched"
         }
@@ -1116,8 +1202,9 @@ admin.MapGet("/devices", async (NpgsqlDataSource db, string? q, long? companyId,
 admin.MapGet("/okdesk/unbound-equipment", async (NpgsqlDataSource db, string? q, long? companyId, long? siteId, int? page, bool? unassignedSite) =>
 {
     var offset = Math.Clamp(page ?? 0, 0, 10000) * 100;
+    var deviceInventory = InventoryNumbers.SqlExpression("upper(regexp_replace(coalesce(d.inventory_number,''), '[^[:alnum:]]', '', 'g'))");
     await using var connection = await db.OpenConnectionAsync();
-    await using var command = new NpgsqlCommand("""
+    await using var command = new NpgsqlCommand($"""
         SELECT e.id,e.inventory_number,e.serial_number,c.name,s.name,e.company_id,e.service_object_id,e.name
         FROM okdesk_equipment e
         LEFT JOIN companies c ON c.id=e.company_id
@@ -1126,7 +1213,7 @@ admin.MapGet("/okdesk/unbound-equipment", async (NpgsqlDataSource db, string? q,
           AND (NOT @unassigned OR e.service_object_id IS NULL)
           AND (@q IS NULL OR coalesce(e.inventory_number,'') ILIKE '%'||@q||'%' OR coalesce(e.serial_number,'') ILIKE '%'||@q||'%')
           AND (e.normalized_inventory_number IS NULL OR NOT EXISTS(
-              SELECT 1 FROM devices d WHERE nullif(ltrim(regexp_replace(upper(coalesce(d.inventory_number,'')), '[^[:alnum:]]', '', 'g'),'0'),'')=e.normalized_inventory_number))
+              SELECT 1 FROM devices d WHERE {deviceInventory}=e.normalized_inventory_number))
         ORDER BY e.inventory_number NULLS LAST,e.id LIMIT 101 OFFSET @offset
         """, connection);
     command.Parameters.Add("company", NpgsqlDbType.Bigint).Value = (object?)companyId ?? DBNull.Value;
@@ -1276,10 +1363,10 @@ admin.MapPost("/okdesk/sync", async (HttpContext context, IAntiforgery antiforge
 admin.MapGet("/packages", async (NpgsqlDataSource db) =>
 {
     await using var connection = await db.OpenConnectionAsync();
-    await using var command = new NpgsqlCommand("SELECT id,package_key,version,platform,sha256,size_bytes,download_name,is_latest,created_at FROM packages ORDER BY created_at DESC LIMIT 300", connection);
+    await using var command = new NpgsqlCommand("SELECT id,package_key,version,platform,sha256,size_bytes,download_name,is_latest,created_at,product_name FROM packages ORDER BY is_latest DESC,created_at DESC LIMIT 500", connection);
     await using var reader = await command.ExecuteReaderAsync();
     var rows = new List<object>();
-    while (await reader.ReadAsync()) rows.Add(new { id=reader.GetGuid(0), key=reader.GetString(1), version=reader.GetString(2), platform=reader.GetString(3), sha256=reader.GetString(4), sizeBytes=reader.GetInt64(5), fileName=reader.GetString(6), latest=reader.GetBoolean(7), createdAt=reader.GetDateTime(8) });
+    while (await reader.ReadAsync()) rows.Add(new { id=reader.GetGuid(0), key=reader.GetString(1), version=reader.GetString(2), platform=reader.GetString(3), sha256=reader.GetString(4), sizeBytes=reader.GetInt64(5), fileName=reader.GetString(6), latest=reader.GetBoolean(7), createdAt=reader.GetDateTime(8), name=reader.GetString(9) });
     return Results.Ok(rows);
 });
 admin.MapPost("/packages/{id:guid}/activate", async (Guid id, HttpContext context, IAntiforgery antiforgery, NpgsqlDataSource db) =>
@@ -1303,6 +1390,12 @@ admin.MapPost("/packages/{id:guid}/activate", async (Guid id, HttpContext contex
         packageLock.Parameters.AddWithValue("key",key); packageLock.Parameters.AddWithValue("platform",platform);
         await packageLock.ExecuteNonQueryAsync(context.RequestAborted);
     }
+    await using (var verify = new NpgsqlCommand("SELECT storage_name FROM packages WHERE id=@id FOR UPDATE", connection, transaction))
+    {
+        verify.Parameters.AddWithValue("id", id);
+        var storage = await verify.ExecuteScalarAsync(context.RequestAborted) as string;
+        if (storage is null || !File.Exists(Path.Combine(packageRoot, storage))) return Results.NotFound();
+    }
     await using (var demote = new NpgsqlCommand("UPDATE packages SET is_latest=false WHERE package_key=@key AND platform=@platform", connection, transaction))
     {
         demote.Parameters.AddWithValue("key", key); demote.Parameters.AddWithValue("platform", platform);
@@ -1315,13 +1408,122 @@ admin.MapPost("/packages/{id:guid}/activate", async (Guid id, HttpContext contex
     await transaction.CommitAsync(context.RequestAborted);
     return Results.Ok(new { active = id });
 });
+admin.MapDelete("/packages/{id:guid}", async (Guid id, HttpContext context, IAntiforgery antiforgery, NpgsqlDataSource db) =>
+{
+    if (!await SameOriginAsync(context)) return Results.BadRequest(new { error = "Недопустимый источник запроса." });
+    await antiforgery.ValidateRequestAsync(context);
+    await using var connection = await db.OpenConnectionAsync(context.RequestAborted);
+    await using var transaction = await connection.BeginTransactionAsync(context.RequestAborted);
+
+    string key;
+    string platform;
+    await using (var findIdentity = new NpgsqlCommand("SELECT package_key,platform FROM packages WHERE id=@id", connection, transaction))
+    {
+        findIdentity.Parameters.AddWithValue("id", id);
+        await using var reader = await findIdentity.ExecuteReaderAsync(context.RequestAborted);
+        if (!await reader.ReadAsync(context.RequestAborted)) return Results.NotFound();
+        key = reader.GetString(0);
+        platform = reader.GetString(1);
+    }
+
+    await using (var packageLock = new NpgsqlCommand("SELECT pg_advisory_xact_lock(hashtextextended(@key||':'||@platform,0))", connection, transaction))
+    {
+        packageLock.Parameters.AddWithValue("key", key);
+        packageLock.Parameters.AddWithValue("platform", platform);
+        await packageLock.ExecuteNonQueryAsync(context.RequestAborted);
+    }
+
+    string storageName;
+    bool wasLatest;
+    await using (var findPackage = new NpgsqlCommand("SELECT storage_name,is_latest FROM packages WHERE id=@id FOR UPDATE", connection, transaction))
+    {
+        findPackage.Parameters.AddWithValue("id", id);
+        await using var reader = await findPackage.ExecuteReaderAsync(context.RequestAborted);
+        if (!await reader.ReadAsync(context.RequestAborted)) return Results.NotFound();
+        storageName = reader.GetString(0);
+        wasLatest = reader.GetBoolean(1);
+    }
+
+    Guid? fallbackId = null;
+    string? fallbackVersion = null;
+    if (wasLatest)
+    {
+        await using var fallback = new NpgsqlCommand("SELECT id,version,storage_name FROM packages WHERE package_key=@key AND platform=@platform AND id<>@id ORDER BY created_at DESC,id DESC", connection, transaction);
+        fallback.Parameters.AddWithValue("key", key);
+        fallback.Parameters.AddWithValue("platform", platform);
+        fallback.Parameters.AddWithValue("id", id);
+        await using var reader = await fallback.ExecuteReaderAsync(context.RequestAborted);
+        while (await reader.ReadAsync(context.RequestAborted))
+        {
+            var candidateStorage = reader.GetString(2);
+            if (!string.Equals(Path.GetFileName(candidateStorage), candidateStorage, StringComparison.Ordinal) ||
+                !File.Exists(Path.Combine(packageRoot, candidateStorage))) continue;
+            fallbackId = reader.GetGuid(0);
+            fallbackVersion = reader.GetString(1);
+            break;
+        }
+    }
+
+    if (!string.Equals(Path.GetFileName(storageName), storageName, StringComparison.Ordinal))
+        return Results.Problem("Путь пакета повреждён; запись не удалена.", statusCode: StatusCodes.Status500InternalServerError);
+    var packagePath = Path.Combine(packageRoot, storageName);
+    var stagedPath = Path.Combine(packageRoot, ".deleting-" + Guid.NewGuid().ToString("N"));
+    var staged = false;
+    var committed = false;
+    try
+    {
+        if (File.Exists(packagePath))
+        {
+            File.Move(packagePath, stagedPath);
+            staged = true;
+        }
+
+        await using (var delete = new NpgsqlCommand("DELETE FROM packages WHERE id=@id", connection, transaction))
+        {
+            delete.Parameters.AddWithValue("id", id);
+            if (await delete.ExecuteNonQueryAsync(context.RequestAborted) != 1)
+                throw new InvalidOperationException("Пакет исчез во время удаления.");
+        }
+        if (fallbackId is { } restoreId)
+        {
+            await using var promote = new NpgsqlCommand("UPDATE packages SET is_latest=true WHERE id=@id", connection, transaction);
+            promote.Parameters.AddWithValue("id", restoreId);
+            await promote.ExecuteNonQueryAsync(context.RequestAborted);
+        }
+
+        await transaction.CommitAsync(context.RequestAborted);
+        committed = true;
+        var cleanupPending = false;
+        if (staged)
+        {
+            try { File.Delete(stagedPath); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { cleanupPending = true; }
+        }
+        return Results.Ok(new { deleted = id, fallbackVersion, cleanupPending });
+    }
+    catch
+    {
+        if (!committed && staged && File.Exists(stagedPath) && !File.Exists(packagePath))
+        {
+            try { File.Move(stagedPath, packagePath); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        throw;
+    }
+});
 admin.MapPost("/packages", async (HttpContext context, IAntiforgery antiforgery, NpgsqlDataSource db) =>
 {
     if (!await SameOriginAsync(context)) return Results.BadRequest(new { error = "Недопустимый источник запроса." });
     await antiforgery.ValidateRequestAsync(context);
-    var form = await context.Request.ReadFormAsync();
+    Microsoft.AspNetCore.Http.IFormCollection form;
+    try { form = await context.Request.ReadFormAsync(context.RequestAborted); }
+    catch (InvalidDataException)
+    {
+        return Results.BadRequest(new { error = "Форма загрузки повреждена или файл превышает лимит 1 ГБ." });
+    }
     var key = form["key"].ToString().Trim().ToLowerInvariant();
     var requestedVersion = form["version"].ToString().Trim();
+    var requestedName = form["name"].ToString().Trim();
     var platform = form["platform"].ToString().Trim().ToLowerInvariant();
     var file = form.Files.GetFile("file");
     if (!System.Text.RegularExpressions.Regex.IsMatch(key, "^[a-zA-Z0-9._-]{1,64}$") ||
@@ -1335,13 +1537,9 @@ admin.MapPost("/packages", async (HttpContext context, IAntiforgery antiforgery,
         return Results.BadRequest(new { error = "Установщик приложения должен быть EXE-файлом." });
     if (key=="application" && !string.IsNullOrWhiteSpace(requestedVersion) && !PackageVersionDetector.TryParse(requestedVersion, out _))
         return Results.BadRequest(new { error = "Версия должна иметь формат major.minor.patch или определяться автоматически." });
-    var version = requestedVersion;
-    await using (var checkConnection = await db.OpenConnectionAsync(context.RequestAborted))
-    await using (var duplicate = new NpgsqlCommand("SELECT EXISTS(SELECT 1 FROM packages WHERE package_key=@key AND version=@version AND platform=@platform)", checkConnection))
-    {
-        duplicate.Parameters.AddWithValue("key", key); duplicate.Parameters.AddWithValue("version", version); duplicate.Parameters.AddWithValue("platform", platform);
-        if (await duplicate.ExecuteScalarAsync(context.RequestAborted) is true) return Results.Conflict(new { error = "Такая версия уже загружена." });
-    }
+    if (requestedName.Length > 160) return Results.BadRequest(new { error = "Название ПО не должно превышать 160 символов." });
+    var uploadFileName = Path.GetFileName(file.FileName.Replace('\\', '/'));
+    if (string.IsNullOrWhiteSpace(uploadFileName)) uploadFileName = "package.bin";
     var id = Guid.NewGuid();
     var destination = Path.Combine(packageRoot, id.ToString("N"));
     var stored = false;
@@ -1350,13 +1548,25 @@ admin.MapPost("/packages", async (HttpContext context, IAntiforgery antiforgery,
     await using (var output = File.Create(destination)) await file.CopyToAsync(output, context.RequestAborted);
     string hash;
     await using (var stream = File.OpenRead(destination)) hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, context.RequestAborted));
-    var detectedVersion = new Version(0, 0, 0);
-    if (string.IsNullOrWhiteSpace(version) &&
-        !PackageVersionDetector.TryDetect(destination, file.FileName, out detectedVersion))
-        return Results.BadRequest(new { error = "Не удалось определить версию установщика. Укажите версию вручную или загрузите EXE с FileVersion." });
-    if (string.IsNullOrWhiteSpace(version)) version = detectedVersion.ToString(3);
-    if (string.IsNullOrWhiteSpace(version)) version = "unknown";
+    var metadata = PackageVersionDetector.Detect(destination, uploadFileName);
+    var version = requestedVersion;
+    if (string.IsNullOrWhiteSpace(version))
+    {
+        if (metadata.Version is null)
+            return Results.BadRequest(new { error = "Не удалось определить версию по ProductVersion, FileVersion или имени файла. Введите версию вручную." });
+        version = metadata.Version.ToString(3);
+    }
+    var productName = string.IsNullOrWhiteSpace(requestedName) ? metadata.Name : requestedName;
+    productName = string.Join(' ', productName.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
     await using var connection = await db.OpenConnectionAsync(context.RequestAborted);
+    await using (var duplicate = new NpgsqlCommand("SELECT EXISTS(SELECT 1 FROM packages WHERE package_key=@key AND version=@version AND platform=@platform)", connection))
+    {
+        duplicate.Parameters.AddWithValue("key", key);
+        duplicate.Parameters.AddWithValue("version", version);
+        duplicate.Parameters.AddWithValue("platform", platform);
+        if (await duplicate.ExecuteScalarAsync(context.RequestAborted) is true)
+            return Results.Conflict(new { error = "Такая версия уже загружена." });
+    }
     await using var transaction = await connection.BeginTransactionAsync(context.RequestAborted);
     await using (var packageLock = new NpgsqlCommand("SELECT pg_advisory_xact_lock(hashtextextended(@key||':'||@platform,0))",connection,transaction))
     {
@@ -1367,20 +1577,25 @@ admin.MapPost("/packages", async (HttpContext context, IAntiforgery antiforgery,
     {
         demote.Parameters.AddWithValue("key",key); demote.Parameters.AddWithValue("platform",platform); await demote.ExecuteNonQueryAsync(context.RequestAborted);
     }
-    await using (var insert = new NpgsqlCommand("INSERT INTO packages(id,package_key,version,platform,sha256,size_bytes,download_name,storage_name,is_latest,created_at) VALUES(@id,@key,@version,@platform,@hash,@size,@name,@storage,true,now())", connection, transaction))
+    await using (var insert = new NpgsqlCommand("INSERT INTO packages(id,package_key,version,platform,sha256,size_bytes,product_name,download_name,storage_name,is_latest,created_at) VALUES(@id,@key,@version,@platform,@hash,@size,@product,@name,@storage,true,now())", connection, transaction))
     {
         insert.Parameters.AddWithValue("id",id); insert.Parameters.AddWithValue("key",key); insert.Parameters.AddWithValue("version",version);
         insert.Parameters.AddWithValue("platform",platform); insert.Parameters.AddWithValue("hash",hash); insert.Parameters.AddWithValue("size",file.Length);
-        insert.Parameters.AddWithValue("name",Path.GetFileName(file.FileName)); insert.Parameters.AddWithValue("storage",id.ToString("N"));
+        insert.Parameters.AddWithValue("product",productName); insert.Parameters.AddWithValue("name",uploadFileName); insert.Parameters.AddWithValue("storage",id.ToString("N"));
         await insert.ExecuteNonQueryAsync(context.RequestAborted);
     }
     await transaction.CommitAsync(context.RequestAborted);
     stored = true;
-    return Results.Ok(new { id, key, version, platform, sha256=hash, sizeBytes=file.Length });
+    return Results.Ok(new { id, key, name=productName, version, platform, sha256=hash, sizeBytes=file.Length });
     }
     catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
     {
         return Results.Conflict(new { error="Такая версия уже загружена. Обновите список пакетов." });
+    }
+    catch (IOException) when (!context.RequestAborted.IsCancellationRequested)
+    {
+        return Results.Json(new { error = "Не удалось сохранить пакет: проверьте свободное место на сервере." },
+            statusCode: StatusCodes.Status507InsufficientStorage);
     }
     finally
     {
@@ -1411,6 +1626,6 @@ public sealed record TicketBlockRequest(bool Blocked);
 public sealed record UpdateAssignmentRequest(long CompanyId, long? SiteId, string? InventoryNumber);
 public sealed record ResolveAssignmentRequest(string? InventoryNumber);
 public sealed record CreateTicketRequest(Guid RequestId, string? Title, string? ServiceCode, string? Description,
-    IReadOnlyList<TicketAttachmentInput>? Attachments = null);
+    IReadOnlyList<TicketAttachmentInput>? Attachments = null, string? ComputerInfo = null);
 public sealed record CreateTicketMessageRequest(Guid MessageId, string? Content,
     IReadOnlyList<TicketAttachmentInput>? Attachments = null);

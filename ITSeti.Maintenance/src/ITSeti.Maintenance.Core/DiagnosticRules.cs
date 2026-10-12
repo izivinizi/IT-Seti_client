@@ -101,7 +101,7 @@ public static class DiagnosticRules
                     .Select(p => $"{p.DisplayName} ({p.MemoryLabel})").ToArray() ?? [];
                 var detail = "Свободной памяти почти не осталось. Компьютер переносит данные на диск, поэтому программы могут заметно тормозить.";
                 if (users.Length > 0) detail += " Больше всего памяти занимают: " + string.Join(", ", users) + ".";
-                issues.Add(new("Компьютеру не хватает памяти", detail, "Critical"));
+                issues.Add(new("Мало доступной памяти", detail, "Warning"));
             }
             else if (sample is not null && sample.MemoryHighSamples >= 5)
             {
@@ -113,34 +113,33 @@ public static class DiagnosticRules
             }
         }
         if (sample is not null && sample.CpuCriticalSamples >= 3)
-            issues.Add(new("Критическая загрузка процессора", $"Нагрузка держалась на уровне 98% и выше в {sample.CpuCriticalSamples} из {sample.Samples} замеров за 30 секунд.", "Critical"));
+            issues.Add(new("Высокая загрузка процессора", $"Нагрузка держалась на уровне 98% и выше в {sample.CpuCriticalSamples} из {sample.Samples} замеров за 30 секунд.", "Warning"));
         else if (sample is not null && sample.CpuHighSamples >= 5)
             issues.Add(new("Процессор долго работал на пределе", "Нагрузка держалась выше 90% большую часть проверки. Из-за этого программы могут отвечать медленно.", "Warning"));
         if (sample is not null && sample.MemoryCriticalSamples >= 3)
-            issues.Add(new("Критическая загрузка памяти", $"ОЗУ было занято на 98% и выше в {sample.MemoryCriticalSamples} из {sample.Samples} замеров за 30 секунд.", "Critical"));
+            issues.Add(new("Высокая загрузка памяти", $"ОЗУ было занято на 98% и выше в {sample.MemoryCriticalSamples} из {sample.Samples} замеров за 30 секунд.", "Warning"));
         var systemDrive = (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").TrimEnd('\\');
         foreach (var disk in snapshot.Disks.Where(d =>
                      string.Equals(d.Name.TrimEnd('\\'), systemDrive, StringComparison.OrdinalIgnoreCase) &&
                      d.TotalBytes >= 50L * 1073741824 && d.FreeBytes < 15L * 1073741824))
         {
-            var severe = disk.FreeBytes < 5L * 1073741824;
-            issues.Add(new($"На диске {disk.Name} мало места", $"Свободно {disk.FreeBytes / 1073741824.0:N1} ГБ. Можно выполнить очистку или посмотреть, какие файлы занимают место.", severe ? "Critical" : "Warning"));
+            issues.Add(new($"На диске {disk.Name} мало места", $"Свободно {disk.FreeBytes / 1073741824.0:N1} ГБ. Можно выполнить очистку или посмотреть, какие файлы занимают место.", "Warning"));
         }
-        foreach (var disk in (full?.PhysicalDisks ?? snapshot.QuickDisks ?? []).Where(d => HasBadWindowsHealth(d.Health)))
+        foreach (var disk in (full?.PhysicalDisks ?? snapshot.QuickDisks ?? []).Where(d => IsSystemDisk(d.Model, full, snapshot.QuickDisks) && HasBadWindowsHealth(d.Health)))
             issues.Add(new($"Диск {disk.Model} требует проверки", "Windows сообщает о проблеме с накопителем. Сохраните важные файлы и обратитесь к специалисту.", "Critical"));
         if (full is not null)
         {
-            foreach (var disk in full.SmartDisks.Where(d => Regex.IsMatch(d.Status, "Caution|Bad|Тревог|Плох", RegexOptions.IgnoreCase)
-                         || !string.IsNullOrWhiteSpace(d.SmartWarnings)))
+            foreach (var disk in full.SmartDisks.Where(d => IsSystemSmartDisk(d, full) && (Regex.IsMatch(d.Status, "Caution|Bad|Тревог|Плох", RegexOptions.IgnoreCase)
+                         || !string.IsNullOrWhiteSpace(d.SmartWarnings))))
             {
                 var details = string.IsNullOrWhiteSpace(disk.SmartWarnings) ? "Сохраните важные файлы и обратитесь к специалисту для проверки диска."
                     : $"SMART: {disk.SmartWarnings}. Сохраните важные файлы и проверьте накопитель.";
                 issues.Add(new($"Состояние диска {disk.Model} вызывает опасения", details, "Critical"));
             }
-            foreach (var disk in full.SmartDisks.Where(d => DiskLifetime.ExceedsWarning(d.PowerOnHours)))
+            foreach (var disk in full.SmartDisks.Where(d => IsSystemSmartDisk(d, full) && DiskLifetime.ExceedsWarning(d.PowerOnHours)))
                 issues.Add(new($"Накопитель {disk.Model} наработал более 60 000 часов",
                     $"Наработка: {DiskLifetime.Format(disk.PowerOnHours)}. Это повод внимательнее следить за состоянием SMART и резервными копиями, но само по себе не означает неисправность.", "Warning"));
-            foreach (var disk in full.PhysicalDisks.Where(d => DiskLifetime.ExceedsWarning(d.PowerOnHours)
+            foreach (var disk in full.PhysicalDisks.Where(d => IsSystemDisk(d.Model, full, snapshot.QuickDisks) && DiskLifetime.ExceedsWarning(d.PowerOnHours)
                          && !full.SmartDisks.Any(s => string.Equals(s.Model, d.Model, StringComparison.OrdinalIgnoreCase)
                              && DiskLifetime.ExceedsWarning(s.PowerOnHours))))
                 issues.Add(new($"Накопитель {disk.Model} наработал более 60 000 часов",
@@ -156,12 +155,26 @@ public static class DiagnosticRules
             {
                 var latency = Math.Max(sample.DiskReadLatencyMs ?? 0, sample.DiskWriteLatencyMs ?? 0);
                 var operations = sample.DiskReadOperations + sample.DiskWriteOperations;
-                var limit = benchmark.MediaType == "HDD" ? 80 : 25;
+                const double limit = 100;
                 if (operations >= 100 && latency >= limit)
                     issues.Add(new("Системный диск долго отвечает", $"В среднем ответ занимал {latency:N0} мс. Это может замедлять открытие файлов и программ; краткие скачки задержки не считаются неисправностью.", "Warning"));
             }
         }
         return issues.OrderByDescending(i => i.Priority).ToArray();
+    }
+
+    private static bool IsSystemSmartDisk(SmartDiskDetails disk, FullDiagnosticDetails full)
+    {
+        var drive = (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").TrimEnd('\\').TrimEnd(':');
+        if (Regex.IsMatch(disk.Letters ?? "", $@"(?<![A-Z]){Regex.Escape(drive)}(?=[:\\,\s]|$)", RegexOptions.IgnoreCase)) return true;
+        return full.SmartDisks.Count == 1 && full.PhysicalDisks.Count <= 1;
+    }
+
+    private static bool IsSystemDisk(string model, FullDiagnosticDetails? full, List<PhysicalDiskDetails>? quickDisks)
+    {
+        if (full is null) return quickDisks?.Count <= 1;
+        var smart = full.SmartDisks.FirstOrDefault(d => string.Equals(d.Model, model, StringComparison.OrdinalIgnoreCase));
+        return smart is not null ? IsSystemSmartDisk(smart, full) : full.PhysicalDisks.Count == 1;
     }
 
     private static void AddRailIssue(ICollection<UserIssue> issues, string label, double? value,
@@ -256,7 +269,7 @@ public static class DiagnosticRules
         if (sample is not null && benchmark.MediaType is ("SSD" or "HDD"))
         {
             var latency = Math.Max(sample.DiskReadLatencyMs ?? 0, sample.DiskWriteLatencyMs ?? 0);
-            if (sample.DiskReadOperations + sample.DiskWriteOperations >= 100 && latency >= (benchmark.MediaType == "HDD" ? 80 : 25))
+            if (sample.DiskReadOperations + sample.DiskWriteOperations >= 100 && latency >= 100)
                 findings.Add($"{benchmark.Drive}: средняя задержка диска {latency:N0} мс за 30 секунд; проверьте при обычной нагрузке.");
         }
         return findings;

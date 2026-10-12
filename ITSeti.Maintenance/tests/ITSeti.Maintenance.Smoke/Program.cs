@@ -32,10 +32,10 @@ internal static class Program
             var updateClient = new ServerApplicationUpdateClient();
             var release = updateClient.GetUpdateAsync(new Version(2, 3, 6)).GetAwaiter().GetResult();
             if (release?.Version != new Version(2, 3, 7) || !release.DownloadUrl.StartsWith("https://it-seti.nylenz.ru/api/v1/packages/", StringComparison.Ordinal))
-                throw new Exception("Live server did not offer 2.3.7 for 2.3.6");
+                throw new Exception("Live server did not offer 2.3.9 for 2.3.6");
             if (updateClient.GetUpdateAsync(new Version(2, 3, 7)).GetAwaiter().GetResult() is not null)
                 throw new Exception("Live server offers reinstall of already-current version");
-            Console.WriteLine("PASS live server: 2.3.6 receives 2.3.7, 2.3.7 is current, authenticated package URL validated");
+            Console.WriteLine("PASS live server: 2.3.6 receives 2.3.9, 2.3.9 is current, authenticated package URL validated");
             return 0;
         }
         if (args.Contains("--service-concurrency-contract"))
@@ -192,8 +192,8 @@ internal static class Program
                     handler.Response = Batch(false, false);
                     var delay = monitor.PollAsync().GetAwaiter().GetResult();
                     var completed = JsonDocument.Parse(File.ReadAllText(monitor.StatePath)).RootElement;
-                    if (completed.GetProperty("activeCount").GetInt32() != 0 || delay != TimeSpan.FromMinutes(2))
-                        throw new Exception("Completed ticket did not return to the idle poll interval");
+                    if (completed.GetProperty("activeCount").GetInt32() != 0 || delay != Timeout.InfiniteTimeSpan)
+                        throw new Exception("Completed ticket did not suspend polling until another ticket is created");
                 }
                 using (var damaged = new TicketUpdateMonitor(rootPath, handler))
                 {
@@ -203,6 +203,9 @@ internal static class Program
                     var repaired = JsonDocument.Parse(File.ReadAllText(damaged.StatePath)).RootElement;
                     if (repaired.GetProperty("activeCount").GetInt32() != 0) throw new Exception("Damaged ticket state did not recover");
                 }
+                using (var unconfigured = new TicketUpdateMonitor(Path.Combine(rootPath, "unconfigured"), handler))
+                    if (unconfigured.PollAsync().GetAwaiter().GetResult() != Timeout.InfiniteTimeSpan)
+                        throw new Exception("Unconfigured ticket polling did not suspend while there is no server connection");
                 Console.WriteLine("PASS: service ticket queue, silent baseline, deduplication, restart, malformed response recovery and completed-ticket idle cadence");
             }
             finally { if (Directory.Exists(rootPath)) Directory.Delete(rootPath, true); }
@@ -874,14 +877,45 @@ internal static class Program
             throw new Exception("HWiNFO sensor JSON mapping did not preserve CPU, VRM, rail and load readings");
         if (hwInfo.AlertingSensors.Count != 1 || !hwInfo.AlertingSensors[0].IsCritical)
             throw new Exception("HWiNFO explicit critical sensor status was not preserved");
+        var duplicateRails = HwInfoReader.Parse("""
+            {"Sensors":[
+              {"Name":"+12V","Value":6.63,"Unit":"V"},
+              {"Name":"Motherboard +12V","Value":12.04,"Unit":"V"},
+              {"Name":"+5V","Value":0.73,"Unit":"V"},
+              {"Name":"+5VSB","Value":5.02,"Unit":"V"},
+              {"Name":"+3.3V","Value":1.99,"Unit":"V"},
+              {"Name":"3.3 V Standby","Value":3.29,"Unit":"V"},
+              {"Name":"CPU Core Voltage","Value":1.2,"Unit":"V"}]}
+            """, "fixture");
+        if (duplicateRails?.Rail12V != 12.04 || duplicateRails.Rail5V != 5.02 || duplicateRails.Rail3V != 3.29 ||
+            duplicateRails.Sensors.Any(sensor => sensor.Name == "CPU Core Voltage" && sensor.Category.StartsWith("Rail", StringComparison.Ordinal)))
+            throw new Exception("HWiNFO selected a non-nominal duplicate rail or classified CPU core voltage as a PSU rail");
+
+        HwInfoVoltageStabilizer.Reset();
+        var voltageSample = new HwInfoSensorReading("+12V", 6.63, "V", "Rail12V");
+        if (HwInfoVoltageStabilizer.Stabilize([voltageSample]).Count != 0 ||
+            HwInfoVoltageStabilizer.Stabilize([voltageSample with { Value = 12.04 }]).Count != 0)
+            throw new Exception("HWiNFO rail values were exposed before the startup samples stabilized");
+        var stabilizedRail = HwInfoVoltageStabilizer.Stabilize([voltageSample with { Value = 12.01 }]).SingleOrDefault();
+        if (stabilizedRail is not null)
+            throw new Exception("An implausible startup rail sample influenced the median");
+        stabilizedRail = HwInfoVoltageStabilizer.Stabilize([voltageSample with { Value = 12.00 }]).Single();
+        if (stabilizedRail.Value != 12.01)
+            throw new Exception("A one-time HWiNFO voltage outlier was not rejected by the rolling median");
+        HwInfoVoltageStabilizer.Reset();
+        HwInfoVoltageStabilizer.Stabilize([voltageSample]);
+        HwInfoVoltageStabilizer.Stabilize([voltageSample]);
+        if (HwInfoVoltageStabilizer.Stabilize([voltageSample]).Count != 0)
+            throw new Exception("An implausible HWiNFO rail value was exposed to monitoring");
+        HwInfoVoltageStabilizer.Reset();
         var csv = HwInfoReader.ParseSensorCsv("""
             "Date","Time","Total CPU Usage [%]","CPU Package [°C]","VRM MOS [°C]","PCH [°C]","+12V [V]","+5V [V]"
             "11.10.2026","10:00:00","17.0","62.375","71","58","12.04","5.01"
             "11.10.2026","10:00:01","25.0","64.5","73","59","12.02","5.00"
             """, "fixture.csv");
         if (csv?.CpuLoadPercent != 25 || csv.CpuTemperatureC != 64.5 || csv.VrmTemperatureC != 73 ||
-            csv.PchTemperatureC != 59 || csv.Rail12V != 12.04 || csv.Rail5V != 5.01)
-            throw new Exception("HWiNFO CSV sensor log mapping did not preserve peak sensor readings");
+            csv.PchTemperatureC != 59 || csv.Rail12V != 12.02 || csv.Rail5V != 5.00)
+            throw new Exception("HWiNFO CSV mapping did not preserve peak temperatures and nominal-nearest voltage readings");
         Console.WriteLine("PASS: HWiNFO JSON and licensed CSV sensor mapping contracts.");
         static string Payload(string version, string digest) => $$"""
             {"id":"11111111-1111-1111-1111-111111111111","key":"application","version":"{{version}}",
@@ -1129,8 +1163,8 @@ internal static class Program
             throw new Exception("Sustained 90% memory pressure was not reported");
         var criticalMemory = memory with { Full = memory.Full! with
             { ResourceSampling = pressure with { LowAvailableSamples = 7, PagingHighSamples = 4, PagesOutputAverage = 120 } } };
-        if (!DiagnosticRules.GetUserIssues(criticalMemory).Any(i => i.Title.Contains("не хватает памяти") && i.Severity == "Critical"))
-            throw new Exception("Paging pressure was not critical");
+        if (!DiagnosticRules.GetUserIssues(criticalMemory).Any(i => i.Title.Contains("доступной памяти") && i.Severity == "Warning"))
+            throw new Exception("Sustained paging pressure must be a noncritical warning");
         if (!DiagnosticRules.GetUserIssues(snapshot with { TotalMemoryBytes = 4L * 1073741824, Full = full })
             .Any(i => i.Title.Contains("Небольшой объём памяти") && i.Severity == "Warning")) throw new Exception("4 GB RAM advisory missing");
         if (DiagnosticRules.GetUserIssues(snapshot with { TotalMemoryBytes = 8L * 1073741824, Full = full })
@@ -1172,7 +1206,7 @@ internal static class Program
         if (DiagnosticRules.GetUserIssues(lowSpace with { Disks = [new DiskSnapshot("C:\\", 49L * 1073741824, 1L * 1073741824)] })
             .Any(i => i.Title.Contains("места"))) throw new Exception("Partitions smaller than 50 GB must not trigger low-space warnings");
         lowSpace = lowSpace with { Disks = [new DiskSnapshot("C:\\", 100L * 1073741824, 4L * 1073741824)] };
-        if (!DiagnosticRules.GetUserIssues(lowSpace).Any(i => i.Title.Contains("места") && i.Severity == "Critical")) throw new Exception("5 GB space critical missing");
+        if (!DiagnosticRules.GetUserIssues(lowSpace).Any(i => i.Title.Contains("места") && i.Severity == "Warning")) throw new Exception("Low system-disk space must remain a warning");
         if (!DiagnosticRules.GetUserIssues(snapshot with { Full = full with { Benchmark = benchmark with { Read = 179 } } })
             .Any(i => i.Title.Contains("медленно") && i.Severity == "Critical")) throw new Exception("SSD critical speed missing");
         if (!DiagnosticRules.GetUserIssues(snapshot with { Full = full with { Benchmark = benchmark with { MediaType = "HDD", Read = 79 } } })
@@ -1184,6 +1218,19 @@ internal static class Program
             ResourceSampling = pressure with { MemoryHighSamples = 0, DiskReadLatencyMs = 120, DiskReadOperations = 120 } } };
         if (!DiagnosticRules.GetUserIssues(hddLatency).Any(i => i.Title.Contains("долго отвечает") && i.Severity == "Warning"))
             throw new Exception("Sustained HDD latency advisory missing");
+        if (CriticalMonitoringEvaluator.Evaluate(snapshot with { CpuPercent = 100, AvailableMemoryBytes = 1, Disks = [new DiskSnapshot("C:\\", 100L * 1073741824, 1)] }).Count != 0)
+            throw new Exception("CPU, memory and free-space pressure must not create critical monitoring alerts");
+        if (CriticalMonitoringEvaluator.Evaluate(snapshot with { DiskReadLatencyMs = 99 }).Any(issue => issue.Identity == "disk:latency") ||
+            !CriticalMonitoringEvaluator.Evaluate(snapshot with { DiskReadLatencyMs = 100 }).Any(issue => issue.Identity == "disk:latency"))
+            throw new Exception("Disk response monitoring threshold must be 100 ms");
+        var secondaryDisk = new PhysicalDiskDetails("Data disk", "HDD", "Warning");
+        var secondarySmart = new SmartDiskDetails("Data disk", "Bad", "D:", "HDD", "SATA/600");
+        var multiDisk = snapshot with { QuickDisks = [new PhysicalDiskDetails("System", "SSD", "Healthy"), secondaryDisk],
+            Full = full with { PhysicalDisks = [new PhysicalDiskDetails("System", "SSD", "Healthy"), secondaryDisk],
+                SmartDisks = [new SmartDiskDetails("System", "Good", "C:", "SSD", "PCIe"), secondarySmart] } };
+        if (DiagnosticRules.GetUserIssues(multiDisk).Any(issue => issue.Title.Contains("Data disk", StringComparison.OrdinalIgnoreCase)) ||
+            !DiagnosticRules.GetFindings(multiDisk).Any(finding => finding.Contains("Data disk", StringComparison.OrdinalIgnoreCase)))
+            throw new Exception("A bad non-system disk must stay in engineering findings, not the user overview");
         if (DiagnosticRules.GetUserIssues(hddLatency with { Full = hddLatency.Full! with
             { ResourceSampling = pressure with { MemoryHighSamples = 0, DiskReadLatencyMs = 200, DiskReadOperations = 2 } } })
             .Any(i => i.Title.Contains("долго отвечает"))) throw new Exception("Short HDD latency spike flagged");

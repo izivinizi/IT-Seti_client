@@ -222,10 +222,13 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         {
             var path = Path.Combine(root, "disk-progress.log");
             if (!File.Exists(path)) return [];
-            var lines = File.ReadAllLines(path);
-            if (lines.Length < seen) seen = 0;
+            using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            var lines = new List<string>();
+            while (reader.ReadLine() is { } line) lines.Add(line);
+            if (lines.Count < seen) seen = 0;
             var fresh = lines.Skip(seen).Where(line => !string.IsNullOrWhiteSpace(line)).ToArray();
-            seen = lines.Length;
+            seen = lines.Count;
             return fresh;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }

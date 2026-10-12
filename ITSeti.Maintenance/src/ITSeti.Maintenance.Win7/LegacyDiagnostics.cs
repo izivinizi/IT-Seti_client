@@ -51,6 +51,7 @@ namespace ITSeti.Maintenance.Win7
         public string Kind { get; set; }
         public string Status { get; set; }
         public string Speed { get; set; }
+        public string MacAddress { get; set; }
         public string Addresses { get; set; }
     }
 
@@ -100,6 +101,7 @@ namespace ITSeti.Maintenance.Win7
         public double? PchTemperatureC { get; set; }
         public double? Rail12V { get; set; }
         public double? Rail5V { get; set; }
+        public double? Rail3V { get; set; }
         public double? CpuVoltageV { get; set; }
         public double? TotalMemoryGb { get; set; }
         public double? FreeMemoryGb { get; set; }
@@ -139,12 +141,13 @@ namespace ITSeti.Maintenance.Win7
                 "",
                 "Диски:"
             };
-            if (!string.IsNullOrWhiteSpace(HwInfoVersion) || VrmTemperatureC.HasValue || PchTemperatureC.HasValue || Rail12V.HasValue || Rail5V.HasValue || CpuVoltageV.HasValue)
+            if (!string.IsNullOrWhiteSpace(HwInfoVersion) || VrmTemperatureC.HasValue || PchTemperatureC.HasValue || Rail12V.HasValue || Rail5V.HasValue || Rail3V.HasValue || CpuVoltageV.HasValue)
                 lines.Add("Датчики HWiNFO: " + (string.IsNullOrWhiteSpace(HwInfoVersion) ? "" : HwInfoVersion + " · ") +
                     "VRM " + (VrmTemperatureC.HasValue ? VrmTemperatureC.Value.ToString("N0") + " °C" : "нет данных") +
                     ", PCH " + (PchTemperatureC.HasValue ? PchTemperatureC.Value.ToString("N0") + " °C" : "нет данных") +
                     ", +12 В " + (Rail12V.HasValue ? Rail12V.Value.ToString("N2") + " В" : "нет данных") +
                     ", +5 В " + (Rail5V.HasValue ? Rail5V.Value.ToString("N2") + " В" : "нет данных") +
+                    ", +3,3 В " + (Rail3V.HasValue ? Rail3V.Value.ToString("N2") + " В" : "нет данных") +
                     ", Vcore/VSoC " + (CpuVoltageV.HasValue ? CpuVoltageV.Value.ToString("N2") + " В" : "нет данных"));
             foreach (var disk in Disks)
                 lines.Add(string.Format("  {0}: свободно {1:N1} из {2:N1} ГБ{3}", disk.Name,
@@ -157,7 +160,8 @@ namespace ITSeti.Maintenance.Win7
                     ? string.Format("чтение {0:N1}, запись {1:N1} МБ/с", Benchmark.ReadMbps, Benchmark.WriteMbps)
                     : Benchmark.Error ?? Benchmark.State));
             if (!string.IsNullOrWhiteSpace(CleanupSummary)) lines.Add("Очистка: " + CleanupSummary);
-            lines.Add("Сеть: " + (Network.Count == 0 ? "нет активных адаптеров" : string.Join("; ", Network.Select(x => x.Name + " " + x.Addresses))));
+            lines.Add("Сеть: " + (Network.Count == 0 ? "нет активных адаптеров" : string.Join("; ", Network.Select(x =>
+                x.Name + " · MAC " + (string.IsNullOrWhiteSpace(x.MacAddress) ? "не определён" : x.MacAddress) + " · IP " + x.Addresses))));
             lines.Add("Процессы: " + Processes.Count);
             lines.Add("");
             lines.Add("Требует внимания:");
@@ -186,8 +190,81 @@ namespace ITSeti.Maintenance.Win7
 
         public static LegacySnapshot CollectMonitoring(CancellationToken cancellationToken = default(CancellationToken))
         {
-            return CollectCore(false, cancellationToken, false, false, false, null, null, false);
+            cancellationToken.ThrowIfCancellationRequested();
+            var snapshot = new LegacySnapshot
+            {
+                Id = Guid.NewGuid().ToString("D"),
+                StartedAt = DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture),
+                Kind = "Постоянный мониторинг",
+                ComputerName = Environment.MachineName,
+                CheckedAt = DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss")
+            };
+            CollectLiveMemory(snapshot);
+            CollectLiveDisks(snapshot, cancellationToken);
+            LegacyExtras.CollectNetwork(snapshot);
+            return snapshot;
         }
+
+        private static void CollectLiveMemory(LegacySnapshot snapshot)
+        {
+            var status = new MemoryStatusEx { Length = (uint)Marshal.SizeOf(typeof(MemoryStatusEx)) };
+            if (!GlobalMemoryStatusEx(ref status) || status.TotalPhysical == 0)
+            {
+                snapshot.Unavailable.Add("ОЗУ: Windows не вернула данные о памяти.");
+                return;
+            }
+            snapshot.TotalMemoryGb = status.TotalPhysical / 1073741824.0;
+            snapshot.FreeMemoryGb = status.AvailablePhysical / 1073741824.0;
+        }
+
+        private static void CollectLiveDisks(LegacySnapshot snapshot, CancellationToken cancellationToken)
+        {
+            var systemDrive = Path.GetPathRoot(Environment.SystemDirectory).TrimEnd('\\');
+            try
+            {
+                foreach (var drive in DriveInfo.GetDrives())
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (drive.DriveType != DriveType.Fixed) continue;
+                    try
+                    {
+                        var total = drive.TotalSize;
+                        var free = drive.AvailableFreeSpace;
+                        var name = drive.Name.TrimEnd('\\');
+                        var isSystem = string.Equals(name, systemDrive, StringComparison.OrdinalIgnoreCase);
+                        snapshot.Disks.Add(new LegacyDisk { Name = name, TotalBytes = total, FreeBytes = free, IsSystem = isSystem });
+                        if (isSystem && total >= 50L * 1073741824 && free < 5L * 1073741824)
+                            snapshot.Findings.Add("Мало свободного места на системном диске " + name + ".");
+                    }
+                    catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException)
+                    {
+                        snapshot.Unavailable.Add("Диск " + drive.Name + ": " + ex.Message);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is InvalidOperationException)
+            {
+                snapshot.Unavailable.Add("Диски: " + ex.Message);
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        private struct MemoryStatusEx
+        {
+            public uint Length;
+            public uint MemoryLoad;
+            public ulong TotalPhysical;
+            public ulong AvailablePhysical;
+            public ulong TotalPageFile;
+            public ulong AvailablePageFile;
+            public ulong TotalVirtual;
+            public ulong AvailableVirtual;
+            public ulong AvailableExtendedVirtual;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GlobalMemoryStatusEx(ref MemoryStatusEx buffer);
 
         public static LegacySnapshot CollectWithCleanup(bool full, CancellationToken cancellationToken, bool scheduled,
             bool cleanupCurrentUser, string cleanupUserSid, IProgress<string> progress)
@@ -273,8 +350,6 @@ namespace ITSeti.Maintenance.Win7
                     {
                         result.TotalMemoryGb = totalKb / 1048576.0;
                         result.FreeMemoryGb = freeKb / 1048576.0;
-                        if (totalKb > 0 && (freeKb / totalKb < .1 || freeKb < 1048576))
-                            result.Findings.Add("Мало свободной оперативной памяти.");
                     }
                 }
             }
@@ -365,9 +440,8 @@ namespace ITSeti.Maintenance.Win7
                         var name = Convert.ToString(volume["DeviceID"]);
                         var isSystem = string.Equals(name, Path.GetPathRoot(Environment.SystemDirectory).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
                             result.Disks.Add(new LegacyDisk { Name = name, TotalBytes = total, FreeBytes = free, IsSystem = isSystem });
-                        if (total >= 50L * 1073741824 || isSystem)
-                            if (free < 5L * 1073741824 || (total > 0 && free < total / 10))
-                                result.Findings.Add("Мало свободного места на " + name + ".");
+                        if (isSystem && total >= 50L * 1073741824 && free < 15L * 1073741824)
+                            result.Findings.Add("Мало свободного места на системном диске " + name + ".");
                     }
                 }
                 result.Disks = result.Disks.OrderByDescending(x => x.IsSystem).ThenBy(x => x.Name).ToList();

@@ -41,6 +41,7 @@ public static class HwInfoReader
                 sensorProcess.Dispose(); sensorProcess = null;
             }
             sessionStartedUtc = DateTimeOffset.UtcNow;
+            HwInfoVoltageStabilizer.Reset();
             SaveSessionMarker();
             nextStartAttemptUtc = default;
         }
@@ -88,19 +89,21 @@ public static class HwInfoReader
                         UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden,
                         WorkingDirectory = Path.GetDirectoryName(executable)!
                     });
+                    if (sensorProcess is not null) HwInfoVoltageStabilizer.Reset();
                 }
             }
             ITSeti.HwInfoBridge.SensorValue[]? values = null;
-            for (var attempt = 0; attempt < 10; attempt++)
+            for (var attempt = 0; attempt < 3; attempt++)
             {
                 if(sensorProcess is not null && !sensorProcess.HasExited) ITSeti.HwInfoBridge.SensorReader.StartSensors(sensorProcess.Id);
                 try { values = ITSeti.HwInfoBridge.SensorReader.Read(); break; }
-                catch (FileNotFoundException) when (attempt < 9) { await Task.Delay(1000, cancellationToken); }
+                catch (FileNotFoundException) when (attempt < 2) { await Task.Delay(250, cancellationToken); }
             }
             var readings = (values ?? []).Select(value => new { value, category = Classify(value.Name, value.Unit) })
                 .Where(item => item.category is not null)
                 .Select(item => new HwInfoSensorReading(item.value.Name, item.value.Value, item.value.Unit, item.category!,
                     IsCritical:item.category=="HardwareAlarm" && item.value.Value>0 && !item.value.Unit.Contains("C",StringComparison.OrdinalIgnoreCase))).ToArray();
+            readings = HwInfoVoltageStabilizer.Stabilize(readings).ToArray();
             var snapshot = readings.Length == 0 ? null : new HwInfoSnapshot("HWiNFO Shared Memory", FileVersionInfo.GetVersionInfo(executable).FileVersion ?? "",
                 DateTimeOffset.UtcNow, null, null, null, null, readings);
             if (snapshot is not null)
@@ -302,6 +305,7 @@ public static class HwInfoReader
             (lower.Contains("load") || lower.Contains("usage") || lower.Contains("util") || lower.Contains("загруз") || lower.Contains("использ"))) return "CpuLoad";
         if (unit.Contains("c", StringComparison.OrdinalIgnoreCase) || lower.Contains("temperature") || lower.Contains("temp") || lower.Contains("температур"))
         {
+            if (lower.Contains("gpu") || lower.Contains("graphics") || lower.Contains("video")) return null;
             if (lower.Contains("vrm") || lower.Contains("mos") || lower.Contains("vr loop")) return "VrmTemperature";
             if (lower.Contains("pch") || lower.Contains("chipset") || lower.Contains("southbridge") || lower.Contains("platform controller") || lower.Contains("чипсет")) return "PchTemperature";
             if (lower.Contains("cpu") || lower.Contains("processor") || lower.Contains("package") || lower.Contains("tctl") || lower.Contains("tdie") || lower.Contains("процессор")) return "CpuTemperature";
@@ -309,9 +313,9 @@ public static class HwInfoReader
         }
         if (unit.Trim().Equals("V", StringComparison.OrdinalIgnoreCase) || lower.Contains("voltage") || lower.Contains(" vcore"))
         {
-            if (lower.Contains("3.3") || lower.Contains("3,3")) return "Rail3V";
-            if (lower.Contains("12v") || lower.Contains("+12")) return "Rail12V";
-            if (lower.Contains("5v") || lower.Contains("+5")) return "Rail5V";
+            if (Regex.IsMatch(lower, @"(?<![a-z0-9])\+?\s*3[.,]3\s*v(?![a-z0-9])", RegexOptions.CultureInvariant)) return "Rail3V";
+            if (Regex.IsMatch(lower, @"(?<![a-z0-9])\+?\s*12(?:[.,]0{1,2})?\s*v(?![a-z0-9])", RegexOptions.CultureInvariant)) return "Rail12V";
+            if (Regex.IsMatch(lower, @"(?<![a-z0-9])\+?\s*5(?:[.,]0{1,2})?\s*v(?:s\s*b)?(?![a-z0-9])", RegexOptions.CultureInvariant)) return "Rail5V";
             if (lower.Contains("vcore") || lower.Contains("vsoc") || lower.Contains("vsc") || lower.Contains("cpu core")) return "CpuVoltage";
             return "Voltage";
         }

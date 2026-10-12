@@ -31,28 +31,8 @@ public static class CriticalMonitoringEvaluator
         if (snapshot.HwInfo?.Rail5V is { } rail5 && (rail5 < HwInfoThresholds.Rail5CriticalMinV || rail5 > HwInfoThresholds.Rail5CriticalMaxV))
             issues.Add(new("hwinfo:rail-5v", "Критическое отклонение шины 5 В",
                 $"Напряжение шины 5 В: {rail5:N2} В."));
-        if (snapshot.CpuPercent is >= 98)
-            issues.Add(new("cpu:load", "Критическая загрузка CPU",
-                $"Загрузка процессора достигла {snapshot.CpuPercent:N0}%."));
         if (snapshot.HwInfo?.Rail3V is { } rail3 && (rail3 < 2.97 || rail3 > 3.63))
             issues.Add(new("hwinfo:rail-3v", "Критическое отклонение шины 3,3 В", $"Напряжение шины 3,3 В: {rail3:N2} В."));
-        if (snapshot.MemoryUsedPercent >= 98)
-            issues.Add(new("memory:load", "Критическая загрузка памяти",
-                $"Используется {snapshot.MemoryUsedPercent:N0}% оперативной памяти."));
-        if (snapshot.Full?.ResourceSampling is { Samples: >= 6, Error: "" } sample)
-        {
-            if (sample.CpuCriticalSamples >= 3)
-                issues.Add(new("cpu:load-sustained", "Критическая загрузка CPU за 30 секунд",
-                    $"Загрузка 98% и выше в {sample.CpuCriticalSamples} из {sample.Samples} замеров."));
-            if (sample.MemoryCriticalSamples >= 3)
-                issues.Add(new("memory:load-sustained", "Критическая загрузка памяти за 30 секунд",
-                    $"Загрузка памяти 98% и выше в {sample.MemoryCriticalSamples} из {sample.Samples} замеров."));
-        }
-        foreach (var disk in snapshot.Disks.Where(item => item.TotalBytes >= 50L * 1073741824 &&
-                     item.FreeBytes < 5L * 1073741824))
-            issues.Add(new("space:" + disk.Name.TrimEnd('\\').ToLowerInvariant(),
-                $"Критически мало места на диске {disk.Name}",
-                $"Свободно {disk.FreeBytes / 1073741824.0:N1} ГБ."));
         foreach (var disk in snapshot.QuickDisks ?? [])
         {
             if (disk.Health.Contains("Warning", StringComparison.OrdinalIgnoreCase) ||
@@ -64,9 +44,9 @@ public static class CriticalMonitoringEvaluator
                     $"Накопитель {disk.Model} сообщает критическое состояние", disk.Health));
         }
         var latency = Math.Max(snapshot.DiskReadLatencyMs ?? 0, snapshot.DiskWriteLatencyMs ?? 0);
-        if (latency >= 250)
+        if (latency >= 100)
             issues.Add(new("disk:latency", "Критическая задержка диска",
-                $"Средняя задержка отклика диска достигла {latency:N0} мс."));
+                $"Средняя задержка отклика диска держится на уровне {latency:N0} мс не менее 30 секунд."));
         return issues;
     }
 }

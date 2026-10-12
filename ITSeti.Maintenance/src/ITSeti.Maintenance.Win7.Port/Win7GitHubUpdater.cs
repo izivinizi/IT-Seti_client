@@ -199,7 +199,7 @@ namespace ITSeti.Maintenance.App
         private static WebClient NewClient()
         {
             var client = new TimeLimitedWebClient();
-                    client.Headers[HttpRequestHeader.UserAgent] = "ITSeti-Maintenance-Win7/2.3.7";
+                    client.Headers[HttpRequestHeader.UserAgent] = "ITSeti-Maintenance-Win7/2.3.9";
             client.Headers[HttpRequestHeader.CacheControl] = "no-cache";
             return client;
         }
@@ -244,7 +244,7 @@ namespace ITSeti.Maintenance.App
             request.Method = "GET";
             request.Timeout = 30000;
             request.ReadWriteTimeout = 30000;
-            request.UserAgent = "ITSeti-Maintenance-Win7/2.3.7";
+            request.UserAgent = "ITSeti-Maintenance-Win7/2.3.9";
             request.Headers["X-Device-Id"] = device.DeviceId;
             request.Headers["X-Device-Key"] = device.DeviceKey;
             try

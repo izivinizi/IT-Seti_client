@@ -2,6 +2,7 @@ param([string]$Root=(Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference='Stop'
 $serviceProject=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Service\ITSeti.Maintenance.Service.csproj') -Raw
 $coordinator=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Service\MaintenanceServiceCoordinator.cs') -Raw
+$installedCheck=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCheck.ps1') -Raw
 $protocol=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\MaintenanceServiceProtocol.cs') -Raw
 $client=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\MaintenanceServiceClient.cs') -Raw
 $diagnostics=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\WindowsDiagnosticsRunner.cs') -Raw
@@ -15,14 +16,14 @@ $notifier=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Tick
 $appStartup=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.App\App.xaml.cs') -Raw
 $mainWindow=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml.cs') -Raw
 $server=Get-Content -LiteralPath (Join-Path (Split-Path $Root -Parent) 'ITSeti.Server\Program.cs') -Raw
-if($serviceProject -notmatch '<Version>2\.3\.7</Version>' -or
+if($serviceProject -notmatch '<Version>2\.3\.9</Version>' -or
    !$protocol.Contains('ITSetiMaintenanceService') -or !$protocol.Contains('ITSeti.Maintenance.Service.v1') -or
    !$coordinator.Contains('BuiltinUsersSid') -or !$coordinator.Contains('PipeAccessRights.ReadWrite') -or
    !$coordinator.Contains('ResolveOperation') -or $coordinator.Contains('ProcessStartInfo(request') -or
    !$client.Contains('NamedPipeClientStream') -or !$client.Contains('CancelAfter(TimeSpan.FromSeconds(3))')) {
     throw 'The service IPC contract is missing its version, ACL, timeout, or fixed operation allowlist.'
 }
-foreach($operation in @('FullCheck','QuickCheck','DailySmartCheck','ScheduledFullCheck','Cleanup','Repair','OrganizationSetup','UploadReports','RefreshSoftwareCatalog','ProbeTemperature','DisableWindowsUpdates','RestoreWindowsUpdates')) {
+foreach($operation in @('FullCheck','QuickCheck','DailySmartCheck','ScheduledFullCheck','Cleanup','Repair','OrganizationSetup','UploadReports','RefreshSoftwareCatalog','ProbeTemperature','DisableWindowsUpdates','RestoreWindowsUpdates','DisableWindowsDefender','EnableWindowsDefender')) {
     if(!$coordinator.Contains('MaintenanceServiceOperation.'+$operation)){throw "Service operation is missing: $operation"}
 }
 if(!$coordinator.Contains('request.Operation == MaintenanceServiceOperation.QuickCheck') -or
@@ -49,6 +50,11 @@ if(!$coordinator.Contains('MaintenanceServiceOperation.Cleanup => (Folder: "Clea
    !$coordinator.Contains('if (HasPendingRequests(operation))')) {
     throw 'Cleanup requests arriving during an active service run must be picked up by a follow-up run.'
 }
+if($installedCheck.Contains("/Run /TN 'ITSeti-Maintenance-Upload'") -or
+   !$coordinator.Contains('StartOperation(MaintenanceServiceOperation.UploadReports);') -or
+   !$coordinator.Contains('serializedOperations.Enqueue(operation)')) {
+    throw 'Check and cleanup reports must be uploaded through the service queue, without an overlapping scheduled-task launch.'
+}
 if(!$install.Contains("`$serviceName='ITSetiMaintenanceService'") -or !$install.Contains('New-Service -Name $serviceName') -or
    !$install.Contains('start= delayed-auto') -or !$install.Contains('Start-Service -Name $serviceName') -or
    !$uninstall.Contains("`$serviceName='ITSetiMaintenanceService'") -or !$uninstall.Contains('sc.exe delete $serviceName') -or
@@ -57,12 +63,17 @@ if(!$install.Contains("`$serviceName='ITSetiMaintenanceService'") -or !$install.
 }
 if(!$coordinator.Contains('TicketUpdateMonitor') -or !$coordinator.Contains('PollTicketUpdatesAsync') -or
    !$ticketMonitor.Contains('api/v1/ticket-updates') -or !$ticketMonitor.Contains('ticket-updates.json') -or
+   !$coordinator.Contains('refresh-ticket-updates') -or !$client.Contains('RefreshTicketUpdatesAsync') -or
+   !$coordinator.Contains('ticketPollRequested = true') -or !$coordinator.Contains('operation == MaintenanceServiceOperation.OrganizationSetup') -or
+   !$ticketMonitor.Contains('Timeout.InfiniteTimeSpan') -or
    !$ticketMonitor.Contains('X-Support-Key') -or !$ticketMonitor.Contains('TakeLast(500)') -or
    !$server.Contains('if (!since.HasValue) { cursor = serverTime; cursorId = Guid.Empty; }')) {
     throw 'Service-owned ticket polling, durable deduplicated queue, or silent initial cursor is missing.'
 }
 if(!$notifierProject.Contains('<UseWindowsForms>true</UseWindowsForms>') -or
    !$notifier.Contains('ShowBalloonTip') -or !$notifier.Contains('Local\ITSeti-Maintenance-TicketNotifier-') -or
+   !$notifier.Contains('Visible = false') -or !$notifier.Contains('notificationVisibleUntil') -or
+   !$notifier.Contains('icon.Visible = true') -or !$ticketMonitor.Contains('TimeSpan.FromSeconds(30)') -or
    !$install.Contains("ITSeti-Maintenance-Tickets") -or !$install.Contains('TicketNotifier.exe') -or
    !$appStartup.Contains('StartTicketNotifier()') -or $mainWindow.Contains('TicketMessagePoller') -or
    $mainWindow.Contains('Closing +=') -or !$builder.Contains('dotnet publish $notifierProject') -or

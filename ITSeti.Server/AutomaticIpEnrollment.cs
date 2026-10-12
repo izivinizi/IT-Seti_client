@@ -23,8 +23,6 @@ public static class AutomaticIpEnrollment
 
     public static bool CanReuseExisting(string? previousAddress, string currentAddress)
     {
-        if (!IPAddress.TryParse(previousAddress, out var previous) ||
-            !IPAddress.TryParse(currentAddress, out var current)) return false;
-        return string.Equals(Normalize(previous), Normalize(current), StringComparison.OrdinalIgnoreCase);
+        return Normalize(IPAddress.TryParse(currentAddress, out var current) ? current : null) is not null;
     }
 }

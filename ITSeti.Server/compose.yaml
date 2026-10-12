@@ -41,6 +41,7 @@ services:
       OkdeskWebTicketDeliveryEnabled: ${OKDESK_WEB_TICKET_DELIVERY_ENABLED:-false}
       OkdeskCommentAuthorId: ${OKDESK_COMMENT_AUTHOR_ID:-}
       DataRoot: /data
+      ASPNETCORE_TEMP: /data/tmp
     depends_on:
       database:
         condition: service_healthy
@@ -50,9 +51,8 @@ services:
       - "8080"
     read_only: true
     tmpfs:
-      # ASP.NET multipart form buffering uses /tmp before the package is copied
-      # into the persistent package volume. Keep enough room for the largest
-      # supported installer plus request overhead.
+      # Keep incidental runtime temporary files bounded; multipart uploads use
+      # ASPNETCORE_TEMP under the persistent /data volume instead.
       - /tmp:size=256m,mode=1777
     security_opt:
       - no-new-privileges:true

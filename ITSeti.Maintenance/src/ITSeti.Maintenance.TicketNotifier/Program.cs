@@ -46,6 +46,7 @@ internal sealed class TicketNotificationContext : ApplicationContext
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 5000 };
     private HashSet<Guid> seen = [];
     private string? deviceId;
+    private DateTimeOffset notificationVisibleUntil = DateTimeOffset.MinValue;
 
     public TicketNotificationContext()
     {
@@ -57,7 +58,7 @@ internal sealed class TicketNotificationContext : ApplicationContext
             Icon = SystemIcons.Application,
             Text = "ИТ-Сети · уведомления заявок",
             ContextMenuStrip = menu,
-            Visible = true
+            Visible = false
         };
         icon.DoubleClick += (_, _) => OpenApplication();
         icon.BalloonTipClicked += (_, _) => OpenApplication();
@@ -97,15 +98,20 @@ internal sealed class TicketNotificationContext : ApplicationContext
                 deviceId = state.DeviceId;
                 seen.Clear();
             }
-
             var incoming = (state.Messages ?? []).Where(message => message is not null && !seen.Contains(message.Id)).ToArray();
-            if (incoming.Length == 0) return;
+            if (incoming.Length == 0)
+            {
+                icon.Visible = state.ActiveCount > 0 || DateTimeOffset.UtcNow < notificationVisibleUntil;
+                return;
+            }
             foreach (var item in incoming) seen.Add(item.Id);
             if (seen.Count > 1000) seen = seen.TakeLast(1000).ToHashSet();
 
             var lastTitle = incoming[^1].Title;
             var title = incoming.Length == 1 ? "Новый ответ по заявке" : $"Новых ответов по заявкам: {incoming.Length}";
             var message = incoming.Length == 1 ? lastTitle : $"Последний ответ: {lastTitle}";
+            notificationVisibleUntil = DateTimeOffset.UtcNow.AddSeconds(15);
+            icon.Visible = true;
             icon.ShowBalloonTip(10000, title, message, ToolTipIcon.Info);
             try { SaveSeenState(); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException)

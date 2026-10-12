@@ -781,12 +781,12 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         if (Selected?.HwInfo is { } selectedHwInfo &&
             (currentHwInfo is null || selectedHwInfo.CapturedAtUtc > currentHwInfo.CapturedAtUtc))
             currentHwInfo = selectedHwInfo;
-        if (currentHwInfo is null || DateTimeOffset.UtcNow - currentHwInfo.CapturedAtUtc > TimeSpan.FromMinutes(10))
+        if (currentHwInfo is not null && DateTimeOffset.UtcNow - currentHwInfo.CapturedAtUtc > TimeSpan.FromSeconds(45))
+            currentHwInfo = null;
+        if (currentHwInfo is null)
         {
-            var cachedHwInfo = HwInfoReader.ReadCached(TimeSpan.FromMinutes(10));
-            if (cachedHwInfo is not null &&
-                (currentHwInfo is null || cachedHwInfo.CapturedAtUtc > currentHwInfo.CapturedAtUtc))
-                currentHwInfo = cachedHwInfo;
+            var cachedHwInfo = HwInfoReader.ReadCached(TimeSpan.FromSeconds(45));
+            currentHwInfo = cachedHwInfo;
         }
         var hwInfo = currentHwInfo;
         var rows = Array.Empty<HwInfoSensorOverview>();
@@ -797,7 +797,10 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                 .ThenBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase).Take(100)
                 .Select(sensor =>
             {
-                var value = double.IsFinite(sensor.Value) ? sensor.Value.ToString("N0") : "Нет данных";
+                var decimals = sensor.Category.Contains("Temperature", StringComparison.OrdinalIgnoreCase) ? 1
+                    : sensor.Unit.Contains("V", StringComparison.OrdinalIgnoreCase) ? 2
+                    : sensor.Unit.Contains('%') ? 1 : 2;
+                var value = double.IsFinite(sensor.Value) ? sensor.Value.ToString($"N{decimals}") : "Нет данных";
                 return new HwInfoSensorOverview(sensor.Name,
                     string.IsNullOrWhiteSpace(sensor.Unit) ? value : $"{value} {sensor.Unit}", capturedAt, sensor.Category);
             }).ToArray();
@@ -809,6 +812,10 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         while (HwInfoSensors.Count > rows.Length) HwInfoSensors.RemoveAt(HwInfoSensors.Count - 1);
         for (var index = sharedCount; index < rows.Length; index++) HwInfoSensors.Add(rows[index]);
     }
+
+    public string HwInfoStatus => currentHwInfo is null
+        ? "Нет свежих данных HWiNFO (старше 45 секунд не показываются)"
+        : $"Последнее чтение: {currentHwInfo.CapturedAtUtc.ToLocalTime():dd.MM.yyyy HH:mm:ss} · {currentHwInfo.Source}";
 
     public string ProcessAllowStatus => processAllowStatus;
     public async Task AllowProcessAsync(ProcessDetails process)
@@ -909,11 +916,6 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         {
             if (Selected is null) return [];
             var issues = DiagnosticRules.GetUserIssues(Selected).ToList();
-            issues.AddRange(Selected.Disks
-                .Where(d => !string.Equals(d.Name.TrimEnd('\\'), SystemDriveName, StringComparison.OrdinalIgnoreCase) &&
-                    d.TotalBytes >= 50L * 1073741824 && d.FreeBytes < 15L * 1073741824)
-                .Select(d => new UserIssue($"Мало места на диске {d.Name.TrimEnd('\\')}",
-                    $"Свободно {d.FreeBytes / 1073741824.0:N1} из {d.TotalBytes / 1073741824.0:N1} ГБ. Откройте TreeSize для анализа.", "Warning")));
             if (Selected.Full is { } full)
             {
                 issues.AddRange(DiagnosticRules.GetActionableEvents(full.Events)
@@ -1142,10 +1144,10 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     }
     public string ProcessStatus => Selected?.Full is { } f
         ? $"Вне списка: {f.Processes.Count}. Не является списком вредоносных программ."
-        : "Запущенные программы в быстрой проверке не проверялись.";
+        : "В выбранном результате нет данных о запущенных программах.";
     public string EventStatus => Selected?.Full is { } f
         ? $"За 7 дней: критических {DiagnosticRules.GetActionableEvents(f.Events).Count(e => e.Level == 1)}, ошибок {f.Events.Count(e => e.Level == 2)}, предупреждений {f.Events.Count(e => e.Level == 3)}"
-        : "События Windows в быстрой проверке не проверялись.";
+        : "В выбранном результате нет данных о событиях Windows.";
     public string BenchmarkTitle => Selected?.Full?.Benchmark is { } b ? $"{b.Engine}: {b.Drive} · {b.MediaType} · SEQ, {b.Passes} прохода, 1 GiB" : "Тест скорости не выполнялся";
     public string BenchmarkRead => Selected?.Full?.Benchmark.ReadLabel ?? "—";
     public string BenchmarkWrite => Selected?.Full?.Benchmark.WriteLabel ?? "—";
@@ -1345,7 +1347,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             currentFullStage = null;
             RefreshDebug();
             userStatusOverride = userMode ? "Проверка завершена. Результат сохранён." : null;
-            if (!userMode) _ = RunPostCheckMaintenanceAsync(checkProgressGeneration);
+            if (!userMode) _ = RunPostCheckMaintenanceAsync(checkProgressGeneration, snapshot);
         }
         catch (OperationCanceledException)
         {
@@ -1370,7 +1372,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
 
     public Task RunCleanupAsync() => RunCleanupCoreAsync(background: false);
 
-    private async Task RunPostCheckMaintenanceAsync(int generation)
+    private async Task RunPostCheckMaintenanceAsync(int generation, DiagnosticSnapshot snapshot)
     {
         await Task.Yield();
         try
@@ -1381,7 +1383,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                 if (generation == checkProgressGeneration) checkProgressPhase = "Диагностика завершена";
                 return;
             }
-            await RunCleanupCoreAsync(background: true, generation);
+            await RunCleanupCoreAsync(background: true, generation, snapshot);
             var hasErrors = (cleanupResult?.StartsWith("Ошибка", StringComparison.OrdinalIgnoreCase) ?? false)
                 || (cleanupResult?.Contains("не очищены", StringComparison.OrdinalIgnoreCase) ?? false);
             RecordProgress("Готово", hasErrors ? "Проверка завершена; очистка требует внимания" : "Проверка и очистка завершены", generation);
@@ -1408,7 +1410,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         }
     }
 
-    private async Task RunCleanupCoreAsync(bool background, int? generation = null)
+    private async Task RunCleanupCoreAsync(bool background, int? generation = null, DiagnosticSnapshot? reportSnapshot = null)
     {
         if (cleanupRunning || (busy && !background))
         {
@@ -1431,11 +1433,37 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             var progress = new Progress<string>(stage => { cleanupResult = stage; if (!background) status = stage; if (generation.HasValue) RecordProgress("Очистка", stage, generation); Notify(); });
             var result = await (cleanupRunner ?? new UserCleanupRunner()).RunAsync(progress);
             cleanupResult = result.Summary;
+            if (CleanupNeedsAttention(cleanupResult))
+            {
+                ApplicationErrorStore.Record("Очистка", "Системная очистка Windows", new InvalidOperationException(cleanupResult),
+                    "Очистка завершилась с ошибкой; подробности включены в отчёт проверки.");
+                await EnqueueCleanupOutcomeAsync(reportSnapshot ?? Selected, cleanupResult);
+            }
             if (generation.HasValue) RecordProgress("Очистка", result.Summary, generation);
             status = background ? "Отчёт готов. Очистка завершена." : result.Summary;
         }
-        catch (Exception ex) { var error = ApplicationErrorStore.Record("Очистка", "Очистка Windows", ex); cleanupResult = "Ошибка очистки: " + error.Summary; status = ApplicationErrorStore.UserMessage(error); if (generation.HasValue) RecordProgress("Ошибка", cleanupResult, generation); }
+        catch (Exception ex)
+        {
+            var error = ApplicationErrorStore.Record("Очистка", "Очистка Windows", ex);
+            cleanupResult = "Ошибка очистки: " + error.Summary;
+            try { await EnqueueCleanupOutcomeAsync(reportSnapshot ?? Selected, cleanupResult); }
+            catch (Exception reportException) { ApplicationErrorStore.Record("Отчёты", "Отчёт об ошибке очистки", reportException); }
+            status = ApplicationErrorStore.UserMessage(error);
+            if (generation.HasValue) RecordProgress("Ошибка", cleanupResult, generation);
+        }
         finally { cleanupRunning = false; Notify(); }
+    }
+
+    private static bool CleanupNeedsAttention(string summary) =>
+        summary.Contains("ошибка", StringComparison.OrdinalIgnoreCase) ||
+        summary.Contains("не очищены", StringComparison.OrdinalIgnoreCase) ||
+        summary.Contains("не удалось", StringComparison.OrdinalIgnoreCase);
+
+    private static Task EnqueueCleanupOutcomeAsync(DiagnosticSnapshot? snapshot, string outcome)
+    {
+        if (snapshot is null) return Task.CompletedTask;
+        var notes = snapshot.Notes.Append("Очистка требует внимания: " + outcome).ToList();
+        return ServerReportQueue.EnqueueAsync(snapshot with { Id = Guid.NewGuid(), Notes = notes });
     }
 
     public async Task RunRepairAsync()

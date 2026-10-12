@@ -17,6 +17,9 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     private static readonly string DataRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance");
     private readonly ConcurrentDictionary<MaintenanceServiceOperation, Process> running = new();
+    private readonly object operationStartGate = new();
+    private readonly Queue<MaintenanceServiceOperation> serializedOperations = new();
+    private readonly HashSet<MaintenanceServiceOperation> queuedSerializedOperations = [];
     private readonly SemaphoreSlim temperatureLock = new(1, 1);
     private readonly TicketUpdateMonitor ticketUpdateMonitor = new();
     private readonly string backendRoot;
@@ -25,13 +28,15 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     private readonly Dictionary<string, int> monitoringStreaks = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> reportedMonitoringIssues = new(StringComparer.OrdinalIgnoreCase);
     private readonly object diagnosticGate = new();
+    private readonly object ticketPollGate = new();
     private MaintenanceServiceOperation? queuedDiagnostic;
     private DateTimeOffset lastTemperatureProbe = DateTimeOffset.MinValue;
     private DateTimeOffset lastUpload = DateTimeOffset.MinValue;
     private DateTimeOffset lastCatalogRefresh = DateTimeOffset.MinValue;
     private DateTimeOffset nextSmartAttempt = DateTimeOffset.MinValue;
     private DateTimeOffset nextTicketPoll = DateTimeOffset.MinValue;
-    private int ticketPollRunning;
+    private bool ticketPollRunning;
+    private bool ticketPollRequested;
 
     public MaintenanceServiceCoordinator(string? backendRootOverride = null, string? statusPathOverride = null,
         string? pipeNameOverride = null)
@@ -56,7 +61,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     internal void ValidateInstallation()
     {
         foreach (var name in new[] { "InstalledCheck.ps1", "InstalledCleanup.ps1", "InstalledRepair.ps1",
-                     "InstalledOrganizationSetup.ps1", "Upload-Reports.ps1", "ServerSoftware.ps1", "Set-WindowsAutomaticUpdates.ps1" })
+                     "InstalledOrganizationSetup.ps1", "Upload-Reports.ps1", "ServerSoftware.ps1", "Set-WindowsAutomaticUpdates.ps1", "WindowsDefender.ps1" })
             if (!File.Exists(Path.Combine(backendRoot, name)))
                 throw new FileNotFoundException("Не найден обязательный сценарий службы.", name);
     }
@@ -146,6 +151,11 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     {
         if (string.Equals(request.Command, "ping", StringComparison.OrdinalIgnoreCase))
             return new(true, "Служба обслуживания работает.", GetVersion());
+        if (string.Equals(request.Command, "refresh-ticket-updates", StringComparison.OrdinalIgnoreCase))
+        {
+            RequestTicketUpdatePoll();
+            return new(true, "Синхронизация заявок запрошена.", GetVersion());
+        }
         if (string.Equals(request.Command, "stop", StringComparison.OrdinalIgnoreCase) && request.Operation is { } stopOperation)
         {
             if (stopOperation == MaintenanceServiceOperation.QuickCheck)
@@ -180,6 +190,9 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             return new(false, "Команда службы не поддерживается.", GetVersion());
         var normalizedOperation = request.Operation == MaintenanceServiceOperation.QuickCheck
             ? MaintenanceServiceOperation.FullCheck : request.Operation.Value;
+        if (normalizedOperation is MaintenanceServiceOperation.DisableWindowsDefender or MaintenanceServiceOperation.EnableWindowsDefender &&
+            !clientIsAdministrator && request.EngineerPassword != "itseti")
+            return new(false, "Изменение Microsoft Defender доступно только из инженерного меню.", GetVersion());
         try
         {
             if (IsDiagnosticOperation(normalizedOperation) && HasRunningDiagnostic())
@@ -215,6 +228,11 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
 
     private bool StartOperation(MaintenanceServiceOperation operation)
     {
+        lock (operationStartGate) return StartOperationLocked(operation);
+    }
+
+    private bool StartOperationLocked(MaintenanceServiceOperation operation)
+    {
         if (operation == MaintenanceServiceOperation.ProbeTemperature)
         {
             _ = RunTemperatureOperationAsync();
@@ -225,6 +243,12 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             try { if (!existing.HasExited) return false; }
             catch (InvalidOperationException) { }
             running.TryRemove(new KeyValuePair<MaintenanceServiceOperation, Process>(operation, existing));
+        }
+        if (IsSerializedSoftwareOperation(operation) && running.Any(pair => pair.Key != operation &&
+            IsSerializedSoftwareOperation(pair.Key) && IsRunning(pair.Value)))
+        {
+            if (queuedSerializedOperations.Add(operation)) serializedOperations.Enqueue(operation);
+            return false;
         }
         var (script, arguments) = ResolveOperation(operation);
         var process = CreatePowerShellProcess(script, arguments);
@@ -238,6 +262,33 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         _ = ObserveProcessAsync(operation, process);
         return true;
     }
+
+    private async Task StartNextSerializedOperationAsync()
+    {
+        Exception? failure = null;
+        lock (operationStartGate)
+        {
+            if (running.Any(pair => IsSerializedSoftwareOperation(pair.Key) && IsRunning(pair.Value))) return;
+            while (serializedOperations.TryDequeue(out var next))
+            {
+                queuedSerializedOperations.Remove(next);
+                try
+                {
+                    if (StartOperationLocked(next)) break;
+                }
+                catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
+                {
+                    failure = ex;
+                    break;
+                }
+            }
+        }
+        if (failure is not null) await WriteServiceErrorAsync(failure);
+    }
+
+    private static bool IsSerializedSoftwareOperation(MaintenanceServiceOperation operation) => operation is
+        MaintenanceServiceOperation.OrganizationSetup or MaintenanceServiceOperation.UploadReports or
+        MaintenanceServiceOperation.RefreshSoftwareCatalog;
 
     private async Task RunTemperatureOperationAsync()
     {
@@ -273,6 +324,8 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         MaintenanceServiceOperation.RefreshSoftwareCatalog => ("ServerSoftware.ps1", ["-CatalogOnly"]),
         MaintenanceServiceOperation.DisableWindowsUpdates => ("Set-WindowsAutomaticUpdates.ps1", ["-Action", "Disable"]),
         MaintenanceServiceOperation.RestoreWindowsUpdates => ("Set-WindowsAutomaticUpdates.ps1", ["-Action", "Restore"]),
+        MaintenanceServiceOperation.DisableWindowsDefender => ("WindowsDefender.ps1", ["-Action", "Disable", "-StatusPath", Path.Combine(DataRoot, "WindowsDefender", "status.json")]),
+        MaintenanceServiceOperation.EnableWindowsDefender => ("WindowsDefender.ps1", ["-Action", "Enable", "-StatusPath", Path.Combine(DataRoot, "WindowsDefender", "status.json")]),
         MaintenanceServiceOperation.ProbeTemperature => throw new InvalidOperationException("Опрос температуры выполняется самой службой."),
         _ => throw new InvalidOperationException("Операция службы не поддерживается.")
     };
@@ -374,6 +427,14 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         {
             running.TryRemove(new KeyValuePair<MaintenanceServiceOperation, Process>(operation, process));
             process.Dispose();
+            if (IsSerializedSoftwareOperation(operation)) await StartNextSerializedOperationAsync();
+            if (operation == MaintenanceServiceOperation.OrganizationSetup) RequestTicketUpdatePoll();
+            if (IsDiagnosticOperation(operation) || operation == MaintenanceServiceOperation.Cleanup)
+            {
+                try { StartOperation(MaintenanceServiceOperation.UploadReports); }
+                catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
+                { await WriteServiceErrorAsync(ex); }
+            }
             if (IsDiagnosticOperation(operation))
             {
                 MaintenanceServiceOperation? next = null;
@@ -465,11 +526,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
                     StartOperation(MaintenanceServiceOperation.RefreshSoftwareCatalog);
                     lastCatalogRefresh = DateTimeOffset.UtcNow;
                 }
-                if (DateTimeOffset.UtcNow >= nextTicketPoll && Interlocked.CompareExchange(ref ticketPollRunning, 1, 0) == 0)
-                {
-                    nextTicketPoll = DateTimeOffset.UtcNow.AddMinutes(2);
-                    _ = PollTicketUpdatesAsync(cancellationToken);
-                }
+                if (DateTimeOffset.UtcNow >= nextTicketPoll) StartTicketUpdatePoll(cancellationToken);
                 if (!HasFreshSmartReport() && DateTimeOffset.UtcNow >= nextSmartAttempt && !HasRunningDiagnostic())
                 {
                     nextSmartAttempt = DateTimeOffset.UtcNow.AddHours(1);
@@ -488,20 +545,56 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
 
     private async Task PollTicketUpdatesAsync(CancellationToken cancellationToken)
     {
-        try
+        while (true)
         {
-            var delay = await ticketUpdateMonitor.PollAsync(cancellationToken);
-            nextTicketPoll = DateTimeOffset.UtcNow + delay;
+            lock (ticketPollGate) ticketPollRequested = false;
+            try
+            {
+                var delay = await ticketUpdateMonitor.PollAsync(cancellationToken);
+                nextTicketPoll = delay == Timeout.InfiniteTimeSpan
+                    ? DateTimeOffset.MaxValue
+                    : DateTimeOffset.UtcNow + delay;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or
+                UnauthorizedAccessException or JsonException or InvalidOperationException or ArgumentException or
+                KeyNotFoundException or FormatException or OverflowException)
+            {
+                ApplicationErrorStore.Record("Заявки", "Фоновое получение новых сообщений", ex);
+                nextTicketPoll = DateTimeOffset.UtcNow.AddMinutes(2);
+            }
+            lock (ticketPollGate)
+            {
+                if (ticketPollRequested && !cancellationToken.IsCancellationRequested) continue;
+                ticketPollRunning = false;
+                return;
+            }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or
-            UnauthorizedAccessException or JsonException or InvalidOperationException or ArgumentException or
-            KeyNotFoundException or FormatException or OverflowException)
+    }
+
+    private void RequestTicketUpdatePoll()
+    {
+        lock (ticketPollGate)
         {
-            ApplicationErrorStore.Record("Заявки", "Фоновое получение новых сообщений", ex);
-            nextTicketPoll = DateTimeOffset.UtcNow.AddMinutes(2);
+            nextTicketPoll = DateTimeOffset.MaxValue;
+            if (ticketPollRunning)
+            {
+                ticketPollRequested = true;
+                return;
+            }
+            ticketPollRunning = true;
         }
-        finally { Volatile.Write(ref ticketPollRunning, 0); }
+        _ = PollTicketUpdatesAsync(CancellationToken.None);
+    }
+
+    private void StartTicketUpdatePoll(CancellationToken cancellationToken)
+    {
+        lock (ticketPollGate)
+        {
+            if (ticketPollRunning) return;
+            ticketPollRunning = true;
+        }
+        _ = PollTicketUpdatesAsync(cancellationToken);
     }
 
     private static bool HasFreshSmartReport()
@@ -649,7 +742,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     }
 
     private static string GetVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.3.7";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.3.9";
 
     private void StopChildren()
     {

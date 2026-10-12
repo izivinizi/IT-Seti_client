@@ -152,10 +152,16 @@ public sealed class UserCleanupRunner
         task.StartInfo.ArgumentList.Add("/TN");
         task.StartInfo.ArgumentList.Add("ITSeti-Maintenance-Cleanup");
         task.Start();
-        var output = task.StandardOutput.ReadToEndAsync();
-        var errors = task.StandardError.ReadToEndAsync();
+        var output = task.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
+        var errors = task.StandardError.BaseStream.CopyToAsync(Stream.Null);
         await task.WaitForExitAsync();
-        if (task.ExitCode != 0) throw new InvalidOperationException($"Задание очистки не запустилось (код {task.ExitCode}): {(await errors).Trim()} {(await output).Trim()}. Переустановите приложение.");
+        await Task.WhenAll(output, errors);
+        if (task.ExitCode != 0)
+        {
+            ApplicationErrorStore.Record("Очистка", "Запуск системного задания", new InvalidOperationException(
+                $"schtasks /Run для ITSeti-Maintenance-Cleanup завершился с кодом {task.ExitCode}."));
+            throw new InvalidOperationException($"Системное задание очистки не запустилось (код {task.ExitCode}). Подробности записаны в журнал отладки.");
+        }
     }
 
     private Process StartWorker(string script, string root, string signalRoot)

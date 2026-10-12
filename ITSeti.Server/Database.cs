@@ -38,7 +38,20 @@ public static class Database
                 name text,
                 updated_at timestamptz NOT NULL DEFAULT now()
             );
+            ALTER TABLE okdesk_equipment ALTER COLUMN company_id DROP NOT NULL;
             CREATE INDEX IF NOT EXISTS ix_okdesk_equipment_inventory ON okdesk_equipment(normalized_inventory_number);
+            UPDATE okdesk_equipment SET normalized_inventory_number =
+                CASE
+                    WHEN upper(regexp_replace(coalesce(inventory_number,''), '[^[:alnum:]]', '', 'g')) ~ '^PC[0-9]{5,}$'
+                        THEN nullif(ltrim(right(upper(regexp_replace(coalesce(inventory_number,''), '[^[:alnum:]]', '', 'g')),4),'0'),'')
+                    WHEN upper(regexp_replace(coalesce(inventory_number,''), '[^[:alnum:]]', '', 'g')) ~ '^[0-9]+$'
+                        THEN nullif(ltrim(upper(regexp_replace(coalesce(inventory_number,''), '[^[:alnum:]]', '', 'g')),'0'),'')
+                    ELSE nullif(upper(regexp_replace(coalesce(inventory_number,''), '[^[:alnum:]]', '', 'g')),'')
+                END
+            WHERE inventory_number IS NOT NULL
+              AND upper(regexp_replace(coalesce(inventory_number,''), '[^[:alnum:]]', '', 'g')) ~ '^PC[0-9]{5,}$'
+              AND normalized_inventory_number IS DISTINCT FROM nullif(
+                    ltrim(right(upper(regexp_replace(coalesce(inventory_number,''), '[^[:alnum:]]', '', 'g')),4),'0'),'');
             CREATE TABLE IF NOT EXISTS devices (
                 id uuid PRIMARY KEY,
                 computer_name text NOT NULL,
@@ -152,6 +165,7 @@ public static class Database
                 platform text NOT NULL,
                 sha256 text NOT NULL,
                 size_bytes bigint NOT NULL,
+                product_name text NOT NULL DEFAULT '',
                 download_name text NOT NULL,
                 storage_name text NOT NULL,
                 is_latest boolean NOT NULL DEFAULT false,
@@ -159,6 +173,8 @@ public static class Database
                 UNIQUE(package_key,version,platform)
             );
             CREATE UNIQUE INDEX IF NOT EXISTS ix_packages_latest ON packages(package_key,platform) WHERE is_latest;
+            ALTER TABLE packages ADD COLUMN IF NOT EXISTS product_name text NOT NULL DEFAULT '';
+            UPDATE packages SET product_name=package_key WHERE product_name='';
             """;
         await using var connection = await dataSource.OpenConnectionAsync();
         await using (var command = new NpgsqlCommand(schema, connection)) await command.ExecuteNonQueryAsync();

@@ -42,6 +42,7 @@ namespace ITSeti.Maintenance.App
         private bool scheduledFullPromptOpen;
         private bool cpuSampling;
         private bool serviceCheck;
+        private DateTime monitoringFileStamp = DateTime.MinValue;
         private DateTime scheduledReportStamp;
         private readonly DispatcherTimer cpuTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
 
@@ -88,7 +89,7 @@ namespace ITSeti.Maintenance.App
                 Loaded += async (sender, args) =>
                 {
                     _ = TryAutomaticServerEnrollmentAsync();
-                    await CheckAsync(false);
+                    await RefreshCpuAsync();
                     if (!windowClosed)
                     {
                         cpuTimer.Start();
@@ -143,17 +144,25 @@ namespace ITSeti.Maintenance.App
                     var updateStatus = Win7ServerUpdater.ReadBackgroundStatus();
                     if (!string.IsNullOrWhiteSpace(updateStatus)) view.Set("ApplicationUpdateStatus", updateStatus);
                 }
-                var value = await Task.Run(() => CpuLoadSampler.Read());
-                view.Set("Cpu", CpuValue(value));
-                view.Set("UserCpuLabel", CpuValue(value));
-                view.Set("UserCpuValue", value ?? 0d);
-                view.Set("CpuStatusBrush", !value.HasValue ? Blue : value >= 85 ? Red : value >= 75 ? Amber : Green);
+                var path = Win7MaintenanceServiceHost.MonitoringPath;
+                if (!File.Exists(path))
+                {
+                    view.Set("UserLiveSummary", "Ожидание данных службы мониторинга.");
+                    return;
+                }
+                var stamp = File.GetLastWriteTimeUtc(path);
+                if (stamp <= monitoringFileStamp) return;
+                LegacySnapshot live;
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new StreamReader(stream, Encoding.UTF8))
+                    live = new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 }.Deserialize<LegacySnapshot>(reader.ReadToEnd());
+                if (live == null) throw new InvalidDataException("Служба сохранила пустой снимок мониторинга.");
+                monitoringFileStamp = stamp;
+                RenderLiveMonitoring(live);
             }
             catch (Exception ex)
             {
-                view.Set("Cpu", "нет данных");
-                view.Set("UserCpuLabel", "нет данных");
-                view.Set("Status", "Не удалось обновить загрузку CPU: " + ex.Message);
+                view.Set("UserLiveSummary", "Не удалось обновить данные службы: " + ex.Message);
             }
             finally { cpuSampling = false; }
         }
@@ -238,7 +247,8 @@ namespace ITSeti.Maintenance.App
                 var snapshot = await RunThroughServiceAsync(full, cancellation.Token);
                 if (snapshot == null)
                 {
-                    snapshot = await Task.Run(() => LegacyDiagnostics.CollectWithCleanup(full, cancellation.Token, false, true, cleanupUserSid, progress));
+                    snapshot = await Task.Run(() => LegacyDiagnostics.Collect(full, cancellation.Token));
+                    LegacyHwInfoReader.Apply(snapshot);
                 }
                 cancellation.Token.ThrowIfCancellationRequested();
                 current = snapshot;

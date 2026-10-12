@@ -84,13 +84,16 @@ namespace ITSeti.Maintenance.App
 
         private sealed class Win7MaintenanceService : ServiceBase
         {
+            private static readonly object ErrorGate = new object();
+            private static readonly Dictionary<string, DateTime> RecentErrors = new Dictionary<string, DateTime>(StringComparer.Ordinal);
             private readonly object gate = new object();
             private CancellationTokenSource stop;
             private CancellationTokenSource activeRun;
+            private string activeRunOwnerSid;
             private Task pipeTask;
             private Task monitorTask;
             private NamedPipeServerStream activePipe;
-            private readonly Dictionary<string,int> criticalStreaks=new Dictionary<string,int>();
+            private readonly Queue<LegacySnapshot> monitoringWindow = new Queue<LegacySnapshot>();
             private readonly HashSet<string> reportedCritical=new HashSet<string>();
             private DateTime nextSmartAttempt;
 
@@ -197,36 +200,38 @@ namespace ITSeti.Maintenance.App
                     return Response(true, "Служба обслуживания Windows 7 работает.");
                 if (string.Equals(command, "start", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (string.Equals(operation, "full", StringComparison.OrdinalIgnoreCase)) return StartRun(true);
-                    if (string.Equals(operation, "quick", StringComparison.OrdinalIgnoreCase)) return StartRun(true);
+                    if (string.Equals(operation, "full", StringComparison.OrdinalIgnoreCase)) return StartRun(true, ClientSid(pipe));
+                    if (string.Equals(operation, "quick", StringComparison.OrdinalIgnoreCase)) return StartRun(true, ClientSid(pipe));
                     if (string.Equals(operation, "cleanup", StringComparison.OrdinalIgnoreCase)) return StartCleanup();
                     if (string.Equals(operation, "repair", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (!IsAdministrator(pipe) && Value(request,"engineerPassword")!="itseti") return Response(false, "Восстановление доступно только инженеру.");
+                        if (!IsAdministrator(pipe)) return Response(false, "Восстановление доступно только инженеру.");
                         return StartRepair();
                     }
                 }
                 if (string.Equals(command, "launch", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (!IsAdministrator(pipe) && Value(request,"engineerPassword")!="itseti") return Response(false, "Запуск утилит доступен только инженеру.");
+                    if (!IsAdministrator(pipe)) return Response(false, "Запуск утилит доступен только инженеру.");
                     try { return LaunchInteractiveTool(request); }
                     catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException ||
                         ex is InvalidOperationException || ex is ArgumentException || ex is Win32Exception)
                     { return Response(false, ex.Message); }
                 }
                 if (string.Equals(command, "stop", StringComparison.OrdinalIgnoreCase))
-                    return StopRun();
+                    return StopRun(pipe);
                 return Response(false, "Операция не поддерживается службой Windows 7.");
             }
 
-            private Dictionary<string, object> StartRun(bool full)
+            private Dictionary<string, object> StartRun(bool full, string ownerSid)
             {
+                if (string.IsNullOrWhiteSpace(ownerSid)) return Response(false, "Не удалось определить пользователя, запустившего проверку.");
                 lock (gate)
                 {
                     full = true;
                     if (activeRun != null)
                         return Response(false, "Проверка уже выполняется.");
                     activeRun = new CancellationTokenSource();
+                    activeRunOwnerSid = ownerSid;
                     var token = activeRun.Token;
                     var operation = full ? "FullCheck" : "QuickCheck";
                     var runId = Guid.NewGuid().ToString("D");
@@ -275,11 +280,15 @@ namespace ITSeti.Maintenance.App
                 }
             }
 
-            private Dictionary<string, object> StopRun()
+            private Dictionary<string, object> StopRun(NamedPipeServerStream pipe)
             {
+                var callerSid = ClientSid(pipe);
+                var administrator = IsAdministrator(pipe);
                 lock (gate)
                 {
                     if (activeRun == null || activeRun.IsCancellationRequested) return Response(true, "Активная операция не найдена.");
+                    if (!administrator && !string.Equals(callerSid, activeRunOwnerSid, StringComparison.OrdinalIgnoreCase))
+                        return Response(false, "Остановить проверку может только запустивший её пользователь или администратор.");
                     activeRun.Cancel();
                     return Response(true, "Операция остановлена.");
                 }
@@ -308,8 +317,7 @@ namespace ITSeti.Maintenance.App
             {
                 try
                 {
-                    var sid = UserProfileCleanupBridge.ActiveConsoleUserSid();
-                    var snapshot = LegacyDiagnostics.CollectWithCleanup(full, token, false, true, sid, null);
+                    var snapshot = LegacyDiagnostics.Collect(full, token);
                     LegacyHwInfoReader.Apply(snapshot);
                     SaveSnapshot(snapshot);
                     WriteStatus(new Win7ServiceStatus { State = "Completed", Operation = full ? "FullCheck" : "QuickCheck", RunId = runId,
@@ -369,6 +377,7 @@ namespace ITSeti.Maintenance.App
                 lock (gate)
                 {
                     if (activeRun != null) { activeRun.Dispose(); activeRun = null; }
+                    activeRunOwnerSid = null;
                 }
             }
 
@@ -417,14 +426,24 @@ namespace ITSeti.Maintenance.App
                 var snapshot = LegacyDiagnostics.CollectMonitoring(CancellationToken.None);
                 LegacyHwInfoReader.Apply(snapshot);
                 WriteAtomically(MonitoringPath, snapshot.ToJson());
+
+                monitoringWindow.Enqueue(snapshot);
+                while (monitoringWindow.Count > 6) monitoringWindow.Dequeue();
                 var critical = snapshot.Findings.FindAll(IsCriticalFinding);
-                if(snapshot.CpuTemperatureC>=85)critical.Add("HWiNFO критично: CPU "+snapshot.CpuTemperatureC+" °C");
-                if(snapshot.CpuPercent>=98)critical.Add("HWiNFO критично: загрузка CPU "+snapshot.CpuPercent+"%");
-                if(snapshot.MemoryUsedPercent>=98)critical.Add("HWiNFO критично: загрузка ОЗУ "+snapshot.MemoryUsedPercent+"%");
+                if (snapshot.CpuTemperatureC >= 85) critical.Add("HWiNFO критично: CPU " + snapshot.CpuTemperatureC.Value.ToString("N0") + " °C");
+                if (monitoringWindow.Count == 6)
+                {
+                    var cpuSamples = monitoringWindow.Where(item => item.CpuPercent.HasValue).Select(item => item.CpuPercent.Value).ToArray();
+                    var memorySamples = monitoringWindow.Where(item => item.MemoryUsedPercent.HasValue).Select(item => item.MemoryUsedPercent.Value).ToArray();
+                    if (cpuSamples.Count(value => value >= 98) >= 3)
+                        critical.Add("HWiNFO критично: загрузка CPU держится на уровне 98% и выше");
+                    if (memorySamples.Count(value => value >= 98) >= 3)
+                        critical.Add("HWiNFO критично: загрузка ОЗУ держится на уровне 98% и выше");
+                }
                 Func<string,string> key=value=>System.Text.RegularExpressions.Regex.Replace(value,@"[-+]?\d+(?:[.,]\d+)?","#");
                 var active=new HashSet<string>(critical.Select(key));
-                foreach(var expired in criticalStreaks.Keys.Where(item=>!active.Contains(item)).ToArray()){criticalStreaks.Remove(expired);reportedCritical.Remove(expired);}
-                critical=critical.Where(value=>{var identity=key(value);int count;criticalStreaks.TryGetValue(identity,out count);criticalStreaks[identity]=count+1;return count>=6&&reportedCritical.Add(identity);}).ToList();
+                foreach(var expired in reportedCritical.Where(item=>!active.Contains(item)).ToArray()) reportedCritical.Remove(expired);
+                critical=critical.Where(value=>reportedCritical.Add(key(value))).ToList();
                 if (critical.Count == 0) return;
                 snapshot.Kind = "Постоянный мониторинг";
                 snapshot.Findings = critical;
@@ -442,12 +461,37 @@ namespace ITSeti.Maintenance.App
             private static bool IsAdministrator(NamedPipeServerStream pipe)
             {
                 var result = false;
-                pipe.RunAsClient(() =>
+                try
                 {
-                    using (var identity = WindowsIdentity.GetCurrent())
-                        result = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
-                });
+                    pipe.RunAsClient(() =>
+                    {
+                        using (var identity = WindowsIdentity.GetCurrent())
+                            result = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+                    });
+                }
+                catch (Exception ex) when (!(ex is OutOfMemoryException) && !(ex is StackOverflowException) && !(ex is AccessViolationException))
+                {
+                    WriteError(ex);
+                }
                 return result;
+            }
+
+            private static string ClientSid(NamedPipeServerStream pipe)
+            {
+                var sid = "";
+                try
+                {
+                    pipe.RunAsClient(() =>
+                    {
+                        using (var identity = WindowsIdentity.GetCurrent())
+                            if (identity.User != null) sid = identity.User.Value;
+                    });
+                }
+                catch (Exception ex) when (!(ex is OutOfMemoryException) && !(ex is StackOverflowException) && !(ex is AccessViolationException))
+                {
+                    WriteError(ex);
+                }
+                return sid;
             }
 
             private static Dictionary<string, object> Response(bool success, string message, string runId = null)
@@ -470,6 +514,16 @@ namespace ITSeti.Maintenance.App
 
             private static void WriteError(Exception exception)
             {
+                var key = exception.GetType().FullName + "|" + exception.Message;
+                lock (ErrorGate)
+                {
+                    DateTime previous;
+                    if (RecentErrors.TryGetValue(key, out previous) && DateTime.UtcNow - previous < TimeSpan.FromMinutes(5)) return;
+                    RecentErrors[key] = DateTime.UtcNow;
+                    if (RecentErrors.Count > 64)
+                        foreach (var expired in RecentErrors.Where(item => DateTime.UtcNow - item.Value >= TimeSpan.FromMinutes(5)).Select(item => item.Key).ToArray())
+                            RecentErrors.Remove(expired);
+                }
                 LegacyApplicationErrors.Record("Служба Win7", "Фоновая операция", exception);
                 try
                 {
@@ -527,7 +581,7 @@ namespace ITSeti.Maintenance.App
                         {
                             writer.WriteLine(Serializer.Serialize(new Dictionary<string, object> {
                                 { "command", command }, { "operation", operation }, { "target", target },
-                                { "argument", argument }, { "sessionId", sessionId }, {"engineerPassword",command=="launch" || operation=="repair"?"itseti":null}
+                                { "argument", argument }, { "sessionId", sessionId }
                             }));
                             var line = reader.ReadLine();
                             if (string.IsNullOrWhiteSpace(line)) return Win7ServiceCallResult.Unavailable("Служба не вернула ответ.");
@@ -572,7 +626,6 @@ namespace ITSeti.Maintenance.App
                 case "ncpa.cpl": return new Win7ToolSpec(Path.Combine(system, "control.exe"), new List<string> { "ncpa.cpl" }, system);
                 case "control.exe": return new Win7ToolSpec(Path.Combine(system, "control.exe"), new List<string>(), system);
                 case "msinfo32.exe": return new Win7ToolSpec(Path.Combine(system, "msinfo32.exe"), new List<string>(), system);
-                case "cmd.exe": return new Win7ToolSpec(Path.Combine(system, "cmd.exe"), new List<string>(), system);
                 default: throw new ArgumentException("Неизвестное системное приложение Windows 7.", "target");
             }
         }

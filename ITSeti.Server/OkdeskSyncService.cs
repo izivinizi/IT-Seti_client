@@ -160,20 +160,23 @@ public sealed class OkdeskSyncService(NpgsqlDataSource dataSource, IOkdeskClient
     private async Task SaveEquipmentAsync(IReadOnlyList<JsonElement> equipment, CancellationToken cancellationToken)
     {
         if (equipment.Count > 100_000) throw new JsonException("Okdesk equipment catalog exceeded the item limit.");
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var companiesBySite = new Dictionary<long, long>();
+        await using (var sites = new NpgsqlCommand("SELECT id,company_id FROM service_objects", connection, transaction))
+        await using (var reader = await sites.ExecuteReaderAsync(cancellationToken))
+            while (await reader.ReadAsync(cancellationToken)) companiesBySite[reader.GetInt64(0)] = reader.GetInt64(1);
         var items = equipment.Select(item =>
         {
             var id = ReadLong(item, "id") ?? throw new JsonException("Okdesk equipment ID is missing.");
+            var siteId = ReadLong(item, "maintenance_entity_id", "maintenanceEntityId", "service_object_id", "serviceObjectId");
             var companyId = ReadLong(item, "company_id", "companyId")
                 ?? ReadLong(JsonRead.Property(item, "company") ?? default, "id")
-                ?? throw new JsonException("Okdesk equipment company is missing.");
-            var siteId = ReadLong(item, "maintenance_entity_id", "maintenanceEntityId", "service_object_id", "serviceObjectId");
+                ?? (siteId is { } site && companiesBySite.TryGetValue(site, out var owner) ? owner : null);
             return new EquipmentRecord(id, JsonRead.String(item, "inventory_number", "inventoryNumber"),
                 JsonRead.String(item, "serial_number", "serialNumber"), companyId, siteId,
                 JsonRead.String(item, "name", "title"));
         }).ToArray();
-
-        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using (var clear = new NpgsqlCommand("DELETE FROM okdesk_equipment", connection, transaction))
             await clear.ExecuteNonQueryAsync(cancellationToken);
         await using var insert = new NpgsqlCommand("""
@@ -193,7 +196,7 @@ public sealed class OkdeskSyncService(NpgsqlDataSource dataSource, IOkdeskClient
             inventoryParam.Value = (object?)item.InventoryNumber ?? DBNull.Value;
             normalizedParam.Value = (object?)InventoryNumbers.Normalize(item.InventoryNumber) ?? DBNull.Value;
             serialParam.Value = (object?)item.SerialNumber ?? DBNull.Value;
-            companyParam.Value = item.CompanyId;
+            companyParam.Value = (object?)item.CompanyId ?? DBNull.Value;
             siteParam.Value = (object?)item.SiteId ?? DBNull.Value;
             nameParam.Value = (object?)item.Name ?? DBNull.Value;
             await insert.ExecuteNonQueryAsync(cancellationToken);
@@ -202,7 +205,7 @@ public sealed class OkdeskSyncService(NpgsqlDataSource dataSource, IOkdeskClient
     }
 
     private sealed record EquipmentRecord(long Id, string? InventoryNumber, string? SerialNumber,
-        long CompanyId, long? SiteId, string? Name);
+        long? CompanyId, long? SiteId, string? Name);
 
     private static long? ReadLong(JsonElement item, params string[] names)
     {

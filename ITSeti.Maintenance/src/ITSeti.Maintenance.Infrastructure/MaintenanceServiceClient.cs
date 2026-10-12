@@ -16,9 +16,16 @@ public static class MaintenanceServiceClient
     public static Task<MaintenanceServiceCallResult> PingAsync(CancellationToken cancellationToken = default) =>
         SendAsync(new MaintenanceServiceRequest("ping"), cancellationToken);
 
+    public static Task<MaintenanceServiceCallResult> RefreshTicketUpdatesAsync(CancellationToken cancellationToken = default) =>
+        SendAsync(new MaintenanceServiceRequest("refresh-ticket-updates"), cancellationToken);
+
     public static Task<MaintenanceServiceCallResult> StartAsync(
         MaintenanceServiceOperation operation, CancellationToken cancellationToken = default) =>
         SendAsync(new MaintenanceServiceRequest("start", operation), cancellationToken);
+
+    public static Task<MaintenanceServiceCallResult> StartAsync(
+        MaintenanceServiceOperation operation, string engineerPassword, CancellationToken cancellationToken = default) =>
+        SendAsync(new MaintenanceServiceRequest("start", operation, EngineerPassword: engineerPassword), cancellationToken);
 
     public static Task<MaintenanceServiceCallResult> StopAsync(
         MaintenanceServiceOperation operation, CancellationToken cancellationToken = default) =>

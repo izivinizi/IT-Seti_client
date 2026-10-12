@@ -6,7 +6,12 @@ $script:DiskResult=$null
 $script:DiskFailure=''
 $target=Join-Path $ScriptRoot 'diskspd-test.dat'
 function Write-DiskProgress([string]$Message) {
-    [IO.File]::AppendAllText((Join-Path $ScriptRoot 'disk-progress.log'),($Message+[Environment]::NewLine),(New-Object Text.UTF8Encoding($false)))
+    $path=Join-Path $ScriptRoot 'disk-progress.log'
+    $stream=[IO.File]::Open($path,[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+    try {
+        $writer=New-Object IO.StreamWriter($stream,(New-Object Text.UTF8Encoding($false)))
+        try {$writer.WriteLine($Message);$writer.Flush()} finally {$writer.Dispose()}
+    } finally {$stream.Dispose()}
 }
 function Assert-DiskCheckNotCancelled {
     $request=Join-Path $ScriptRoot 'cancel-request.txt'

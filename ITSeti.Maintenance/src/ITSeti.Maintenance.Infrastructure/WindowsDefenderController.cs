@@ -24,20 +24,49 @@ public sealed class WindowsDefenderController
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly string ScriptPath = Path.Combine(AppContext.BaseDirectory, "Backend", "WindowsDefender.ps1");
+    private static readonly string StatusPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "ITSeti", "Maintenance", "WindowsDefender", "status.json");
 
     public Task<WindowsDefenderState> ReadStatusAsync(CancellationToken cancellationToken = default) =>
         RunAsync("Status", cancellationToken);
 
     public Task<WindowsDefenderState> SetRealTimeProtectionAsync(bool enabled, CancellationToken cancellationToken = default)
     {
-        if (!IsAdministrator())
-            throw new UnauthorizedAccessException("Изменять параметры Microsoft Defender можно только из инженерского окна с правами администратора.");
-
         return RunAsync(enabled ? "Enable" : "Disable", cancellationToken);
     }
 
     private static async Task<WindowsDefenderState> RunAsync(string action, CancellationToken cancellationToken)
     {
+        if (action != "Status")
+        {
+            var operation = action == "Enable" ? MaintenanceServiceOperation.EnableWindowsDefender : MaintenanceServiceOperation.DisableWindowsDefender;
+            var previousWrite = File.Exists(StatusPath) ? File.GetLastWriteTimeUtc(StatusPath) : DateTime.MinValue;
+            var service = await MaintenanceServiceClient.StartAsync(operation, "itseti", cancellationToken);
+            if (service.Connected)
+            {
+                if (!service.Accepted) throw new InvalidOperationException(service.Message);
+                var deadline = DateTime.UtcNow.AddSeconds(30);
+                while (DateTime.UtcNow < deadline)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (File.Exists(StatusPath) && File.GetLastWriteTimeUtc(StatusPath) > previousWrite)
+                    {
+                        var completed = await ReadResultAsync(StatusPath, cancellationToken);
+                        if (completed is { } completedResult)
+                        {
+                            if (!completedResult.Success) throw new InvalidOperationException("Windows не изменила защиту: " + (completedResult.Error ?? "операция завершилась ошибкой."));
+                            var expected = action == "Enable";
+                            if (completedResult.Available && completedResult.RealTimeProtectionEnabled == expected)
+                                return ToState(completedResult);
+                            throw new InvalidOperationException("Служба завершила команду, но состояние защиты не изменилось. Проверьте Tamper Protection и политику организации.");
+                        }
+                    }
+                    await Task.Delay(250, cancellationToken);
+                }
+                throw new TimeoutException("Служба не вернула результат изменения Microsoft Defender за 30 секунд.");
+            }
+            if (!IsAdministrator()) throw new InvalidOperationException("Служба обслуживания недоступна; запустить изменение без повышения прав нельзя.");
+        }
         if (!File.Exists(ScriptPath)) throw new FileNotFoundException("Скрипт управления Microsoft Defender не найден.", ScriptPath);
 
         var powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
@@ -91,6 +120,11 @@ public sealed class WindowsDefenderController
             throw new InvalidOperationException(message);
         }
 
+        return ToState(result);
+    }
+
+    private static WindowsDefenderState ToState(CommandResult result)
+    {
         var enabled = result.RealTimeProtectionEnabled;
         var stateMessage = !result.Available
             ? "Microsoft Defender не активен; изменение состояния недоступно."
@@ -103,6 +137,12 @@ public sealed class WindowsDefenderController
         if (!string.IsNullOrWhiteSpace(result.Mode)) stateMessage += " Режим: " + result.Mode + ".";
 
         return new(result.Available, enabled, result.TamperProtectionEnabled ?? false, result.Mode ?? "", stateMessage);
+    }
+
+    private static async Task<CommandResult?> ReadResultAsync(string path, CancellationToken cancellationToken)
+    {
+        try { return JsonSerializer.Deserialize<CommandResult>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return null; }
     }
 
     private static bool IsAdministrator()

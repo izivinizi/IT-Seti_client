@@ -6,14 +6,29 @@ const state = { companies: [], sites: [], devices: [], deviceOptions: [], select
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.method && options.method !== 'GET') headers.set('X-CSRF-TOKEN', csrf);
-  const response = await fetch(path, { credentials: 'same-origin', ...options, headers });
-  if (response.status === 401) { location.assign('/login'); throw Error('Сеанс завершён.'); }
-  if (!response.ok) {
-    let message = 'Ошибка ' + response.status;
-    try { message = (await response.json()).error || message; } catch { /* No JSON response. */ }
-    throw Error(message);
+  let response;
+  try {
+    response = await fetch(path, { credentials: 'same-origin', ...options, headers,
+      signal: options.signal || AbortSignal.timeout(30000) });
+  } catch (error) {
+    if (error?.name === 'TimeoutError' || error?.name === 'AbortError') throw Error('Сервер не ответил за 30 секунд. Повторите запрос.');
+    throw error;
   }
-  return response.status === 204 ? null : response.json();
+  if (response.status === 401) { location.assign('/login'); throw Error('Сеанс завершён.'); }
+  if (response.redirected && new URL(response.url).pathname === '/login') {
+    location.assign('/login'); throw Error('Сеанс завершён.');
+  }
+  if (response.status === 204) return null;
+  const contentType = response.headers.get('content-type') || '';
+  const text = await response.text();
+  let result = null;
+  if (contentType.includes('json')) {
+    try { result = JSON.parse(text); } catch { throw Error(`Сервер вернул некорректный JSON (HTTP ${response.status}).`); }
+  } else if (response.ok) {
+    throw Error('Сервер вернул HTML вместо данных. Обновите страницу и войдите снова.');
+  }
+  if (!response.ok) throw Error(result?.error || `Ошибка сервера (HTTP ${response.status}).`);
+  return result;
 }
 
 function node(tag, text, className) {
@@ -215,7 +230,7 @@ async function loadDevices() {
     $('device-count').textContent = state.devices.length ? `Показано ${state.devices.length}` : '';
     $('device-page').textContent = 'Страница ' + (state.devicePage + 1);
     $('device-prev').disabled = state.devicePage === 0;
-    $('device-next').disabled = !result.hasMore;
+    $('device-next').disabled = !(result.hasMore || external.hasMore);
     status('device-status', '');
   } catch (error) { if (requestId === state.deviceRequest) status('device-status', error.message, 'error'); }
 }
@@ -312,15 +327,28 @@ function renderRun(run) {
   ];
   for (const [label, value] of items) { const cell = node('div'); cell.append(node('span', label), node('strong', String(value))); stats.append(cell); }
   root.append(stats);
-  const adapters = list(property(report, 'networkAdapters'));
+  const adapters = list(property(report, 'networkAdapters', 'network'));
   detailSection(root, 'Сеть', adapters.map(adapter => ({
     text: [property(adapter, 'name'), property(adapter, 'macAddress', 'mac'), property(adapter, 'addresses', 'ipAddresses')]
       .filter(Boolean).join(' · ')
   })), 'Сетевые данные не переданы.', true);
-  const hwInfo = property(report, 'hwiNFO', 'hwInfo');
+  const nestedHwInfo = property(report, 'hwiNFO', 'hwInfo');
+  const legacySensorFields = ['cpuTemperatureC', 'vrmTemperatureC', 'pchTemperatureC', 'rail12V', 'rail5V', 'rail3V']
+    .some(name => property(report, name) != null);
+  const hwInfo = nestedHwInfo || (legacySensorFields ? {
+    source: property(report, 'cpuSource'),
+    toolVersion: property(report, 'hwInfoVersion'),
+    cpuTemperatureC: property(report, 'cpuTemperatureC'),
+    vrmTemperatureC: property(report, 'vrmTemperatureC'),
+    pchTemperatureC: property(report, 'pchTemperatureC'),
+    rail12V: property(report, 'rail12V'),
+    rail5V: property(report, 'rail5V'),
+    rail3V: property(report, 'rail3V'),
+    cpuLoadPercent: String(property(report, 'cpuSource') || '').includes('HWiNFO') ? property(report, 'cpuPercent') : null
+  } : null);
   const sensorRows = hwInfo ? [
     ['Источник', [property(hwInfo, 'source'), property(hwInfo, 'toolVersion')].filter(Boolean).join(' · ')],
-    ['Снимок', date(property(hwInfo, 'capturedAtUtc'))],
+    ['Снимок', property(hwInfo, 'capturedAtUtc') ? date(property(hwInfo, 'capturedAtUtc')) : null],
     ['CPU', temperature(property(hwInfo, 'cpuTemperatureC'))],
     ['VRM', temperature(property(hwInfo, 'vrmTemperatureC'))],
     ['PCH', temperature(property(hwInfo, 'pchTemperatureC'))],
@@ -530,43 +558,97 @@ async function loadPackages() {
     $('process-policy-names').value = policy.allowedNames.join('\n');
     $('process-policy-publishers').value = policy.allowedPublishers.join('\n');
     const packages = await api('/api/admin/packages');
-    const body = $('package-rows'); body.replaceChildren();
-    for (const item of packages) {
-      const row = node('tr');
-      row.append(node('td', item.key), node('td', item.version), node('td', {windows:'Windows 10/11',win7:'Windows 7',any:'Любая'}[item.platform] || item.platform),
-        node('td', (item.sizeBytes / 1048576).toFixed(1) + ' МБ'), node('td', item.sha256, 'hash'),
-        node('td', item.latest ? 'Актуальная' : 'Архив', item.latest ? 'signal-ok' : 'muted'));
-      const actions = node('td');
-      if (!item.latest) {
-        const button = node('button', 'Сделать актуальной', 'secondary compact'); button.type = 'button';
-        button.addEventListener('click', async () => {
-          button.disabled = true;
-          try { await api('/api/admin/packages/' + item.id + '/activate', { method: 'POST' }); await loadPackages(); }
-          catch (error) { status('package-status', error.message, 'error'); button.disabled = false; }
-        });
-        actions.append(button);
-      }
-      row.append(actions); body.append(row);
-    }
+    const current = packages.filter(item => item.latest);
+    const archived = packages.filter(item => !item.latest);
+    $('package-rows').replaceChildren(...current.map(item => packageRow(item, false)));
+    $('package-archive-rows').replaceChildren(...archived.map(item => packageRow(item, true)));
     $('package-empty').classList.toggle('hidden', packages.length !== 0);
-    $('package-count').textContent = 'Всего ' + packages.length;
+    $('package-count').textContent = `Актуальных: ${current.length} · Всего: ${packages.length}`;
+    $('package-archive-count').textContent = archived.length + ' версий';
+    $('package-archive').classList.toggle('hidden', archived.length === 0);
   } catch (error) { status('package-status', error.message, 'error'); }
+}
+
+function packageRow(item, archived) {
+  const row = node('tr');
+  const title = node('td');
+  title.append(node('span', item.name || item.key, 'cell-main'));
+  if (item.name && item.name !== item.key) title.append(node('span', 'Ключ: ' + item.key, 'cell-sub'));
+  row.append(title, node('td', item.version),
+    node('td', {windows:'Windows 10/11',win7:'Windows 7',any:'Любая'}[item.platform] || item.platform),
+    node('td', (item.sizeBytes / 1048576).toFixed(1) + ' МБ'), node('td', item.sha256, 'hash'),
+    node('td', archived ? 'Архив' : 'Актуальная', archived ? 'muted' : 'signal-ok'));
+  const actions = node('td');
+  if (archived) {
+    const activate = node('button', 'Сделать актуальной', 'secondary compact'); activate.type = 'button';
+    activate.addEventListener('click', async () => {
+      activate.disabled = true;
+      try { await api('/api/admin/packages/' + item.id + '/activate', { method: 'POST' }); await loadPackages(); }
+      catch (error) { status('package-status', error.message, 'error'); activate.disabled = false; }
+    });
+    actions.append(activate);
+  }
+  const remove = node('button', 'Удалить', 'danger compact'); remove.type = 'button';
+  remove.addEventListener('click', async () => {
+    const label = `${item.name || item.key} ${item.version} (${item.platform})`;
+    const fallback = archived ? '' : '\nЕсли есть архивная версия, она станет актуальной.';
+    if (!window.confirm(`Удалить пакет ${label} с сервера?${fallback}`)) return;
+    remove.disabled = true;
+    try {
+      const result = await api('/api/admin/packages/' + item.id, { method: 'DELETE' });
+      await loadPackages();
+      const restored = result.fallbackVersion ? ` Активирована версия ${result.fallbackVersion}.` : '';
+      const cleanup = result.cleanupPending ? ' Запись удалена, но файл пакета не удалось убрать.' : '';
+      status('package-status', 'Пакет удалён.' + restored + cleanup, result.cleanupPending ? 'error' : 'ok');
+    } catch (error) { status('package-status', error.message, 'error'); remove.disabled = false; }
+  });
+  actions.append(remove);
+  row.append(actions);
+  return row;
 }
 
 async function uploadPackage(event) {
   event.preventDefault();
   const form = event.currentTarget, button = form.querySelector('button[type="submit"]');
-  button.disabled = true; status('package-status', 'Загружаю файл…');
+  button.disabled = true;
   try {
-    const response = await fetch('/api/admin/packages', { method: 'POST', credentials: 'same-origin',
-      headers: { 'X-CSRF-TOKEN': csrf }, body: new FormData(form) });
-    if (response.status === 401) { location.assign('/login'); return; }
-    const result = await response.json();
-    if (response.status === 409) { await loadPackages(); status('package-status', result.error || 'Такая версия уже загружена.', 'error'); return; }
-    if (!response.ok) throw Error(result.error || 'Ошибка загрузки.');
-    status('package-status', `Загружено: ${result.key} ${result.version}. SHA-256: ${result.sha256}`, 'ok');
+    const result = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/admin/packages');
+      xhr.withCredentials = true;
+      xhr.timeout = 30 * 60 * 1000;
+      xhr.setRequestHeader('X-CSRF-TOKEN', csrf);
+      xhr.upload.onprogress = progress => {
+        if (progress.lengthComputable) status('package-status', `Загружаю файл: ${Math.round(progress.loaded * 100 / progress.total)}% (${(progress.loaded / 1048576).toFixed(1)} из ${(progress.total / 1048576).toFixed(1)} МБ)…`);
+        else status('package-status', 'Загружаю файл на сервер…');
+      };
+      xhr.upload.onload = () => status('package-status', 'Файл передан. Сервер проверяет версию и SHA-256…');
+      xhr.onload = () => {
+        if (xhr.status === 401 || (xhr.responseURL && new URL(xhr.responseURL).pathname === '/login')) {
+          location.assign('/login'); reject(Error('Сеанс завершён.')); return;
+        }
+        let body;
+        try { body = JSON.parse(xhr.responseText); }
+        catch {
+          reject(Error(xhr.status >= 500
+            ? `Сервер не смог обработать загрузку (HTTP ${xhr.status}); проверьте журнал сервера.`
+            : `Сервер вернул не JSON (HTTP ${xhr.status}). Обновите страницу и войдите снова.`));
+          return;
+        }
+        if (xhr.status < 200 || xhr.status >= 300) { reject(Object.assign(Error(body.error || `Ошибка загрузки (HTTP ${xhr.status}).`), { status: xhr.status })); return; }
+        resolve(body);
+      };
+      xhr.onerror = () => reject(Error('Сетевая ошибка во время загрузки ПО.'));
+      xhr.ontimeout = () => reject(Error('Загрузка не завершилась за 30 минут. Проверьте соединение и размер файла.'));
+      xhr.onabort = () => reject(Error('Загрузка отменена.'));
+      xhr.send(new FormData(form));
+    });
+    status('package-status', `Загружено: ${result.name || result.key} · ${result.version} (${result.key}). SHA-256: ${result.sha256}`, 'ok');
     form.reset(); await loadPackages();
-  } catch (error) { status('package-status', error.message, 'error'); }
+  } catch (error) {
+    if (error.status === 409) await loadPackages();
+    status('package-status', error.message, 'error');
+  }
   finally { button.disabled = false; }
 }
 

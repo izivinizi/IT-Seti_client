@@ -9,7 +9,7 @@
     · <a href="ITSeti.Server/README.md">Центральный сервер (пилот)</a>
     · <a href="ITSeti.Maintenance/THIRD-PARTY-NOTICES.md">Сторонние компоненты</a>
   </p>
-  <p><b>Версия исходников: 2.2.0 beta</b> · Windows 10/11 · x64 · отдельная beta-сборка для Windows 7 SP1</p>
+  <p><b>Версия исходников: 2.3.9 beta</b> · Windows 10/11 · x64 · отдельная beta-сборка для Windows 7 SP1</p>
 </div>
 
 Приложение предназначено для двух сценариев: пользователь может быстро проверить

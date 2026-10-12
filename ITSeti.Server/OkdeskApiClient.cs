@@ -211,4 +211,12 @@ public static class TicketServices
         return new(title.Trim(), description.Trim(), companyId, siteId, "service",
             new Dictionary<string, string> { ["service_type"] = serviceCode });
     }
+
+    public static string? FormatComputerInfo(string? computerInfo)
+    {
+        var value = computerInfo?.Trim();
+        if (string.IsNullOrEmpty(value)) return null;
+        if (value.Length > 2000) throw new ArgumentException("Computer information exceeds the limit.", nameof(computerInfo));
+        return $"Заявка из приложения\n\nДанные ПК:\n{value}";
+    }
 }

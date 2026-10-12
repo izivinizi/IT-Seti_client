@@ -6,6 +6,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Web.Script.Serialization;
 
 namespace ITSeti.Maintenance.Win7
@@ -43,9 +44,17 @@ namespace ITSeti.Maintenance.Win7
         private static readonly object SessionGate = new object();
         private static readonly TimeSpan CacheLifetime = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan SessionLifetime = TimeSpan.FromHours(10);
+        private static readonly TimeSpan ErrorLogInterval = TimeSpan.FromMinutes(5);
+        private const int VoltageWindowSize = 7;
+        private const int MinimumVoltageSamples = 3;
+        private static readonly Dictionary<string, Queue<double>> VoltageSamples = new Dictionary<string, Queue<double>>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Regex Rail12Pattern = new Regex(@"(?<![a-z0-9])\+?\s*12(?:[.,]0{1,2})?\s*v(?![a-z0-9])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        private static readonly Regex Rail5Pattern = new Regex(@"(?<![a-z0-9])\+?\s*5(?:[.,]0{1,2})?\s*v(?:s\s*b)?(?![a-z0-9])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        private static readonly Regex Rail3Pattern = new Regex(@"(?<![a-z0-9])\+?\s*3[.,]3\s*v(?![a-z0-9])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         private static DateTime sessionStartedUtc;
         private static Process sensorProcess;
         private static DateTime nextStartAttemptUtc;
+        private static DateTime nextErrorLogUtc;
 
         private static string CachePath
         {
@@ -68,6 +77,7 @@ namespace ITSeti.Maintenance.Win7
                 if(sensorProcess != null){try {if(!sensorProcess.HasExited) sensorProcess.Kill();}catch(InvalidOperationException){} sensorProcess.Dispose();sensorProcess=null;}
                 sessionStartedUtc = default(DateTime); nextStartAttemptUtc=default(DateTime);
             }
+            ClearVoltageSamples();
             try { File.Delete(CachePath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
 
@@ -86,6 +96,7 @@ namespace ITSeti.Maintenance.Win7
             snapshot.PchTemperatureC = data.PchTemperatureC;
             snapshot.Rail12V = data.Rail12V;
             snapshot.Rail5V = data.Rail5V;
+            snapshot.Rail3V = data.Rail3V;
             snapshot.CpuVoltageV = data.CpuVoltageV;
             if (data.CpuLoadPercent.HasValue){snapshot.CpuPercent = data.CpuLoadPercent;snapshot.CpuSource="HWiNFO · служба SYSTEM";}
             if(data.MemoryLoadPercent>=0 && data.MemoryLoadPercent<=100 && snapshot.TotalMemoryGb.HasValue)snapshot.FreeMemoryGb=snapshot.TotalMemoryGb*(100-data.MemoryLoadPercent)/100;
@@ -94,11 +105,12 @@ namespace ITSeti.Maintenance.Win7
                 snapshot.CpuTemperatureC = data.CpuTemperatureC;
                 snapshot.CpuSource = "HWiNFO · служба SYSTEM";
             }
+            AddTemperatureFinding(snapshot, data.CpuTemperatureC, 75, 85, "CPU");
             AddTemperatureFinding(snapshot, data.VrmTemperatureC, 80, 95, "VRM");
             AddTemperatureFinding(snapshot, data.PchTemperatureC, 70, 80, "PCH");
-            AddRailFinding(snapshot, data.Rail12V, 10.8, 13.2, "+12 В");
-            AddRailFinding(snapshot, data.Rail5V, 4.5, 5.5, "+5 В");
-            AddRailFinding(snapshot, data.Rail3V, 2.97, 3.63, "+3,3 В");
+            AddRailFinding(snapshot, data.Rail12V, 11.4, 12.6, 10.8, 13.2, "+12 В");
+            AddRailFinding(snapshot, data.Rail5V, 4.75, 5.25, 4.5, 5.5, "+5 В");
+            AddRailFinding(snapshot, data.Rail3V, 3.135, 3.465, 2.97, 3.63, "+3,3 В");
             foreach (var alert in data.Alerts ?? new List<LegacyHwInfoAlert>())
             {
                 var level = alert.IsCritical ? "критично" : "предупреждение";
@@ -114,10 +126,14 @@ namespace ITSeti.Maintenance.Win7
             else if (value.Value >= warning) snapshot.Findings.Add("HWiNFO предупреждение: " + name + " " + value.Value.ToString("N0") + " °C.");
         }
 
-        private static void AddRailFinding(LegacySnapshot snapshot, double? value, double min, double max, string name)
+        private static void AddRailFinding(LegacySnapshot snapshot, double? value, double warningMin, double warningMax,
+            double criticalMin, double criticalMax, string name)
         {
-            if (value.HasValue && (value.Value < min || value.Value > max))
+            if (!value.HasValue) return;
+            if (value.Value < criticalMin || value.Value > criticalMax)
                 snapshot.Findings.Add("HWiNFO критично: напряжение " + name + " " + value.Value.ToString("N2") + " В.");
+            else if (value.Value < warningMin || value.Value > warningMax)
+                snapshot.Findings.Add("HWiNFO предупреждение: напряжение " + name + " " + value.Value.ToString("N2") + " В.");
         }
 
         private static LegacyHwInfoData Read()
@@ -138,6 +154,7 @@ namespace ITSeti.Maintenance.Win7
                         nextStartAttemptUtc=DateTime.UtcNow.AddMinutes(5);
                         if(sensorProcess != null) sensorProcess.Dispose();
                         sensorProcess=Process.Start(new ProcessStartInfo(executable){UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden,WorkingDirectory=Path.GetDirectoryName(executable)});
+                        if (sensorProcess != null) ClearVoltageSamples();
                         sessionStartedUtc=DateTime.UtcNow;
                     }
                 }
@@ -145,12 +162,13 @@ namespace ITSeti.Maintenance.Win7
                 var values=ITSeti.HwInfoBridge.SensorReader.Read();
                 var data=new LegacyHwInfoData{Source="HWiNFO Shared Memory",ToolVersion=ReadFileVersion(executable),CapturedAtUtc=DateTime.UtcNow};
                 foreach(var value in values) ApplyCsvValue(data,value.Name,value.Unit,value.Value);
+                StabilizeVoltages(data);
                 WriteCache(data);
                 return data;
             }
-            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is InvalidOperationException || ex is ArgumentException)
+            catch (Exception ex) when (IsRecoverableSensorError(ex))
             {
-                LegacyApplicationErrors.Record("HWiNFO","Чтение датчиков",ex);
+                RecordReadError(ex);
                 return ReadCached();
             }
         }
@@ -162,8 +180,9 @@ namespace ITSeti.Maintenance.Win7
                 if (!File.Exists(CachePath) || DateTime.UtcNow - File.GetLastWriteTimeUtc(CachePath) > CacheLifetime) return null;
                 return new JavaScriptSerializer().Deserialize<LegacyHwInfoData>(File.ReadAllText(CachePath));
             }
-            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is InvalidOperationException || ex is ArgumentException)
+            catch (Exception ex) when (IsRecoverableSensorError(ex))
             {
+                RecordReadError(ex);
                 return null;
             }
         }
@@ -187,7 +206,9 @@ namespace ITSeti.Maintenance.Win7
             var root = new JavaScriptSerializer { MaxJsonLength = 8 * 1024 * 1024 }.DeserializeObject(json);
             var result = new LegacyHwInfoData { Source = source, CapturedAtUtc = DateTime.UtcNow, ToolVersion = FindText(root, "version") ?? "" };
             Walk(root, "", result);
-            return result.CpuTemperatureC.HasValue || result.VrmTemperatureC.HasValue || result.PchTemperatureC.HasValue || result.Rail12V.HasValue || result.Rail5V.HasValue
+            return result.CpuTemperatureC.HasValue || result.VrmTemperatureC.HasValue || result.PchTemperatureC.HasValue ||
+                result.Rail12V.HasValue || result.Rail5V.HasValue || result.Rail3V.HasValue ||
+                result.CpuLoadPercent.HasValue || result.MemoryLoadPercent.HasValue
                 ? result : null;
         }
 
@@ -220,7 +241,8 @@ namespace ITSeti.Maintenance.Win7
                 }
             }
             return result.CpuTemperatureC.HasValue || result.VrmTemperatureC.HasValue || result.PchTemperatureC.HasValue ||
-                result.Rail12V.HasValue || result.Rail5V.HasValue || result.CpuLoadPercent.HasValue ? result : null;
+                result.Rail12V.HasValue || result.Rail5V.HasValue || result.Rail3V.HasValue ||
+                result.CpuLoadPercent.HasValue || result.MemoryLoadPercent.HasValue ? result : null;
         }
 
         private static void ApplyCsvValue(LegacyHwInfoData result, string name, string unit, double value)
@@ -241,9 +263,9 @@ namespace ITSeti.Maintenance.Win7
                 (lower.Contains("cpu") || lower.Contains("processor") || lower.Contains("package") || lower.Contains("tctl") || lower.Contains("tdie") || lower.Contains("процессор"))) result.CpuTemperatureC = Max(result.CpuTemperatureC, value);
             else if (unit.Trim().Equals("V", StringComparison.OrdinalIgnoreCase) || lower.Contains("voltage") || lower.Contains(" vcore"))
             {
-                if(lower.Contains("3.3") || lower.Contains("3,3")){result.Rail3V=value;return;}
-                if (lower.Contains("12v") || lower.Contains("+12")) result.Rail12V = value;
-                else if (lower.Contains("5v") || lower.Contains("+5")) result.Rail5V = value;
+                if (Rail3Pattern.IsMatch(lower)) SetRail(result, "Rail3V", value);
+                else if (Rail12Pattern.IsMatch(lower)) SetRail(result, "Rail12V", value);
+                else if (Rail5Pattern.IsMatch(lower)) SetRail(result, "Rail5V", value);
                 else if (lower.Contains("vcore") || lower.Contains("vsoc") || lower.Contains("vsc") || lower.Contains("cpu core")) result.CpuVoltageV = value;
             }
         }
@@ -309,8 +331,9 @@ namespace ITSeti.Maintenance.Win7
                         result.PchTemperatureC = Max(result.PchTemperatureC, value);
                     else if (unit.Trim().Equals("V", StringComparison.OrdinalIgnoreCase) || lower.Contains("voltage") || lower.Contains(" vcore"))
                     {
-                        if (lower.Contains("12v") || lower.Contains("+12")) result.Rail12V = value;
-                        else if (lower.Contains("5v") || lower.Contains("+5")) result.Rail5V = value;
+                        if (Rail3Pattern.IsMatch(lower)) SetRail(result, "Rail3V", value.Value);
+                        else if (Rail12Pattern.IsMatch(lower)) SetRail(result, "Rail12V", value.Value);
+                        else if (Rail5Pattern.IsMatch(lower)) SetRail(result, "Rail5V", value.Value);
                         else if (lower.Contains("vcore") || lower.Contains("vcc") || lower.Contains("vsoc") || lower.Contains("vsc") || lower.Contains("cpu core")) result.CpuVoltageV = value;
                     }
                 }
@@ -323,6 +346,48 @@ namespace ITSeti.Maintenance.Win7
         }
 
         private static double? Max(double? current, double? value) { return !current.HasValue || value > current ? value : current; }
+
+        private static void SetRail(LegacyHwInfoData result, string category, double value)
+        {
+            if (double.IsNaN(value) || double.IsInfinity(value)) return;
+            var nominal = category == "Rail12V" ? 12.0 : category == "Rail5V" ? 5.0 : 3.3;
+            var current = category == "Rail12V" ? result.Rail12V : category == "Rail5V" ? result.Rail5V : result.Rail3V;
+            if (current.HasValue && Math.Abs(current.Value - nominal) <= Math.Abs(value - nominal)) return;
+            if (category == "Rail12V") result.Rail12V = value;
+            else if (category == "Rail5V") result.Rail5V = value;
+            else result.Rail3V = value;
+        }
+
+        private static void StabilizeVoltages(LegacyHwInfoData data)
+        {
+            lock (VoltageSamples)
+            {
+                data.Rail12V = StabilizeRail("Rail12V", data.Rail12V);
+                data.Rail5V = StabilizeRail("Rail5V", data.Rail5V);
+                data.Rail3V = StabilizeRail("Rail3V", data.Rail3V);
+            }
+        }
+
+        private static double? StabilizeRail(string category, double? value)
+        {
+            if (!value.HasValue) return null;
+            Queue<double> samples;
+            if (!VoltageSamples.TryGetValue(category, out samples))
+            {
+                samples = new Queue<double>();
+                VoltageSamples.Add(category, samples);
+            }
+            samples.Enqueue(value.Value);
+            while (samples.Count > VoltageWindowSize) samples.Dequeue();
+            if (samples.Count < MinimumVoltageSamples) return null;
+            var ordered = samples.OrderBy(item => item).ToArray();
+            return ordered[ordered.Length / 2];
+        }
+
+        private static void ClearVoltageSamples()
+        {
+            lock (VoltageSamples) VoltageSamples.Clear();
+        }
 
         private static string Text(IDictionary<string, object> values, params string[] names)
         {
@@ -395,5 +460,21 @@ namespace ITSeti.Maintenance.Win7
         }
 
         private static bool IsWindows() { return Environment.OSVersion.Platform == PlatformID.Win32NT; }
+
+        private static bool IsRecoverableSensorError(Exception exception)
+        {
+            return !(exception is OutOfMemoryException) && !(exception is StackOverflowException) &&
+                !(exception is AccessViolationException) && !(exception is ThreadAbortException);
+        }
+
+        private static void RecordReadError(Exception exception)
+        {
+            lock (SessionGate)
+            {
+                if (DateTime.UtcNow < nextErrorLogUtc) return;
+                nextErrorLogUtc = DateTime.UtcNow.Add(ErrorLogInterval);
+            }
+            LegacyApplicationErrors.Record("HWiNFO", "Чтение датчиков", exception);
+        }
     }
 }

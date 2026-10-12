@@ -7,12 +7,13 @@ public static class InventoryAssignmentResolver
     public static async Task<IpAssignment?> ResolveAsync(NpgsqlConnection connection, string inventory,
         CancellationToken cancellationToken, NpgsqlTransaction? transaction = null)
     {
-        await using var command = new NpgsqlCommand("""
+        var deviceInventory = InventoryNumbers.SqlExpression("upper(regexp_replace(coalesce(d.inventory_number,''), '[^[:alnum:]]', '', 'g'))");
+        await using var command = new NpgsqlCommand($"""
             SELECT DISTINCT source.company_id,source.service_object_id
             FROM (
                 SELECT d.company_id,d.service_object_id
                 FROM devices d
-                WHERE nullif(ltrim(regexp_replace(upper(coalesce(d.inventory_number,'')), '[^[:alnum:]]', '', 'g'),'0'),'')=@inventory
+                WHERE {deviceInventory}=@inventory
                 UNION
                 SELECT e.company_id,e.service_object_id
                 FROM okdesk_equipment e WHERE e.normalized_inventory_number=@inventory

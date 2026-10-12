@@ -100,7 +100,7 @@ $worker=[scriptblock]::Create([IO.File]::ReadAllText((Join-Path $run 'FullCheckW
 if($SmartOnly){
     & $worker -RunRoot $run -ToolsRoot $tools -HeadlessDiskSpd -TrustedTools -SkipResourceSampling -SkipDiskBenchmark
 } else {
-    & $worker -RunRoot $run -ToolsRoot $tools -HeadlessDiskSpd -TrustedTools -SkipResourceSampling
+    & $worker -RunRoot $run -ToolsRoot $tools -HeadlessDiskSpd -TrustedTools
 }
 Remove-Item Env:ITSETI_CPU_TEMPERATURE_FILE -ErrorAction SilentlyContinue
 if((Test-Path -LiteralPath $cancelRequest) -and [IO.File]::ReadAllText($cancelRequest).Trim() -eq 'cancel'){
@@ -108,7 +108,6 @@ if((Test-Path -LiteralPath $cancelRequest) -and [IO.File]::ReadAllText($cancelRe
     exit 0
 }
 if(Test-Path -LiteralPath (Join-Path $run 'result.json')){
-    try { & (Join-Path $env:WINDIR 'System32\schtasks.exe') /Run /TN 'ITSeti-Maintenance-Upload' | Out-Null } catch {}
     if($SmartOnly){
         [IO.File]::WriteAllText((Join-Path $base 'last-smart-run.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII)
     }

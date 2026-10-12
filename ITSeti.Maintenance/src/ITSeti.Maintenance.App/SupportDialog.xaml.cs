@@ -71,13 +71,14 @@ public partial class SupportDialog : Window
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { contactSaved = false; }
             var description = TicketBody.Text.Trim();
             if (contact.Length > 0) description += $"\n\nКонтакт: {contact}";
-            if (IncludePcInfo.IsChecked == true) description += $"\n\nДанные ПК:\n{identity}";
-            var payload = JsonSerializer.Serialize(new { title = TicketTitle.Text.Trim(), service.Code, description, files });
+            var computerInfo = IncludePcInfo.IsChecked == true ? identity : null;
+            var payload = JsonSerializer.Serialize(new { title = TicketTitle.Text.Trim(), service.Code, description, computerInfo, files });
             if (payload != pendingPayload) { pendingPayload = payload; pendingRequestId = Guid.NewGuid(); }
             using var response = await client.PostAsync("/api/v1/tickets", new {
                 requestId = pendingRequestId, title = TicketTitle.Text.Trim(), serviceCode = service.Code,
-                description, attachments = files.Select(f => new { f.FileName, f.ContentBase64 }).ToArray()
+                description, computerInfo, attachments = files.Select(f => new { f.FileName, f.ContentBase64 }).ToArray()
             });
+            await MaintenanceServiceClient.RefreshTicketUpdatesAsync();
             TicketStatus.Text = "Заявка сохранена на сервере. Статус отправки в Okdesk виден в «Мои заявки».";
             if (!contactSaved) TicketStatus.Text += " Контакт не удалось запомнить на этом ПК.";
             pendingPayload = null;

@@ -179,7 +179,7 @@ try {
             for($attempt=1;$attempt -le 3;$attempt++){
                 try {
                     Register-ScheduledTask -TaskName $name -Action $taskAction -Trigger $trigger -Settings $settings -Principal $taskPrincipal -Force -ErrorAction Stop | Out-Null
-                    $task=$scheduler.GetFolder('\').GetTask($name)
+                    $registered=Get-ScheduledTask -TaskName $name -ErrorAction Stop
                     $lastTaskError=$null
                     break
                 } catch {
@@ -189,6 +189,15 @@ try {
                 }
             }
             if($lastTaskError){throw $lastTaskError}
+            $task=$null
+            for($attempt=1;$attempt -le 10;$attempt++){
+                try {$task=$scheduler.GetFolder('\').GetTask($name);break}
+                catch {
+                    if($attempt -eq 10){throw}
+                    Start-Sleep -Milliseconds 500
+                }
+            }
+            if(!$task){throw "Task Scheduler did not expose registered task $name."}
             $task.SetSecurityDescriptor('D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;BU)',0)
             $registered=Get-ScheduledTask -TaskName $name -ErrorAction Stop
             $registeredSid=if($registered.Principal.UserId -eq 'S-1-5-18'){'S-1-5-18'}else{([Security.Principal.NTAccount]$registered.Principal.UserId).Translate([Security.Principal.SecurityIdentifier]).Value}

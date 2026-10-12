@@ -427,8 +427,8 @@ public sealed class OkdeskWebClient : IOkdeskClient, IDisposable
         return content;
     }
 
-    private static string EncodeText(string text) => System.Text.Encodings.Web.HtmlEncoder.Default.Encode(text)
-        .Replace("\r\n", "<br />").Replace("\n", "<br />");
+    private static string EncodeText(string text) => string.Join("<br />", text.Replace("\r\n", "\n").Replace('\r', '\n')
+        .Split('\n').Select(System.Text.Encodings.Web.HtmlEncoder.Default.Encode));
 
     public sealed record IssueDefaults(long TypeId, long PriorityId, string GroupName, string AssigneesPath);
     public static IssueDefaults ReadIssueDefaults(JsonElement form)

@@ -5,7 +5,7 @@ using System.Net;
 using System.Text;
 using ITSeti.Maintenance.Core;
 
-if (args.Contains("--okdesk-web-live") || args.Contains("--okdesk-ticket-live") || args.Contains("--okdesk-sync-live"))
+if (args.Contains("--okdesk-web-live") || args.Contains("--okdesk-ticket-live") || args.Contains("--okdesk-sync-live") || args.Contains("--okdesk-equipment-live"))
 {
     var liveConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
     {
@@ -50,6 +50,20 @@ if (args.Contains("--okdesk-web-live") || args.Contains("--okdesk-ticket-live") 
         return;
     }
     var sites = await live.GetAllAsync("/api/v1/maintenance_entities/list", timeout.Token);
+    if (args.Contains("--okdesk-equipment-live"))
+    {
+        try
+        {
+            var equipment = await live.GetAllAsync("/api/v1/equipments/list", timeout.Token);
+            Console.WriteLine($"PASS live web equipment: {equipment.Count} computers; without inventory={equipment.Count(x => x.GetProperty("inventory_number").ValueKind == JsonValueKind.Null)}, without company={equipment.Count(x => x.GetProperty("company_id").ValueKind == JsonValueKind.Null)}, without object={equipment.Count(x => x.GetProperty("maintenance_entity_id").ValueKind == JsonValueKind.Null)}");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException or KeyNotFoundException or OkdeskApiException)
+        {
+            Console.WriteLine("LIVE web equipment failed: " + ex.GetType().Name);
+            Environment.ExitCode = 2;
+        }
+        return;
+    }
     var companyIds = companies.Select(x => x.GetProperty("id").GetInt64()).ToHashSet();
     Console.WriteLine($"Live catalog counts: companies={companies.Count}, objects={sites.Count}, unmatched owners={sites.Count(x => !companyIds.Contains(x.GetProperty("company_id").GetInt64()))}");
     if (companies.Count == 0 || sites.Any(x => x.GetProperty("company_id").GetInt64() <= 0))
@@ -67,8 +81,42 @@ static void Check(bool value, string caseName)
 
 Check(PackageVersionDetector.TryParse("FileVersion 2.3.3.0", out var detectedVersion) && detectedVersion == new Version(2, 3, 3, 0),
     "application package versions accept EXE FileVersion metadata");
+Check(PackageVersionDetector.TryParse("ProductVersion 7.7.3.0", out var productVersion) && productVersion == new Version(7, 7, 3, 0),
+    "software package versions accept ProductVersion metadata before FileVersion");
 Check(PackageVersionDetector.TryParse("ITSeti-Maintenance-Setup-2.3.3.exe", out var fileNameVersion) && fileNameVersion == new Version(2, 3, 3),
     "application package versions fall back to a semantic version in the filename");
+Check(PackageVersionDetector.DetectName("OCS Inventory NG Agent", "Setup", "agent-2.11.0.exe") == "OCS Inventory NG Agent" &&
+    PackageVersionDetector.DetectName("", "RMS Host Installer", "rms.exe") == "RMS Host Installer" &&
+    PackageVersionDetector.DetectName("", "", "rms-host-7.7.3.exe") == "rms host",
+    "package display name prefers product metadata and falls back to installer filename");
+var workspaceRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+foreach (var installer in new[]
+         {
+             Path.Combine(workspaceRoot, "ITSeti.Maintenance", "dist", "ITSeti-Maintenance-Setup-2.3.9.exe"),
+             Path.Combine(workspaceRoot, "ITSeti.Maintenance", "dist", "Win7", "ITSeti-Maintenance-Win7-Setup-2.3.9.exe")
+         }.Where(File.Exists))
+{
+    var metadata = PackageVersionDetector.Detect(installer, Path.GetFileName(installer));
+    Check(metadata.Name.StartsWith("ИТ-Сети Обслуживание ПК", StringComparison.Ordinal) && metadata.Version == new Version(2, 3, 7),
+        "real setup metadata auto-detects product name and ProductVersion: " + Path.GetFileName(installer));
+}
+var testHostExecutable = Path.Combine(AppContext.BaseDirectory, "ITSeti.Server.Tests.exe");
+if (File.Exists(testHostExecutable))
+{
+    var hostInfo = System.Diagnostics.FileVersionInfo.GetVersionInfo(testHostExecutable);
+    var expectedText = string.IsNullOrWhiteSpace(hostInfo.ProductVersion) ? hostInfo.FileVersion : hostInfo.ProductVersion;
+    if (PackageVersionDetector.TryParse(expectedText, out var expectedHostVersion))
+    {
+        var extensionlessHost = Path.Combine(Path.GetTempPath(), "itseti-package-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            File.Copy(testHostExecutable, extensionlessHost);
+            var metadata = PackageVersionDetector.Detect(extensionlessHost, "setup.exe");
+            Check(metadata.Version == expectedHostVersion, "package metadata is detected when the server's stored blob has no extension");
+        }
+        finally { File.Delete(extensionlessHost); }
+    }
+}
 Check(!PackageVersionDetector.TryParse("latest", out _), "application package upload rejects undetectable versions");
 Check(Monitoring.CurrentIssues(Report("""{"Findings":["HWiNFO критично: CPU 90 °C."]}""")).Single().Severity==1,
     "Win7 HWiNFO critical findings are classified as critical");
@@ -77,6 +125,9 @@ Check(Monitoring.NewIssues(Report("""{"Findings":["HWiNFO критично: CPU 
 
 Check(OkdeskWebClient.ReadCreatedIssueId(Report("""{"redirect":{"redirect_path":"/issues/24447"}}""")) == 24447,
     "web creation reads the confirmed sequential ticket number");
+Check(TicketServices.FormatComputerInfo("Инв. номер: 2041\nRMS: 123") == "Заявка из приложения\n\nДанные ПК:\nИнв. номер: 2041\nRMS: 123" &&
+    TicketServices.FormatComputerInfo(null) is null && TicketServices.FormatComputerInfo(" ") is null,
+    "computer details are formatted as a separate application-signed message");
 var webComment = Report("""{"type":"AddCommentEvent","state":"published","isPublic":true,"commentId":42,"content":"public","author":{"type":"Employee","id":10}}""");
 Check(OkdeskWebClient.ReadPublicComment(webComment).Id == 42, "published public web replies are parsed");
 foreach (var rejected in new[] { webComment.GetRawText().Replace("true", "false"), webComment.GetRawText().Replace("published", "drafted"), webComment.GetRawText().Replace("\"isPublic\":true,", "") })
@@ -89,13 +140,14 @@ using (var web = new OkdeskWebClient(new ConfigurationBuilder().AddInMemoryColle
     ["OkdeskLogin"]="fixture@example.test",["OkdeskPassword"]="fixture",["OkdeskWebTicketDeliveryEnabled"]="true"
 }).Build(), new HttpClient(webFixture)))
 {
-    Check(await web.CreateIssueAsync(TicketServices.Build("Fixture", "<text>", "525", 123, 456), CancellationToken.None) == 731,
+    Check(await web.CreateIssueAsync(TicketServices.Build("Fixture", "first\r\nsecond\n<third>", "525", 123, 456), CancellationToken.None) == 731,
         "web transport creates a ticket after isolated authentication");
     Check(webFixture.Issue.GetProperty("company_id").GetInt64() == 123 && webFixture.Issue.GetProperty("maintenance_entity_id").GetInt64() == 456 &&
-        webFixture.Issue.GetProperty("group_id").GetInt64() == 99 && webFixture.Issue.GetProperty("description").GetString() == "&lt;text&gt;",
-        "web payload preserves assignment, service defaults and encodes user text");
-    Check(await web.AddCommentAsync(731, "answer", [], CancellationToken.None) == 42 && webFixture.PublicReply,
-        "nested web comment response confirms public delivery");
+        webFixture.Issue.GetProperty("group_id").GetInt64() == 99 && webFixture.Issue.GetProperty("description").GetString() == "first<br />second<br />&lt;third&gt;",
+        "web payload preserves assignment, service defaults, multiline text and HTML encoding");
+    Check(await web.AddCommentAsync(731, "first\r\nsecond & <third>", [], CancellationToken.None) == 42 && webFixture.PublicReply &&
+        webFixture.CommentContent == "first<br />second &amp; &lt;third&gt;",
+        "web comment preserves multiline text and confirms public delivery");
     Check((await web.GetCommentsAsync(731, CancellationToken.None)).Select(x => x.Id).SequenceEqual([42L]),
         "web history pagination excludes private replies");
     typeof(OkdeskWebClient).GetField("authenticatedUntil", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.SetValue(web, DateTimeOffset.MinValue);
@@ -118,6 +170,13 @@ Check(webEquipment.GetProperty("company_id").GetInt64() == 12 && webEquipment.Ge
     "web equipment parser reads company/object and normalizes formatted inventory numbers");
 Check(InventoryNumbers.Normalize("IT-00 2041") == "IT002041" && InventoryNumbers.Normalize("000") is null,
     "inventory normalization ignores separators while preserving nonnumeric identifiers");
+Check(InventoryNumbers.Normalize("PC01000004732") == InventoryNumbers.Normalize("4732") &&
+    InventoryNumbers.Normalize("PC01000000000") is null,
+    "Okdesk PC-prefixed inventory IDs match a short client inventory number without matching placeholders");
+var serverProgram = File.ReadAllText(Path.Combine(workspaceRoot, "ITSeti.Server", "Program.cs"));
+Check(serverProgram.Contains("admin.MapGet(\"/computer-tree\"", StringComparison.Ordinal) &&
+    serverProgram.Contains("MultipartBodyLengthLimit = 1024L * 1024 * 1024", StringComparison.Ordinal),
+    "server exposes the computer tree used by the admin UI and configures package upload buffering");
 using (var web = new OkdeskWebClient(new ConfigurationBuilder().Build()))
     Check(!web.CanSendTickets && !web.CanReadComments && !web.CanChangeStatus, "unverified web ticket actions stay queued and private comments cannot leak");
 var diagnosticRoot = Path.Combine(Path.GetTempPath(), "itseti-enrollment-" + Guid.NewGuid().ToString("N"));
@@ -158,14 +217,34 @@ Check(AutomaticIpEnrollment.ResolveUnique([new(10, 20), new(10, 20)]) == new IpA
 Check(AutomaticIpEnrollment.ResolveUnique([new(10, 20), new(10, 21)]) is null,
     "an IP shared by multiple objects never chooses an assignment silently");
 Check(AutomaticIpEnrollment.CanReuseExisting("::ffff:192.0.2.15", "192.0.2.15") &&
-    !AutomaticIpEnrollment.CanReuseExisting("192.0.2.15", "192.0.2.16"),
-    "existing hardware is re-keyed only from its previously recorded IP");
+    AutomaticIpEnrollment.CanReuseExisting("192.0.2.15", "192.0.2.16") &&
+    !AutomaticIpEnrollment.CanReuseExisting("192.0.2.15", "0.0.0.0"),
+    "known hardware can reconnect after a valid DHCP address change");
+Check(Monitoring.RmsChangeIssue("12345", "67890")?.Category == "identity" &&
+    Monitoring.RmsChangeIssue("12345", "12345") is null && Monitoring.RmsChangeIssue(null, "67890") is null,
+    "RMS changes are reported only after a known baseline");
+Check(Monitoring.DuplicateInventoryIssue("INV-1", ["PC-OTHER"]).Category == "identity",
+    "duplicate inventory identifiers create a monitoring issue");
 
 var first = Report("""
     {"Notes":["CPU: температура 78 °C достигла порога 75 °C."],"Full":{"Events":[
       {"Log":"System","Provider":"Disk","Id":7,"Level":2,"RecordId":10,"Message":"Bad block"}]}}
     """);
 Check(Monitoring.NewIssues(first, null).Count == 0, "first report establishes a baseline");
+
+var initialServiceAlert = Report("""
+    {"KindLabel":"Постоянный мониторинг","DiagnosticIssues":[
+      {"Title":"Критическое отклонение шины 12 В","Detail":"Напряжение 6.63 В","Severity":"Critical"}]}
+    """);
+Check(Monitoring.NewIssues(initialServiceAlert, null).Single().Severity == 1,
+    "a service-confirmed critical alert is not dropped when it is the device's first server report");
+var identityFirst = Report("""{"ServerIdentityIssues":[{"Identity":"rms-id","Title":"Изменился RMS","Detail":"old · new"}]}""");
+Check(Monitoring.NewIssues(identityFirst, null).Single().Category == "identity",
+    "server-discovered identity conflicts alert even on the first report");
+Check(Monitoring.NewIssues(Report("""
+    {"KindLabel":"Проверка","DiagnosticIssues":[
+      {"Title":"Историческая проблема","Detail":"Базовое состояние","Severity":"Critical"}]}
+    """), null).Count == 0, "the first ordinary diagnostic report remains a baseline");
 
 var repeated = Report("""
     {"Notes":["CPU: температура 80 °C достигла порога 75 °C."],"Full":{"Events":[
@@ -310,6 +389,7 @@ sealed class WebTicketHandler : HttpMessageHandler
     public int LoginCount { get; private set; }
     public JsonElement Issue { get; private set; }
     public bool PublicReply { get; private set; }
+    public string? CommentContent { get; private set; }
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
         var path = request.RequestUri!.PathAndQuery;
@@ -327,7 +407,11 @@ sealed class WebTicketHandler : HttpMessageHandler
                 using (var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct))) Issue = body.RootElement.GetProperty("issue").Clone();
                 json = """{"redirect":{"redirect_path":"/issues/731"}}"""; break;
             case "/issues/731/history_events/comments":
-                using (var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct))) PublicReply = body.RootElement.GetProperty("is_public").GetBoolean();
+                using (var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct)))
+                {
+                    PublicReply = body.RootElement.GetProperty("is_public").GetBoolean();
+                    CommentContent = body.RootElement.GetProperty("content").GetString();
+                }
                 json = """{"type":"published","record":{"record":{"commentId":42}}}"""; break;
             case "/issues/731/history_events":
                 json = """{"isLastPage":false,"historyEvents":[{"record":{"id":101,"commentId":43,"type":"AddCommentEvent","state":"published","isPublic":false}}]}"""; break;

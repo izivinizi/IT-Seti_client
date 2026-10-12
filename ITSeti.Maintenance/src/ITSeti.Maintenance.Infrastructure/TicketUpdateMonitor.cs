@@ -31,7 +31,7 @@ public sealed class TicketUpdateMonitor : IDisposable
     public async Task<TimeSpan> PollAsync(CancellationToken cancellationToken = default)
     {
         var config = ReadSupportConfiguration();
-        if (config is null) return TimeSpan.FromSeconds(30);
+        if (config is null) return Timeout.InfiniteTimeSpan;
 
         var state = ReadState(config.DeviceId);
         var url = new Uri(config.ServerUrl, "api/v1/ticket-updates");
@@ -79,7 +79,7 @@ public sealed class TicketUpdateMonitor : IDisposable
             DateTimeOffset.UtcNow, messages.TakeLast(500).ToArray());
         await WriteStateAsync(next, cancellationToken);
         if (hasMore) return TimeSpan.FromSeconds(1);
-        return activeCount > 0 ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(2);
+        return activeCount > 0 ? TimeSpan.FromSeconds(30) : Timeout.InfiniteTimeSpan;
     }
 
     private TicketSupportConfiguration? ReadSupportConfiguration()

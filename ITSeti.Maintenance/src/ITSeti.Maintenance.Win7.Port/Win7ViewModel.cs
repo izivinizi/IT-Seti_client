@@ -18,7 +18,7 @@ namespace ITSeti.Maintenance.App
             "CheckProgressPhase CleanupStatus Comparison ComputerName Cpu CpuDetail CpuStatusBrush DebugErrorLine " +
             "DebugFiles DebugSource DebugStage DebugSteps DiskCount DiskDetail DiskGroups DiskStatusBrush EventMessage " +
             "EventStatus FilteredEvents FullRunHint Gpu HasAnyDeskId HasInventoryNumber HasLowDiskSpace HasEngineerLowDiskSpace " +
-            "HasMoreUserIssues HasRmsId History HistoryCount IsBusy IsFullCheckRunning Memory MemoryDetail MemoryStatusBrush MemoryType " +
+            "HasMoreUserIssues HasRmsId History HistoryCount HwInfoSensors IsBusy IsFullCheckRunning Memory MemoryDetail MemoryStatusBrush MemoryType " +
             "MoreUserIssuesLabel NetworkAdapters OverviewCoverage OverviewIssues OverviewStatus OverviewUptimeLabel " +
             "Processes ProcessAllowStatus ProcessStatus ScheduleStatus Selected SelectedEvent SelectedHistorySummary SelectedTreeSizeVolume " +
             "SetupBundleStatus SetupBundleTooltip SetupComponents SetupSummary SetupWarning SnapshotDate SoftwareActionStatus " +
@@ -36,7 +36,7 @@ namespace ITSeti.Maintenance.App
         {
             properties = new PropertyDescriptorCollection(Names.Select(x => (PropertyDescriptor)new ValueDescriptor(x)).ToArray(), true);
             foreach (var name in new[] { "DiskGroups", "NetworkAdapters", "Processes", "FilteredEvents", "SetupComponents", "History",
-                "DebugSteps", "DebugFiles", "SystemTools", "TreeSizeVolumes", "OverviewIssues", "UserVisibleIssues", "CheckProgressEntries" })
+                "DebugSteps", "DebugFiles", "SystemTools", "TreeSizeVolumes", "HwInfoSensors", "OverviewIssues", "UserVisibleIssues", "CheckProgressEntries" })
                 Set(name, new ObservableCollection<Win7Row>());
             foreach (var name in new[] { "CanRun", "CanRunFull", "CanRunCleanup", "CanCheckWindowsUpdates" }) Set(name, true);
             foreach (var name in Names.Where(x => x.StartsWith("Can", StringComparison.Ordinal) && !values.ContainsKey(x))) Set(name, false);
@@ -116,7 +116,11 @@ namespace ITSeti.Maintenance.App
         public string Type { get; set; }
         public string Status { get; set; }
         public string LinkSpeed { get; set; }
+        public string MacAddress { get; set; }
         public string Addresses { get; set; }
+        public string Category { get; set; }
+        public string Value { get; set; }
+        public string CapturedAt { get; set; }
         public string Description { get; set; }
         public string Publisher { get; set; }
         public string Signature { get; set; }

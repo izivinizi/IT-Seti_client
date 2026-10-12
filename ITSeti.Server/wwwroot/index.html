@@ -8,7 +8,8 @@
   <title>ИТ-Сети · Сервер</title>
   <script src="/theme.js?v=1"></script>
   <link rel="stylesheet" href="/app.css?v=9">
-  <script src="/app.js?v=9" defer></script>
+  <link rel="stylesheet" href="/package-admin.css?v=1">
+  <script src="/app.js?v=11" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -103,7 +104,8 @@
             <h2 id="upload-title">Загрузить пакет</h2>
             <form id="package-form" class="upload-form">
               <label><span>Ключ</span><input class="field" name="key" placeholder="rms, ocs, application" required></label>
-              <label><span>Версия</span><input class="field" name="version" placeholder="оставьте пустым для FileVersion EXE"></label>
+              <label><span>Название ПО</span><input class="field" name="name" placeholder="определится по файлу"></label>
+              <label><span>Версия</span><input class="field" name="version" placeholder="авто: ProductVersion / FileVersion / имя"></label>
               <label><span>Платформа</span><select class="field" name="platform"><option value="windows">Windows 10/11</option><option value="win7">Windows 7</option><option value="any">Любая</option></select></label>
               <label class="file-label"><span>Файл</span><input name="file" type="file" required></label>
               <button type="submit" class="primary">Загрузить</button>
@@ -111,8 +113,11 @@
             <div id="package-status" class="status" role="status"></div>
           </section>
           <section class="package-section" aria-labelledby="package-list-title"><div class="section-heading"><h2 id="package-list-title">Пакеты</h2><span id="package-count" class="meta"></span></div>
-            <div class="table-scroll"><table class="data-table package-table"><thead><tr><th>Ключ</th><th>Версия</th><th>Платформа</th><th>Размер</th><th>SHA-256</th><th>Статус</th><th></th></tr></thead><tbody id="package-rows"></tbody></table></div>
+            <div class="table-scroll"><table class="data-table package-table"><thead><tr><th>ПО</th><th>Версия</th><th>Платформа</th><th>Размер</th><th>SHA-256</th><th>Статус</th><th></th></tr></thead><tbody id="package-rows"></tbody></table></div>
             <div id="package-empty" class="empty hidden">Пакеты ещё не загружены.</div>
+            <details id="package-archive" class="package-archive hidden"><summary><span>Старые версии</span><span id="package-archive-count" class="meta"></span></summary>
+              <div class="table-scroll"><table class="data-table package-table"><thead><tr><th>ПО</th><th>Версия</th><th>Платформа</th><th>Размер</th><th>SHA-256</th><th>Статус</th><th></th></tr></thead><tbody id="package-archive-rows"></tbody></table></div>
+            </details>
           </section>
           <section class="upload-section" aria-labelledby="process-policy-title"><h2 id="process-policy-title">Разрешённые процессы</h2>
             <form id="process-policy-form" class="policy-form">

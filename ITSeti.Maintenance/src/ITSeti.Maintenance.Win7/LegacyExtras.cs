@@ -115,7 +115,7 @@ namespace ITSeti.Maintenance.Win7
             }
         }
 
-        private static void CollectNetwork(LegacySnapshot snapshot)
+        internal static void CollectNetwork(LegacySnapshot snapshot)
         {
             try
             {
@@ -130,9 +130,11 @@ namespace ITSeti.Maintenance.Win7
                         .Select(x => x.Address).Where(x => !System.Net.IPAddress.IsLoopback(x) &&
                             !(x.AddressFamily == AddressFamily.InterNetworkV6 && x.IsIPv6LinkLocal)).Select(x => x.ToString()).ToArray();
                     if (addresses.Length == 0) continue;
+                    var physicalAddress = adapter.GetPhysicalAddress().GetAddressBytes();
                     snapshot.Network.Add(new LegacyNetworkAdapter { Name = adapter.Name,
                         Kind = kind == NetworkInterfaceType.Wireless80211 ? "Wi-Fi" : kind == NetworkInterfaceType.Ppp || kind == NetworkInterfaceType.Tunnel ? "VPN" : "Ethernet",
                         Status = "Подключено", Speed = adapter.Speed > 0 ? (adapter.Speed / 1000000) + " Мбит/с" : "неизвестно",
+                        MacAddress = physicalAddress.Length == 0 ? "" : BitConverter.ToString(physicalAddress).Replace('-', ':'),
                         Addresses = string.Join(", ", addresses) });
                 }
             }

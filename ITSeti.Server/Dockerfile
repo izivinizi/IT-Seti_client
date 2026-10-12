@@ -15,7 +15,7 @@ WORKDIR /app
 ENV ASPNETCORE_URLS=http://+:8080 \
     ASPNETCORE_ENVIRONMENT=Production \
     DataRoot=/data
-RUN mkdir -p /data/packages /data/keys && chown -R $APP_UID:$APP_UID /data
+RUN mkdir -p /data/packages /data/keys /data/tmp && chown -R $APP_UID:$APP_UID /data
 COPY --from=build --chown=$APP_UID:$APP_UID /out/ ./
 USER $APP_UID
 EXPOSE 8080

@@ -15,7 +15,18 @@ if (!$snapshot.ComputerName -or !@($snapshot.Disks).Count -or !$snapshot.Checked
     throw 'Win7 diagnostic result is incomplete.'
 }
 $startedAt = [DateTimeOffset]::MinValue
-if ([guid]::Empty -eq [guid]$snapshot.Id -or ![DateTimeOffset]::TryParse($snapshot.StartedAt, [ref]$startedAt)) {
+$startedAtValid = $false
+if ($snapshot.StartedAt -is [DateTime]) {
+    $startedAt = [DateTimeOffset]$snapshot.StartedAt
+    $startedAtValid = $true
+} elseif ($snapshot.StartedAt -is [DateTimeOffset]) {
+    $startedAt = $snapshot.StartedAt
+    $startedAtValid = $true
+} else {
+    $startedAtValid = [DateTimeOffset]::TryParse([string]$snapshot.StartedAt,
+        [Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind,[ref]$startedAt)
+}
+if ([guid]::Empty -eq [guid]$snapshot.Id -or !$startedAtValid) {
     throw 'Win7 diagnostic report id or timestamp is invalid.'
 }
 
@@ -86,7 +97,7 @@ $updater = $assembly.GetType('ITSeti.Maintenance.App.Win7ServerUpdater', $true)
 $flags = [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic
 $parse = $updater.GetMethod('ParseServerPackage', $flags)
 if (!$parse) { throw 'Win7 server package parser is missing.' }
-$version = '2.3.7'
+$version = '2.3.9'
 $manifest = [string]([ordered]@{
     id = '11111111-1111-1111-1111-111111111111'; key = 'application'; platform = 'win7'; version = $version
     fileName = 'ITSeti-Maintenance-Win7-Setup.exe'; sizeBytes = 12345; sha256 = ('a' * 64)
@@ -130,6 +141,13 @@ if ($source -notmatch 'DeleteTask\(ScheduledCheckRunner\.TaskName' -or
 }
 $portProject = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7.Port\ITSeti.Maintenance.Win7.Port.csproj') -Raw
 if ($portProject -match 'SupportDialog\.xaml|MyTicketsDialog\.xaml') { throw 'Ticket creation UI must remain excluded from Windows 7.' }
+$hwInfoReader = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7\LegacyHwInfoReader.cs') -Raw
+if ($hwInfoReader -notmatch 'MinimumVoltageSamples\s*=\s*3' -or
+    $hwInfoReader -notmatch 'VoltageWindowSize\s*=\s*7' -or
+    $hwInfoReader -notmatch 'StabilizeVoltages\(data\)' -or
+    $hwInfoReader -match 'lower\.Contains\("12v"\)|lower\.Contains\("\+12"\)|lower\.Contains\("5v"\)|lower\.Contains\("\+5"\)') {
+    throw 'Win7 HWiNFO rails must use exact sensor labels and stabilized samples.'
+}
 $packageBuilder = Get-Content -LiteralPath (Join-Path $Root 'Build-Win7Package.ps1') -Raw
 $installerSource = Get-Content -LiteralPath (Join-Path $Root 'Installer-Win7.iss') -Raw
 if ($packageBuilder -notmatch 'CrystalDiskMark9' -or $installerSource -notmatch 'Tools\\CrystalDiskMark9') {
@@ -150,14 +168,29 @@ $cleanupSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenan
 $systemCleanupSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7\SystemCleanupTaskRunner.cs') -Raw
 $diagnosticSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7\LegacyDiagnostics.cs') -Raw
 $windowSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7.Port\MainWindow.xaml.cs') -Raw
+$serviceSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7.Port\Win7MaintenanceService.cs') -Raw
+$networkSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7\LegacyExtras.cs') -Raw
+$renderSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7.Port\MainWindow.Render.cs') -Raw
+$viewModelSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7.Port\Win7ViewModel.cs') -Raw
+$serverUiSource = Get-Content -LiteralPath (Join-Path $Root '..\ITSeti.Server\wwwroot\app.js') -Raw
 if (!$cleanupSource.Contains('thumbcache_*.db') -or $cleanupSource -notmatch 'Temporary Internet Files' -or
     $cleanupSource -notmatch 'INetCache' -or $cleanupSource -notmatch 'D3DSCache' -or
     $cleanupSource -notmatch 'SHEmptyRecycleBin' -or
     $systemCleanupSource -notmatch 'Delivery Optimization Files' -or $systemCleanupSource -notmatch 'Update Cleanup' -or
     $systemCleanupSource -notmatch 'Device Driver Packages' -or
     $diagnosticSource -notmatch 'if \(cleanupAfterBenchmark\)' -or
-    $windowSource -notmatch 'CollectWithCleanup\(full, cancellation\.Token, false, true, cleanupUserSid, progress\)') {
+    $windowSource -match 'CollectWithCleanup\(' -or $windowSource -match 'await CheckAsync\(false\)' -or
+    $windowSource -notmatch 'LegacyDiagnostics\.Collect\(full, cancellation\.Token\)' -or
+    $serviceSource -match 'CollectWithCleanup\(') {
     throw 'Win7 cleanup must preserve user cache/thumbnails/recycle-bin and Windows update/driver categories for engineer checks.'
+}
+if ($networkSource -notmatch 'MacAddress\s*=\s*physicalAddress' -or
+    $renderSource -notmatch 'RenderHwInfoSensors\(s\)' -or $viewModelSource -notmatch 'HwInfoSensors' -or
+    $renderSource -notmatch 's\.Rail3V' -or
+    $diagnosticSource -notmatch 'isSystem && total >= 50L \* 1073741824 && free < 15L \* 1073741824' -or
+    $serverUiSource -notmatch "property\(report, 'networkAdapters', 'network'\)" -or
+    $serverUiSource -notmatch 'legacySensorFields') {
+    throw 'Win7 network MAC, sensor table or system-disk warning parity is incomplete.'
 }
 $workerResult = $updater.GetMethod('RunBackgroundWorker', [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::Public).Invoke($null, @())
 if ($workerResult -ne 2) { throw 'The background updater worker ran without SYSTEM credentials.' }
@@ -261,4 +294,4 @@ if (!$SkipUi) {
         }
     } finally { $app.Shutdown() }
 }
-Write-Output "PASS: Win7 real diagnostic, release manifest validation and UI. $output"
+Write-Output "PASS: Win7 code diagnostic, release manifest validation and UI smoke on host OS. $output"

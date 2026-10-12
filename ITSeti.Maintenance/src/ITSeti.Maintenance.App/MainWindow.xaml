@@ -217,7 +217,10 @@
      <Grid Margin="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
       <DockPanel Margin="0,0,0,12" LastChildFill="True">
        <Button DockPanel.Dock="Right" Click="RefreshNetwork_Click" Padding="9,6" ToolTip="Обновить список сетевых адаптеров" AutomationProperties.Name="Обновить сетевые адаптеры"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets"/></Button>
-       <TextBlock Text="Сетевые адаптеры и последние показания HWiNFO" Style="{StaticResource SecondaryText}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+       <StackPanel VerticalAlignment="Center">
+        <TextBlock Text="Сетевые адаптеры и последние показания HWiNFO" Style="{StaticResource SecondaryText}"/>
+        <TextBlock Text="{Binding HwInfoStatus}" Style="{StaticResource SecondaryText}"/>
+       </StackPanel>
       </DockPanel>
       <Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="1.2*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
        <DataGrid ItemsSource="{Binding NetworkAdapters}" RowHeight="NaN" MinRowHeight="44">
