@@ -18,6 +18,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance");
     private readonly ConcurrentDictionary<MaintenanceServiceOperation, Process> running = new();
     private readonly SemaphoreSlim temperatureLock = new(1, 1);
+    private readonly TicketUpdateMonitor ticketUpdateMonitor = new();
     private readonly string backendRoot;
     private readonly string statusPath;
     private readonly string pipeName;
@@ -28,6 +29,9 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     private DateTimeOffset lastTemperatureProbe = DateTimeOffset.MinValue;
     private DateTimeOffset lastUpload = DateTimeOffset.MinValue;
     private DateTimeOffset lastCatalogRefresh = DateTimeOffset.MinValue;
+    private DateTimeOffset nextSmartAttempt = DateTimeOffset.MinValue;
+    private DateTimeOffset nextTicketPoll = DateTimeOffset.MinValue;
+    private int ticketPollRunning;
 
     public MaintenanceServiceCoordinator(string? backendRootOverride = null, string? statusPathOverride = null,
         string? pipeNameOverride = null)
@@ -46,7 +50,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         var monitor = RunMonitorLoopAsync(cancellationToken);
         try { await Task.WhenAll(pipe, monitor); }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
-        finally { StopChildren(); }
+        finally { StopChildren(); HwInfoReader.StopSession(); }
     }
 
     internal void ValidateInstallation()
@@ -139,11 +143,22 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         if (string.Equals(request.Command, "ping", StringComparison.OrdinalIgnoreCase))
             return new(true, "Служба обслуживания работает.", GetVersion());
         if (string.Equals(request.Command, "stop", StringComparison.OrdinalIgnoreCase) && request.Operation is { } stopOperation)
+        {
+            if (stopOperation == MaintenanceServiceOperation.QuickCheck)
+                stopOperation = MaintenanceServiceOperation.FullCheck;
+            if (IsDiagnosticOperation(stopOperation))
+            {
+                lock (diagnosticGate) queuedDiagnostic = null;
+                var stopped = false;
+                foreach (var operation in running.Keys.Where(IsDiagnosticOperation)) stopped |= StopOperation(operation);
+                return new(true, stopped ? "Проверка остановлена." : "Проверка уже завершена; очередь очищена.", GetVersion());
+            }
             return new(true, StopOperation(stopOperation) ? "Операция остановлена." : "Операция уже завершена.", GetVersion());
+        }
         if (string.Equals(request.Command, "launch", StringComparison.OrdinalIgnoreCase) && request.Operation is
             MaintenanceServiceOperation.OpenSystemTool or MaintenanceServiceOperation.OpenUtility)
         {
-            if (!clientIsAdministrator && IsAdministratorOnlyLaunch(request))
+            if (!clientIsAdministrator && request.EngineerPassword != "itseti" && IsAdministratorOnlyLaunch(request))
                 return new(false, "Эта операция доступна только из инженерного меню администратора.", GetVersion());
             try
             {
@@ -153,22 +168,29 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException
                 or Win32Exception or ArgumentException)
             {
+                ApplicationErrorStore.Record("Системная служба", "Запуск утилиты " + request.Target, ex);
                 return new(false, ex.Message, GetVersion());
             }
         }
         if (!string.Equals(request.Command, "start", StringComparison.OrdinalIgnoreCase) || request.Operation is null)
             return new(false, "Команда службы не поддерживается.", GetVersion());
+        var normalizedOperation = request.Operation == MaintenanceServiceOperation.QuickCheck
+            ? MaintenanceServiceOperation.FullCheck : request.Operation.Value;
         try
         {
-            if (IsDiagnosticOperation(request.Operation.Value) && HasRunningDiagnostic())
+            if (IsDiagnosticOperation(normalizedOperation) && HasRunningDiagnostic())
             {
-                if (request.Operation.Value == MaintenanceServiceOperation.DailySmartCheck)
+                if (normalizedOperation == MaintenanceServiceOperation.DailySmartCheck)
                     return new(true, "Диагностическая проверка уже выполняется.", GetVersion());
-                lock (diagnosticGate) queuedDiagnostic = request.Operation.Value;
+                if (running.Any(pair => pair.Key is MaintenanceServiceOperation.FullCheck or MaintenanceServiceOperation.ScheduledFullCheck && IsRunning(pair.Value)))
+                    return new(true, running.Any(pair => pair.Key == MaintenanceServiceOperation.ScheduledFullCheck && IsRunning(pair.Value))
+                        ? "Присоединяемся к текущей плановой полной проверке."
+                        : "Присоединяемся к текущей полной проверке.", GetVersion());
+                lock (diagnosticGate) queuedDiagnostic = normalizedOperation;
                 return new(true, "Диагностическая проверка уже выполняется; запрос поставлен в очередь.", GetVersion());
             }
-            var started = StartOperation(request.Operation.Value);
-            var queueable = request.Operation.Value is MaintenanceServiceOperation.Cleanup
+            var started = StartOperation(normalizedOperation);
+            var queueable = normalizedOperation is MaintenanceServiceOperation.Cleanup
                 or MaintenanceServiceOperation.OrganizationSetup
                 or MaintenanceServiceOperation.UploadReports
                 or MaintenanceServiceOperation.RefreshSoftwareCatalog;
@@ -176,6 +198,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
         {
+            ApplicationErrorStore.Record("Системная служба", "Запуск " + normalizedOperation, ex);
             return new(false, ex.Message, GetVersion());
         }
     }
@@ -236,9 +259,9 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     private (string Script, string[] Arguments) ResolveOperation(MaintenanceServiceOperation operation) => operation switch
     {
         MaintenanceServiceOperation.FullCheck => ("InstalledCheck.ps1", []),
-        MaintenanceServiceOperation.QuickCheck => ("InstalledCheck.ps1", ["-Quick"]),
+        MaintenanceServiceOperation.QuickCheck => ("InstalledCheck.ps1", []),
         MaintenanceServiceOperation.DailySmartCheck => ("InstalledCheck.ps1", ["-SmartOnly"]),
-        MaintenanceServiceOperation.ScheduledFullCheck => ("InstalledCheck.ps1", ["-StartRepair"]),
+        MaintenanceServiceOperation.ScheduledFullCheck => ("InstalledCheck.ps1", ["-StartRepair", "-UserApproved"]),
         MaintenanceServiceOperation.Cleanup => ("InstalledCleanup.ps1", []),
         MaintenanceServiceOperation.Repair => ("InstalledRepair.ps1", []),
         MaintenanceServiceOperation.OrganizationSetup => ("InstalledOrganizationSetup.ps1", []),
@@ -271,6 +294,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
                     FullDiagnosticsRunner.ResolveInteractiveDiskTool(toolsRoot, diskInfo: true), request.Target),
                 "CrystalDiskMark" => CreateToolSpec(
                     FullDiagnosticsRunner.ResolveInteractiveDiskTool(toolsRoot, diskInfo: false), request.Target),
+                "HWiNFO" => CreateToolSpec(FindHwInfoExecutable(toolsRoot), request.Target),
                 "TreeSize" => CreateTreeSizeSpec(toolsRoot, request.Argument),
                 _ => throw new ArgumentOutOfRangeException(nameof(request.Target), "Утилита не разрешена службой.")
             };
@@ -284,6 +308,16 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         if (string.IsNullOrWhiteSpace(executable))
             throw new FileNotFoundException($"{name} не найден в установленном комплекте.");
         return new(executable, [], Path.GetDirectoryName(executable)!);
+    }
+
+    private static string? FindHwInfoExecutable(string toolsRoot)
+    {
+        foreach (var name in new[] { "HWiNFO32.exe", "HWiNFO64.exe" })
+        {
+            var path = Path.Combine(toolsRoot, "HWiNFO", name);
+            if (File.Exists(path)) return path;
+        }
+        return null;
     }
 
     private static SystemToolLaunchSpec CreateTreeSizeSpec(string toolsRoot, string? volume)
@@ -306,6 +340,8 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         {
             UseShellExecute = false,
             CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
             WorkingDirectory = Path.GetDirectoryName(backendRoot)!
         };
         foreach (var value in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script })
@@ -318,9 +354,13 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     {
         try
         {
+            var outputTask=ReadBoundedOutputAsync(process.StandardOutput);
+            var errorTask=ReadBoundedOutputAsync(process.StandardError);
             await process.WaitForExitAsync();
+            var output=await outputTask;
+            var error=await errorTask;
             if (process.ExitCode != 0)
-                await WriteServiceErrorAsync(new InvalidOperationException($"{operation}: код завершения {process.ExitCode}."));
+                await WriteServiceErrorAsync(new InvalidOperationException($"{operation}: код завершения {process.ExitCode}.\n{error}\n{output}"));
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
@@ -357,7 +397,20 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         }
     }
 
-    private bool HasRunningDiagnostic() => running.Keys.Any(IsDiagnosticOperation);
+    private bool HasRunningDiagnostic() => running.Any(pair => IsDiagnosticOperation(pair.Key) && IsRunning(pair.Value));
+    private static bool IsRunning(Process process)
+    {
+        try { return !process.HasExited; }
+        catch (InvalidOperationException) { return false; }
+    }
+
+    private static async Task<string> ReadBoundedOutputAsync(StreamReader reader)
+    {
+        var output=new StringBuilder();var buffer=new char[4096];int count;
+        while((count=await reader.ReadAsync(buffer))>0)
+            if(output.Length<65536)output.Append(buffer,0,Math.Min(count,65536-output.Length));
+        return output.ToString();
+    }
 
     private static bool IsDiagnosticOperation(MaintenanceServiceOperation operation) => operation is
         MaintenanceServiceOperation.FullCheck or MaintenanceServiceOperation.QuickCheck or
@@ -384,9 +437,10 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     {
         while (!cancellationToken.IsCancellationRequested)
         {
+            var loopStarted = Stopwatch.StartNew();
             try
             {
-                if (DateTimeOffset.UtcNow - lastTemperatureProbe >= TimeSpan.FromSeconds(30))
+                if (DateTimeOffset.UtcNow - lastTemperatureProbe >= TimeSpan.FromSeconds(5))
                 {
                     await RefreshTemperatureAsync(cancellationToken);
                     lastTemperatureProbe = DateTimeOffset.UtcNow;
@@ -407,8 +461,16 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
                     StartOperation(MaintenanceServiceOperation.RefreshSoftwareCatalog);
                     lastCatalogRefresh = DateTimeOffset.UtcNow;
                 }
-                if (!HasFreshSmartReport())
+                if (DateTimeOffset.UtcNow >= nextTicketPoll && Interlocked.CompareExchange(ref ticketPollRunning, 1, 0) == 0)
+                {
+                    nextTicketPoll = DateTimeOffset.UtcNow.AddMinutes(2);
+                    _ = PollTicketUpdatesAsync(cancellationToken);
+                }
+                if (!HasFreshSmartReport() && DateTimeOffset.UtcNow >= nextSmartAttempt && !HasRunningDiagnostic())
+                {
+                    nextSmartAttempt = DateTimeOffset.UtcNow.AddHours(1);
                     StartOperation(MaintenanceServiceOperation.DailySmartCheck);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
@@ -416,8 +478,26 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             {
                 await WriteServiceErrorAsync(ex);
             }
-            await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
+            await Task.Delay(TimeSpan.FromMilliseconds(Math.Max(50,5000-loopStarted.ElapsedMilliseconds)), cancellationToken);
         }
+    }
+
+    private async Task PollTicketUpdatesAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var delay = await ticketUpdateMonitor.PollAsync(cancellationToken);
+            nextTicketPoll = DateTimeOffset.UtcNow + delay;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or
+            UnauthorizedAccessException or JsonException or InvalidOperationException or ArgumentException or
+            KeyNotFoundException or FormatException or OverflowException)
+        {
+            ApplicationErrorStore.Record("Заявки", "Фоновое получение новых сообщений", ex);
+            nextTicketPoll = DateTimeOffset.UtcNow.AddMinutes(2);
+        }
+        finally { Volatile.Write(ref ticketPollRunning, 0); }
     }
 
     private static bool HasFreshSmartReport()
@@ -427,7 +507,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             var marker = Path.Combine(DataRoot, "last-smart-run.txt");
             if (!File.Exists(marker)) return false;
             return DateTimeOffset.TryParse(File.ReadAllText(marker).Trim(), out var value) &&
-                DateTimeOffset.UtcNow - value.ToUniversalTime() < TimeSpan.FromHours(24);
+                DateTimeOffset.UtcNow - value.ToUniversalTime() < TimeSpan.FromHours(10);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException) { return false; }
     }
@@ -446,7 +526,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         foreach (var issue in current)
         {
             monitoringStreaks[issue.Identity] = monitoringStreaks.TryGetValue(issue.Identity, out var count) ? count + 1 : 1;
-            if (monitoringStreaks[issue.Identity] >= 2 && reportedMonitoringIssues.Add(issue.Identity)) ready.Add(issue);
+            if (monitoringStreaks[issue.Identity] >= 7 && reportedMonitoringIssues.Add(issue.Identity)) ready.Add(issue);
         }
         return ready;
     }
@@ -478,6 +558,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
                 PchTemperatureC = hwInfo.PchTemperatureC,
                 Rail12V = hwInfo.Rail12V,
                 Rail5V = hwInfo.Rail5V,
+                Rail3V = hwInfo.Rail3V,
                 AlertingSensors = hwInfo.AlertingSensors
             } : null,
             snapshot.ActiveUptimeHours,
@@ -505,7 +586,9 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             var hwInfo = await HwInfoReader.ReadAsync(cancellationToken);
             var reading = hwInfo?.CpuTemperatureC is { } hwTemperature
                 ? new CpuTemperatureReading(hwTemperature, $"HWiNFO · {hwInfo.Source}", hwInfo.CapturedAtUtc)
-                : (await CpuTemperatureReader.ReadAsync()) with { CapturedAtUtc = DateTimeOffset.UtcNow };
+                : new CpuTemperatureReading(null,
+                    "HWiNFO не вернул допустимый датчик CPU; запасной датчик не используется.",
+                    DateTimeOffset.UtcNow);
             await WriteJsonAtomicallyAsync(CpuTemperatureCache.InstalledPath, reading, cancellationToken);
         }
         finally { temperatureLock.Release(); }
@@ -523,6 +606,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             TotalMemoryBytes = snapshot?.TotalMemoryBytes,
             AvailableMemoryBytes = snapshot?.AvailableMemoryBytes,
             CpuTemperatureC = snapshot?.CpuTemperatureC is { } temperature ? (double?)Math.Round(temperature) : null,
+            CpuTemperatureStatus = snapshot?.CpuTemperatureStatus,
             UptimeHours = snapshot?.ActiveUptimeHours is { } uptime ? (double?)Math.Round(uptime, 1) : null,
             DiskReadLatencyMs = snapshot?.DiskReadLatencyMs is { } readLatency ? (double?)Math.Round(readLatency, 1) : null,
             DiskWriteLatencyMs = snapshot?.DiskWriteLatencyMs is { } writeLatency ? (double?)Math.Round(writeLatency, 1) : null,
@@ -531,6 +615,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             WindowsRelease = snapshot?.WindowsRelease,
             WindowsBuild = snapshot?.WindowsBuild,
             CriticalIssues = critical?.Select(issue => new { issue.Identity, issue.Title, issue.Detail }).ToArray() ?? [],
+            NetworkAdapters = snapshot?.NetworkAdapters,
             FixedDisks = snapshot?.Disks.Select(disk => new
             {
                 disk.Name,
@@ -553,21 +638,14 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         finally { try { File.Delete(temporary); } catch (IOException) { } }
     }
 
-    private static async Task WriteServiceErrorAsync(Exception exception)
+    private static Task WriteServiceErrorAsync(Exception exception)
     {
-        try
-        {
-            var directory = Path.Combine(DataRoot, "Service");
-            Directory.CreateDirectory(directory);
-            await File.AppendAllTextAsync(Path.Combine(directory, "service-error.log"),
-                $"[{DateTimeOffset.Now:O}] {exception}\r\n", new UTF8Encoding(false));
-        }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        ApplicationErrorStore.Record("Системная служба", "Фоновая операция", exception);
+        return Task.CompletedTask;
     }
 
     private static string GetVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.3.3";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.3.6";
 
     private void StopChildren()
     {
@@ -581,6 +659,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     public void Dispose()
     {
         StopChildren();
+        ticketUpdateMonitor.Dispose();
         temperatureLock.Dispose();
     }
 }

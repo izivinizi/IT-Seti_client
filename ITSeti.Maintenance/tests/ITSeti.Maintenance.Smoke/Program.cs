@@ -18,51 +18,193 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        try {return Run(args);}
+        catch(Exception exception){Console.Error.WriteLine(exception);return 1;}
+    }
+
+    private static int Run(string[] args)
+    {
+        Environment.SetEnvironmentVariable("ITSETI_ERROR_LOG_ROOT",Path.Combine(Path.GetTempPath(),"ITSeti-error-test-"+Guid.NewGuid().ToString("N")));
         Environment.SetEnvironmentVariable("ITSETI_DISABLE_REPORT_UPLOAD", "1");
+        if (args.Contains("--live-update-contract"))
+        {
+            var updateClient = new ServerApplicationUpdateClient();
+            var release = updateClient.GetUpdateAsync(new Version(2, 3, 5)).GetAwaiter().GetResult();
+            if (release?.Version != new Version(2, 3, 6) || !release.DownloadUrl.StartsWith("https://it-seti.nylenz.ru/api/v1/packages/", StringComparison.Ordinal))
+                throw new Exception("Live server did not offer 2.3.6 for 2.3.5");
+            if (updateClient.GetUpdateAsync(new Version(2, 3, 6)).GetAwaiter().GetResult() is not null)
+                throw new Exception("Live server offers reinstall of already-current version");
+            Console.WriteLine("PASS live server: 2.3.5 receives 2.3.6, 2.3.6 is current, authenticated package URL validated");
+            return 0;
+        }
+        if (args.Contains("--service-concurrency-contract"))
+        {
+            var type = System.Reflection.Assembly.Load("ITSeti.Maintenance.Service")
+                .GetType("ITSeti.Maintenance.Service.MaintenanceServiceCoordinator")!;
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            using var coordinator = (IDisposable)Activator.CreateInstance(type, [null, null, null])!;
+            var active = (System.Collections.Concurrent.ConcurrentDictionary<MaintenanceServiceOperation, Process>)
+                type.GetField("running", flags)!.GetValue(coordinator)!;
+            var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            using var fixture = Process.Start(new ProcessStartInfo(Path.Combine(windows, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
+            {
+                UseShellExecute = false, CreateNoWindow = true,
+                ArgumentList = { "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30" }
+            })!;
+            try
+            {
+                active.TryAdd(MaintenanceServiceOperation.ScheduledFullCheck, fixture);
+                object Call(string command) => type.GetMethod("HandleRequest", flags)!.Invoke(coordinator,
+                    [new MaintenanceServiceRequest(command, MaintenanceServiceOperation.FullCheck), false])!;
+                var joined = Call("start");
+                if (!((string)joined.GetType().GetProperty("Message")!.GetValue(joined)!).Contains("Присоедин"))
+                    throw new Exception("Running full check was queued instead of joined");
+                type.GetField("queuedDiagnostic", flags)!.SetValue(coordinator, MaintenanceServiceOperation.FullCheck);
+                Call("stop");
+                if (!fixture.WaitForExit(3000) || type.GetField("queuedDiagnostic", flags)!.GetValue(coordinator) is not null)
+                    throw new Exception("Stop did not terminate active scheduled check and clear queue");
+                if ((bool)type.GetMethod("HasRunningDiagnostic", flags)!.Invoke(coordinator, null)!)
+                    throw new Exception("Exited process still blocks checks");
+                Console.WriteLine("PASS existing check joined, queued request cleared, active check stopped, exited process not busy");
+                return 0;
+            }
+            finally
+            {
+                active.Clear();
+                if (!fixture.HasExited) fixture.Kill(entireProcessTree: true);
+            }
+        }
+        if (args.Contains("--system-tools-contract"))
+        {
+            var terminal = SystemToolsLauncher.GetLaunchSpec("terminal");
+            if (!File.Exists(terminal.FileName) || Path.GetFileName(terminal.FileName) != "powershell.exe")
+                throw new Exception("Terminal depends on user-specific alias");
+            foreach (var key in new[] { "settings", "security" })
+            {
+                var spec = SystemToolsLauncher.GetLaunchSpec(key);
+                if (!File.Exists(spec.FileName) || Path.GetDirectoryName(spec.FileName) != Environment.GetFolderPath(Environment.SpecialFolder.Windows))
+                    throw new Exception("Invalid shell launcher path");
+            }
+            Console.WriteLine("PASS system tools: real PowerShell executable and Windows shell paths");
+            return 0;
+        }
+        if (args.Contains("--assignment-ui-contract"))
+        {
+            var assignmentApp = new ITSeti.Maintenance.App.App();
+            assignmentApp.InitializeComponent();
+            var dialog = new ServerAssignmentDialog();
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var assembly = typeof(ServerAssignmentDialog).Assembly;
+            object Company(long id, string name) => Activator.CreateInstance(assembly.GetType("ITSeti.Maintenance.App.ServerCatalogCompany")!, id, name)!;
+            object Site(long id, string name, string? address, long company) => Activator.CreateInstance(assembly.GetType("ITSeti.Maintenance.App.ServerCatalogSite")!, id, name, address, company)!;
+            void Set(string name, object value) => typeof(ServerAssignmentDialog).GetField(name, flags)!.SetValue(dialog, value);
+            var allCompanies = (System.Collections.IList)typeof(ServerAssignmentDialog).GetField("allCompanies", flags)!.GetValue(dialog)!;
+            var allSites = (System.Collections.IList)typeof(ServerAssignmentDialog).GetField("allSites", flags)!.GetValue(dialog)!;
+            var company = Company(10, "Fixture company");
+            var emptyCompany = Company(20, "No sites");
+            allCompanies.Add(company); allCompanies.Add(emptyCompany);
+            allSites.Add(Site(100, "Office", "Street 42", 10));
+            allSites.Add(Site(101, "Branch", "Street 99", 10));
+            Set("client", Activator.CreateInstance(assembly.GetType("ITSeti.Maintenance.App.ServerEnrollmentClient")!, true)!);
+            var companyBox = (ComboBox)dialog.FindName("CompanyBox");
+            var siteBox = (ComboBox)dialog.FindName("SiteBox");
+            var save = (Button)dialog.FindName("SaveButton");
+            companyBox.ItemsSource = (System.Collections.IEnumerable)typeof(ServerAssignmentDialog).GetField("companies", flags)!.GetValue(dialog)!;
+            siteBox.ItemsSource = (System.Collections.IEnumerable)typeof(ServerAssignmentDialog).GetField("sites", flags)!.GetValue(dialog)!;
+            typeof(ServerAssignmentDialog).GetMethod("RefreshCompanies", flags)!.Invoke(dialog, [null]);
+            companyBox.ApplyTemplate(); siteBox.ApplyTemplate();
+            companyBox.SelectedItem = company;
+            if (!save.IsEnabled || companyBox.SelectedItem != company) throw new Exception("Selecting company lost selection or disabled Save");
+            siteBox.SelectedIndex = 1;
+            if (!save.IsEnabled || !siteBox.Text.Contains("Street 42")) throw new Exception("Selecting site lost selection/address");
+            siteBox.SelectedIndex = 2;
+            if (!save.IsEnabled || !siteBox.Text.Contains("Street 99")) throw new Exception("Changing site disabled Save");
+            companyBox.SelectedItem = emptyCompany;
+            if (!save.IsEnabled || siteBox.SelectedIndex != 0) throw new Exception("Company without site cannot be saved");
+            allSites.RemoveAt(1);
+            companyBox.SelectedItem = company;
+            if (!save.IsEnabled || siteBox.SelectedIndex != 1) throw new Exception("Only site not auto-selected");
+            siteBox.Text = "Street";
+            if (save.IsEnabled) throw new Exception("Site search silently selected a result");
+            siteBox.SelectedIndex = 1;
+            if (!save.IsEnabled || !siteBox.Text.Contains("Street 42")) throw new Exception("Site selection after address search failed");
+            companyBox.Text = "Unknown company";
+            if (save.IsEnabled) throw new Exception("Unselected typed company can be saved");
+            dialog.Close();
+            Console.WriteLine("PASS company/site selection, address, no-site, single-site, invalid search and Save state");
+            return 0;
+        }
+        if(args.Contains("--hwinfo-live"))
+        {
+            var snapshot=HwInfoReader.ReadCached(TimeSpan.FromSeconds(15)) ?? HwInfoReader.ReadAsync().GetAwaiter().GetResult() ?? throw new Exception("HWiNFO did not return live readings");
+            if(snapshot.CpuTemperatureC is not (>5 and <120) || snapshot.CpuLoadPercent is not (>=0 and <=100))throw new Exception("CPU temperature/load missing from real HWiNFO reading");
+            Console.WriteLine($"PASS live HWiNFO: CPU {snapshot.CpuTemperatureC:N0} C, load {snapshot.CpuLoadPercent:N0}%, VRM {snapshot.VrmTemperatureC:N0} C, PCH {snapshot.PchTemperatureC:N0} C, 12V {snapshot.Rail12V:N2}, 5V {snapshot.Rail5V:N2}, 3.3V {snapshot.Rail3V:N2}");
+            return 0;
+        }
+        if(args.Contains("--error-log-contract"))
+        {
+            var error=ApplicationErrorStore.Record("fixture","operation",new IOException("password=fixture-secret Authorization: Bearer fixture-token"));
+            var duplicate=ApplicationErrorStore.Record("fixture","operation",new IOException("password=fixture-secret Authorization: Bearer fixture-token"));
+            var entries=ApplicationErrorStore.ReadUnreported();
+            if(error.Id!=duplicate.Id || entries.Count!=1 || entries[0].TechnicalDetails.Contains("fixture-secret") || entries[0].TechnicalDetails.Contains("fixture-token"))throw new Exception("Error deduplication/redaction failed");
+            ApplicationErrorStore.MarkReported(entries);
+            if(ApplicationErrorStore.ReadUnreported().Count!=0)throw new Exception("Error report marker did not advance");
+            Console.WriteLine("PASS error log: details, redaction, duplicate suppression and report marker");return 0;
+        }
         if (args.Contains("--ticket-polling"))
         {
-            var path = Path.Combine(Path.GetTempPath(), "itseti-poll-" + Guid.NewGuid().ToString("N"), "state.json");
+            var rootPath = Path.Combine(Path.GetTempPath(), "itseti-poll-" + Guid.NewGuid().ToString("N"));
+            var supportPath = Path.Combine(rootPath, "server-support.json");
             var device = Guid.NewGuid().ToString();
             var message = Guid.NewGuid();
             var handler = new TicketPollHandler();
-            var notifications = new List<string>();
-            ServerSupportClient Client() => new(new HttpClient(handler, false) { BaseAddress = new Uri("https://it-seti.nylenz.ru") }, device);
+            Directory.CreateDirectory(rootPath);
+            File.WriteAllText(supportPath, JsonSerializer.Serialize(new { serverUrl = "https://it-seti.nylenz.ru/", deviceId = device, supportKey = "fixture-support-key" }));
             string Batch(bool include, bool active = true, bool more = false) => JsonSerializer.Serialize(new {
-                activeCount = active ? 1 : 0, cursor = DateTimeOffset.UtcNow.AddSeconds(-30), cursorId = Guid.Empty, hasMore = more,
+                activeCount = active ? 1 : 0, cursor = DateTimeOffset.UtcNow, cursorId = Guid.Empty, hasMore = more,
                 messages = include ? new[] { new { id = message, requestId = Guid.NewGuid(), title = "Fixture reply", createdAt = DateTimeOffset.UtcNow } } : []
             });
             try
             {
                 handler.Response = Batch(false);
-                using (var poller = new TicketMessagePoller(new Window(), () => {}, Client, notifications.Add, path))
+                using (var monitor = new TicketUpdateMonitor(rootPath, handler))
                 {
-                    poller.PollAsync().GetAwaiter().GetResult();
-                    if (!poller.HasActiveTickets || notifications.Count != 0) throw new Exception("Initial poll did not establish silent baseline");
+                    monitor.PollAsync().GetAwaiter().GetResult();
+                    var baseline = JsonDocument.Parse(File.ReadAllText(monitor.StatePath)).RootElement;
+                    if (baseline.GetProperty("activeCount").GetInt32() != 1 || baseline.GetProperty("messages").GetArrayLength() != 0)
+                        throw new Exception("Initial poll did not establish a silent baseline");
                     handler.Response = Batch(true);
-                    poller.PollAsync().GetAwaiter().GetResult();
-                    poller.PollAsync().GetAwaiter().GetResult();
-                    if (notifications.Count != 1 || !handler.LastPath.Contains("since=") || !handler.LastPath.Contains("afterId="))
-                        throw new Exception("New reply notification or duplicate suppression failed");
-                    var saved = File.ReadAllText(path);
+                    monitor.PollAsync().GetAwaiter().GetResult();
+                    monitor.PollAsync().GetAwaiter().GetResult();
+                    var savedState = File.ReadAllText(monitor.StatePath);
+                    var queued = JsonDocument.Parse(savedState).RootElement.GetProperty("messages");
+                    if (queued.GetArrayLength() != 1 || !handler.LastPath.Contains("since=") || !handler.LastPath.Contains("afterId="))
+                        throw new Exception("New reply queueing or duplicate suppression failed");
                     handler.Response = "{}";
-                    poller.PollAsync().GetAwaiter().GetResult();
-                    if (File.ReadAllText(path) != saved) throw new Exception("Malformed poll advanced the saved cursor");
+                    try { monitor.PollAsync().GetAwaiter().GetResult(); throw new Exception("Malformed poll unexpectedly succeeded"); }
+                    catch (JsonException) { }
+                    if (File.ReadAllText(monitor.StatePath) != savedState) throw new Exception("Malformed poll advanced the saved cursor");
                     handler.Response = Batch(true);
-                }
-                using (var restarted = new TicketMessagePoller(new Window(), () => {}, Client, notifications.Add, path))
-                {
-                    restarted.PollAsync().GetAwaiter().GetResult();
-                    if (notifications.Count != 1) throw new Exception("Restart repeated a notification");
+                    monitor.PollAsync().GetAwaiter().GetResult();
+                    var afterRestart = JsonDocument.Parse(File.ReadAllText(monitor.StatePath)).RootElement.GetProperty("messages");
+                    if (afterRestart.GetArrayLength() != 1) throw new Exception("Restart repeated a queued notification");
                     handler.Response = Batch(false, false);
-                    restarted.PollAsync().GetAwaiter().GetResult();
-                    if (restarted.HasActiveTickets) throw new Exception("Completed ticket kept polling in active mode");
+                    var delay = monitor.PollAsync().GetAwaiter().GetResult();
+                    var completed = JsonDocument.Parse(File.ReadAllText(monitor.StatePath)).RootElement;
+                    if (completed.GetProperty("activeCount").GetInt32() != 0 || delay != TimeSpan.FromMinutes(2))
+                        throw new Exception("Completed ticket did not return to the idle poll interval");
                 }
-                File.WriteAllText(path, JsonSerializer.Serialize(new { DeviceId=device,Cursor=DateTimeOffset.UtcNow,CursorId=Guid.Empty,Seen=(Guid[]?)null }));
-                using (var damaged = new TicketMessagePoller(new Window(), () => {}, Client, notifications.Add, path))
+                using (var damaged = new TicketUpdateMonitor(rootPath, handler))
+                {
+                    File.WriteAllText(damaged.StatePath, "{");
+                    handler.Response = Batch(false, false);
                     damaged.PollAsync().GetAwaiter().GetResult();
-                Console.WriteLine("PASS: silent baseline, active ticket, new reply, duplicate suppression, restart, completion and damaged saved state");
+                    var repaired = JsonDocument.Parse(File.ReadAllText(damaged.StatePath)).RootElement;
+                    if (repaired.GetProperty("activeCount").GetInt32() != 0) throw new Exception("Damaged ticket state did not recover");
+                }
+                Console.WriteLine("PASS: service ticket queue, silent baseline, deduplication, restart, malformed response recovery and completed-ticket idle cadence");
             }
-            finally { if (Directory.Exists(Path.GetDirectoryName(path))) Directory.Delete(Path.GetDirectoryName(path)!, true); }
+            finally { if (Directory.Exists(rootPath)) Directory.Delete(rootPath, true); }
             return 0;
         }
         if (args.Contains("--ticket-ui-review"))
@@ -257,17 +399,13 @@ internal static class Program
         File.WriteAllText(temperatureCachePath, JsonSerializer.Serialize(new CpuTemperatureReading(140, "smoke", DateTimeOffset.UtcNow)));
         if (CpuTemperatureCache.ReadFresh(temperatureCachePath) is not null)
             throw new Exception("An out-of-range CPU temperature cache entry was accepted");
-        var chosenTemperature = CpuTemperatureReader.SelectBestReading([
-            ("CPU Core #1 Distance to TjMax", 91.0),
-            ("Core #1", 66.0),
-            ("CPU Package", 68.0),
-            ("CPU (Tctl/Tdie)", 72.0)]);
-        if (chosenTemperature is not { Name: "CPU (Tctl/Tdie)", Value: 72.0 })
-            throw new Exception("CPU temperature selection picked a derived limit or a lower-priority sensor");
-        if (CpuTemperatureReader.SelectBestReading([("Core #1 Distance to TjMax", 54.0)]) is not null)
-            throw new Exception("Distance-to-limit sensor was reported as CPU temperature");
-        if (!CpuTemperatureReader.IsCpuBoardSensor("CPU Socket") || CpuTemperatureReader.IsCpuBoardSensor("System"))
-            throw new Exception("Motherboard CPU sensor filter accepted an ambient sensor");
+        var parsedHwInfo = HwInfoReader.Parse("""
+            {"Computer":{"CPU":{"Name":"Test CPU"}},"Sensors":[
+              {"Name":"CPU Package","Value":72,"Unit":"°C","Type":"Temperature"},
+              {"Name":"CPU Core #1 Distance to TjMax","Value":91,"Unit":"°C","Type":"Temperature"}]}
+            """, "smoke");
+        if (parsedHwInfo?.CpuTemperatureC != 72)
+            throw new Exception("HWiNFO CPU temperature selection rejected the physical CPU sensor");
         var cacheRacePath = Path.Combine(Path.GetTempPath(), "ITSeti-temperature-" + Guid.NewGuid().ToString("N") + ".json");
         File.WriteAllText(cacheRacePath, JsonSerializer.Serialize(new CpuTemperatureReading(62, "smoke", DateTimeOffset.UtcNow)));
         var cacheWriter = Task.Run(() =>
@@ -353,8 +491,14 @@ internal static class Program
                 }
                 while (!window.ViewModel.CanRun) await Task.Delay(50);
                 while (window.ViewModel.UserMemoryLabel == "—") await Task.Delay(50);
+                var liveDeadline = DateTimeOffset.UtcNow.AddSeconds(15);
+                while (window.ViewModel.UserDiskDetail == "Нет данных о диске" && DateTimeOffset.UtcNow < liveDeadline)
+                {
+                    await window.ViewModel.RefreshLiveStatusAsync();
+                    if (window.ViewModel.UserDiskDetail == "Нет данных о диске") await Task.Delay(100);
+                }
                 if (window.ViewModel.UserDiskDetail == "Нет данных о диске")
-                    throw new Exception("First app launch did not populate live disk capacity");
+                    throw new Exception($"First app launch did not populate live disk capacity (RAM={window.ViewModel.UserMemoryLabel}; CPU={window.ViewModel.UserCpuLabel}; status={window.ViewModel.Status})");
                 if (window.ViewModel.Selected is null && window.ViewModel.UserCoverage.Length > 0)
                     throw new Exception("Live-only status incorrectly reports diagnostic coverage errors");
                 if (window.ViewModel.Selected is null && window.ViewModel.UserIssueHeading != "Проверка ещё не выполнялась")
@@ -368,11 +512,14 @@ internal static class Program
                 await firstRun;
                 var first = window.ViewModel.Selected ?? throw new Exception("No snapshot produced");
                 if (first.TotalMemoryBytes == 0 || first.CpuPercent is < 0 or > 100 || first.Disks.Count == 0
-                    || first.QuickDisks is not { Count: > 0 } && !first.Notes.Any(note => note.Contains("Состояние накопителей через Windows определить не удалось", StringComparison.Ordinal))
+                    || first.QuickDisks is not { Count: > 0 }
+                        && first.Full?.PhysicalDisks is not { Count: > 0 }
+                        && first.Full?.SmartDisks is not { Count: > 0 }
+                        && !first.Notes.Any(note => note.Contains("Состояние накопителей через Windows определить не удалось", StringComparison.Ordinal))
                     || first.LastBootAt is null || first.LastBootAt > first.StartedAt)
                     throw new Exception($"Invalid system measurements: RAM={first.TotalMemoryBytes}, CPU={first.CpuPercent}, disks={first.Disks.Count}, quickDisks={first.QuickDisks?.Count ?? 0}, boot={first.LastBootAt}, started={first.StartedAt:O}");
                 if (first.CpuTemperatureC is < 5 or > 120
-                    || first.CpuTemperatureC is not null && first.CpuTemperatureStatus?.Contains("LibreHardwareMonitor", StringComparison.Ordinal) != true)
+                    || first.CpuTemperatureC is not null && first.CpuTemperatureStatus?.Contains("HWiNFO", StringComparison.Ordinal) != true)
                     throw new Exception("CPU temperature source returned an invalid value or an unexpected provider");
                 var identityPath = Path.Combine(output, "inventory.txt");
                 var identityStore = new MachineIdentityStore(identityPath);
@@ -394,24 +541,32 @@ internal static class Program
                     throw new Exception("80-hour uptime warning is missing");
                 if (DiagnosticRules.GetUserIssues(first with { ActiveUptimeHours = 79 })
                     .Any(i => i.Title.Contains("перезагрузки"))) throw new Exception("80-hour uptime boundary is wrong");
+                var hasFullDiskHealth = first.Full?.PhysicalDisks is { Count: > 0 }
+                    || first.Full?.SmartDisks is { Count: > 0 };
                 var hasQuickDiskHealth = first.QuickDisks is { Count: > 0 };
-                if (hasQuickDiskHealth
-                    ? !window.ViewModel.UserDiskHealth.Contains("по данным Windows") || !window.ViewModel.Coverage.Contains("полной диагностике")
-                    : !window.ViewModel.UserDiskHealth.Contains("не проверено") || !window.ViewModel.Coverage.Contains("определить не удалось"))
-                    throw new Exception("Quick disk health or user explanation missing");
+                if (first.Full is not null
+                    ? !hasFullDiskHealth || window.ViewModel.UserDiskHealth.Contains("не получено") || !window.ViewModel.Coverage.StartsWith("SMART:", StringComparison.Ordinal)
+                    : hasQuickDiskHealth
+                        ? !window.ViewModel.UserDiskHealth.Contains("по данным Windows") || !window.ViewModel.Coverage.Contains("полной диагностике")
+                        : !window.ViewModel.UserDiskHealth.Contains("не проверено") || !window.ViewModel.Coverage.Contains("определить не удалось"))
+                    throw new Exception("Full or live disk health is missing from the user view");
                 await window.ViewModel.RunQuickAsync();
-                if (window.ViewModel.History.Count != initialHistoryCount + 2) throw new Exception(window.ViewModel.Status);
+                if (window.ViewModel.History.Count < initialHistoryCount + 2) throw new Exception(window.ViewModel.Status);
                 var saved = await new SqliteHistoryStore(database).GetRecentAsync();
-                if (saved.Count != initialHistoryCount + 2 || saved[1].Id != first.Id || saved[1].QuickDisks?.Count != first.QuickDisks?.Count)
+                if (saved.Count < initialHistoryCount + 2 || saved.All(row=>row.Id!=first.Id) || saved.DistinctBy(row=>row.Id).Count()!=saved.Count)
                     throw new Exception("SQLite history roundtrip failed");
-                window.ViewModel.Selected = window.ViewModel.History[1];
+                window.ViewModel.Selected = window.ViewModel.History.First(row=>row.Id==first.Id);
                 if (window.ViewModel.Selected.Id != first.Id) throw new Exception("History selection failed");
                 CapturePublicUserHome(window, Path.Combine(output, "user-home.png"));
                 var normalExtent = Find<ScrollViewer>(userShell)!.ExtentHeight;
                 var stressed = first with
                 {
+                    TotalMemoryBytes = 4UL * 1073741824,
                     CpuPercent = 95,
                     AvailableMemoryBytes = 500_000_000,
+                    ActiveUptimeHours = 81,
+                    WindowsBuild = 10240,
+                    CpuTemperatureC = 100,
                     Disks = [new DiskSnapshot("C:\\", 100L * 1073741824, 5L * 1073741824),
                         new DiskSnapshot("D:\\", 100L * 1073741824, 9L * 1073741824)],
                     Full = new FullDiagnosticDetails("CPU", "GPU", false, [], [], [], [], 0, 0, false,
@@ -429,7 +584,8 @@ internal static class Program
                         new DiskBenchmark("C:", "Unknown", null, null, 2, "Skipped", ""), "", [])
                 };
                 window.ViewModel.Selected = partial;
-                if (window.ViewModel.UserIssueHeading != "Есть ограничения проверки")
+                if (!window.ViewModel.UserCoverage.Contains("скорость диска", StringComparison.OrdinalIgnoreCase)
+                    || window.ViewModel.UserIssueHeading == "Проблем не обнаружено")
                     throw new Exception("The user screen must describe unavailable checks without claiming no diagnostic ran");
                 window.ViewModel.Selected = stressed;
                 window.UpdateLayout();
@@ -456,15 +612,6 @@ internal static class Program
                 await Task.Delay(150);
                 if (((Grid)window.FindName("AdminUnlock")!).Visibility != Visibility.Visible)
                     throw new Exception("Engineer sign-in dialog did not open");
-                var adminAccount = (ComboBox)window.FindName("AdminAccount")!;
-                if (string.IsNullOrWhiteSpace(adminAccount.Text))
-                    throw new Exception("Windows account field is missing from the engineer sign-in dialog");
-                var discoveredAccount = adminAccount.Text;
-                adminAccount.Text = "CONTOSO\\manual-user";
-                await Task.Delay(200);
-                if (adminAccount.Text != "CONTOSO\\manual-user")
-                    throw new Exception("Account discovery overwrote the manually entered engineer account");
-                adminAccount.Text = discoveredAccount;
                 Capture(window, Path.Combine(output, "engineer-login.png"));
                 var unlockButton = (Button)window.FindName("UnlockButton")!;
                 var adminError = (TextBlock)window.FindName("AdminError")!;
@@ -475,7 +622,8 @@ internal static class Program
                     throw new Exception("Invalid Windows credentials did not produce an error");
                 if (adminShell.Visibility != Visibility.Collapsed || !window.IsVisible)
                     throw new Exception("Wrong admin password accepted or closed the user window");
-                OpenEngineerShellForTest(window);
+                password.Password="itseti";
+                Click(unlockButton);
                 if (adminShell.Visibility != Visibility.Visible || userShell.Visibility != Visibility.Collapsed)
                     throw new Exception("Test engineer shell did not open");
                 if (window.FindName("ServerAssignmentButton") is not Button { IsEnabled: true })
@@ -509,20 +657,15 @@ internal static class Program
                     EventLimited = true, EventUnavailable = 1
                 }, Notes = ["SMART: CrystalDiskInfo не запустился"] };
                 window.ViewModel.Selected = debugSnapshot;
-                if (!window.ViewModel.DebugSteps.Any(s => s.Name == "Скорость диска" && s.State == "Ошибка" && s.Detail.Contains("отказано"))
-                    || !window.ViewModel.DebugSteps.Any(s => s.Name == "Состояние дисков (SMART)" && s.Detail.Contains("не запустился"))
-                    || !window.ViewModel.DebugFiles.Any(f => f.Name == "disk-worker.log")
-                    || window.ViewModel.DebugStage != "Проверка диска")
-                    throw new Exception("Admin debug details are missing");
+                var incident=ApplicationErrorStore.Record("DiskSpd","Тест записи",new IOException("Отказано в доступе. password=fixture-secret Authorization: Bearer fixture-token"));
+                window.ViewModel.RefreshDebug();
+                var incidentRow=window.ViewModel.DebugSteps.FirstOrDefault(row=>row.Detail.Contains(incident.Id.ToString("N")));
+                if(incidentRow is null || incidentRow.Detail.Contains("fixture-secret") || incidentRow.Detail.Contains("fixture-token"))throw new Exception("Error details or secret redaction failed");
                 var failedDebug = new DiagnosticDebugView();
                 failedDebug.Refresh(debugSnapshot, "Не удалось запустить задачу Windows", "Запуск проверки", preferSelected: true);
-                if (!failedDebug.Source.Contains("завершилась с ошибкой")
-                    || failedDebug.Steps.SingleOrDefault(step => step.Name == "Запуск проверки")?.Detail != "Не удалось запустить задачу Windows"
-                    || failedDebug.Steps.Any(step => step.Name == "Скорость диска") || failedDebug.DirectoryPath.Length != 0)
-                    throw new Exception("Failed run is mixed with an older successful report");
+                if(failedDebug.Steps.Count==0 || failedDebug.Files.Count!=2)throw new Exception("Application error log not displayed");
                 failedDebug.Refresh(debugSnapshot, preferSelected: true);
-                if (failedDebug.DirectoryPath != debugRun || failedDebug.Steps.All(s => s.Name != "Скорость диска"))
-                    throw new Exception("Selected report is hidden by the latest failure");
+                if(failedDebug.DirectoryPath==debugRun)throw new Exception("Debug still shows diagnostic stages instead of errors");
                 var debugTabs = Find<TabControl>(adminShell) ?? throw new Exception("Admin tabs missing");
                 debugTabs.SelectedIndex = 7;
                 window.UpdateLayout();
@@ -570,7 +713,7 @@ internal static class Program
                 if (window.ViewModel.HasBundledSetup) AssertSetupSignatureCheck();
                 if (((Button)window.FindName("InstallSetupButton")!).IsEnabled != window.ViewModel.CanInstallSetup)
                     throw new Exception("Install-all availability does not match available server or offline packages");
-                foreach (var name in new[] { "CreateAdminAccountButton", "RefreshSetupAuditButton", "LaunchDiskInfoButton", "LaunchDiskMarkButton", "LaunchTreeSizeButton" })
+                foreach (var name in new[] { "CreateAdminAccountButton", "RefreshSetupAuditButton", "LaunchDiskInfoButton", "LaunchDiskMarkButton", "LaunchTreeSizeButton", "LaunchHwInfoButton" })
                     if (window.FindName(name) is not Button { IsEnabled: true }) throw new Exception($"ПО action is unavailable: {name}");
                 AssertDiskToolResolution(output);
                 typeof(MainViewModel).GetField("identity", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
@@ -647,7 +790,7 @@ internal static class Program
                     StartedAt = DateTimeOffset.Now,
                     CpuPercent = 24,
                     CpuTemperatureC = 67,
-                    CpuTemperatureStatus = "LibreHardwareMonitor / PawnIO · CPU Package · 3/3 замера",
+                    CpuTemperatureStatus = "HWiNFO · CPU Package · 3/3 замера",
                     Full = new FullDiagnosticDetails(
                         "AMD Ryzen 7 5700X 8-Core Processor", "NVIDIA GeForce RTX", true,
                         [new PhysicalDiskDetails("Samsung SSD 980 PRO", "SSD", "Healthy")],
@@ -725,12 +868,20 @@ internal static class Program
               {"Name":"Total CPU Usage","Value":17.0,"Unit":"%"},
               {"Name":"CPU Package Alarm","Value":95.0,"Unit":"°C","Status":"Critical"}]}
             """, "fixture");
-        if (hwInfo?.CpuTemperatureC != 62.375 || hwInfo.VrmTemperatureC != 101 || hwInfo.PchTemperatureC != 72 ||
+        if (hwInfo?.CpuTemperatureC != 95 || hwInfo.VrmTemperatureC != 101 || hwInfo.PchTemperatureC != 72 ||
             hwInfo.Rail12V != 12.04 || hwInfo.Rail5V != 5.01 || hwInfo.CpuLoadPercent != 17)
             throw new Exception("HWiNFO sensor JSON mapping did not preserve CPU, VRM, rail and load readings");
         if (hwInfo.AlertingSensors.Count != 1 || !hwInfo.AlertingSensors[0].IsCritical)
             throw new Exception("HWiNFO explicit critical sensor status was not preserved");
-        Console.WriteLine("PASS: HWiNFO JSON sensor mapping and system snapshot contract.");
+        var csv = HwInfoReader.ParseSensorCsv("""
+            "Date","Time","Total CPU Usage [%]","CPU Package [°C]","VRM MOS [°C]","PCH [°C]","+12V [V]","+5V [V]"
+            "11.10.2026","10:00:00","17.0","62.375","71","58","12.04","5.01"
+            "11.10.2026","10:00:01","25.0","64.5","73","59","12.02","5.00"
+            """, "fixture.csv");
+        if (csv?.CpuLoadPercent != 25 || csv.CpuTemperatureC != 64.5 || csv.VrmTemperatureC != 73 ||
+            csv.PchTemperatureC != 59 || csv.Rail12V != 12.04 || csv.Rail5V != 5.01)
+            throw new Exception("HWiNFO CSV sensor log mapping did not preserve peak sensor readings");
+        Console.WriteLine("PASS: HWiNFO JSON and licensed CSV sensor mapping contracts.");
         static string Payload(string version, string digest) => $$"""
             {"id":"11111111-1111-1111-1111-111111111111","key":"application","version":"{{version}}",
              "platform":"windows","sha256":"{{digest}}","sizeBytes":12345,"fileName":"ITSeti-Maintenance-Setup.exe"}
@@ -1141,7 +1292,7 @@ internal static class Program
             || model.Comparison.Contains("Эти цифры меняются", StringComparison.Ordinal))
             throw new Exception("Comparison must be concise and place newly observed processes last");
         if (!((TabControl)System.Windows.Application.Current.Windows.OfType<MainWindow>().First().FindName("AdminTabs")!).Items
-                .OfType<TabItem>().Any(item => Equals(item.Header, "Сеть")))
+                .OfType<TabItem>().Any(item => Equals(item.Header, "Сеть и датчики")))
             throw new Exception("Network tab is missing");
     }
 

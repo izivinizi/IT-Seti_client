@@ -50,7 +50,7 @@ public static class Monitoring
         foreach (var note in JsonRead.StringList(report, "Notes").Concat(JsonRead.StringList(report, "Findings")).Distinct())
         {
             var text = Clip(note.Trim(), 2000);
-            if (!Regex.IsMatch(text, @"^(CPU:|ОЗУ:|SMART[ :]|Windows: тревожное|Windows ниже версии|Наработка |[A-Z]:\\?\s+свободно|Произошла критическая ошибка Windows)", RegexOptions.IgnoreCase)) continue;
+            if (!Regex.IsMatch(text, @"^(HWiNFO критично:|HWiNFO предупреждение:|CPU:|ОЗУ:|SMART[ :]|Windows: тревожное|Windows ниже версии|Наработка |[A-Z]:\\?\s+свободно|Произошла критическая ошибка Windows)", RegexOptions.IgnoreCase)) continue;
             if (text.Length == 0 || text.StartsWith("Критических событий в доступной выборке:", StringComparison.OrdinalIgnoreCase) ||
                 text.StartsWith("Проверка выполнена", StringComparison.OrdinalIgnoreCase) ||
                 text.StartsWith("Ограничение интерфейса", StringComparison.OrdinalIgnoreCase) ||
@@ -59,7 +59,7 @@ public static class Monitoring
             var space = SpaceAmount.Match(text);
             var criticalSpace = space.Success && double.TryParse(space.Groups[1].Value.Replace(',', '.'),
                 System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var freeGb) && freeGb < 5;
-            var severity = criticalSpace || text.Contains("критически", StringComparison.OrdinalIgnoreCase) ||
+            var severity = criticalSpace || text.Contains("критически", StringComparison.OrdinalIgnoreCase) || text.StartsWith("HWiNFO критично:",StringComparison.OrdinalIgnoreCase) ||
                 text.StartsWith("SMART ", StringComparison.OrdinalIgnoreCase) ||
                 text.StartsWith("Windows: тревожное состояние", StringComparison.OrdinalIgnoreCase) ||
                 text.StartsWith("Произошла критическая ошибка Windows", StringComparison.OrdinalIgnoreCase) ? (short)1 : (short)2;
@@ -99,6 +99,7 @@ public static class Monitoring
 
     private static string NoteIdentity(string text)
     {
+        if(text.StartsWith("HWiNFO",StringComparison.OrdinalIgnoreCase))return Regex.Replace(text,@"\s+[-+]?\d+(?:[.,]\d+)?\s*(?:°C|%|В|ГБ)\.?\s*$","").ToLowerInvariant();
         var space = SpaceNote.Match(text);
         if (space.Success) return "space:" + space.Groups[1].Value.TrimEnd('\\').ToLowerInvariant();
         if (text.StartsWith("Наработка после последнего запуска", StringComparison.OrdinalIgnoreCase)) return "uptime";

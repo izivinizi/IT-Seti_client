@@ -1,12 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType><TargetFramework>net9.0-windows</TargetFramework><UseWPF>true</UseWPF><UseWindowsForms>true</UseWindowsForms>
-    <AssemblyName>ITSeti.Maintenance</AssemblyName><Version>2.3.3</Version><AssemblyVersion>2.3.3.0</AssemblyVersion><FileVersion>2.3.3.0</FileVersion>
+    <AssemblyName>ITSeti.Maintenance</AssemblyName><Version>2.3.6</Version><AssemblyVersion>2.3.6.0</AssemblyVersion><FileVersion>2.3.6.0</FileVersion>
     <ApplicationIcon>Assets\favicon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup><Using Remove="System.Windows.Forms" /><Using Remove="System.Drawing" /></ItemGroup>
-  <ItemGroup><ProjectReference Include="..\ITSeti.Maintenance.Infrastructure\ITSeti.Maintenance.Infrastructure.csproj" /></ItemGroup>
-  <ItemGroup><None Include="..\..\Connect-Server.ps1" Link="Connect-Server.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" /></ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ITSeti.Maintenance.Infrastructure\ITSeti.Maintenance.Infrastructure.csproj" />
+    <PackageReference Include="System.Management" Version="9.0.10" />
+  </ItemGroup>
   <ItemGroup>
     <Resource Include="Assets\logo.png" />
     <Resource Include="Assets\favicon.ico" />

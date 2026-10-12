@@ -11,6 +11,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Diagnostics;
 using Microsoft.Win32;
+using ITSeti.Maintenance.Infrastructure;
 
 namespace ITSeti.Maintenance.App;
 
@@ -92,7 +93,7 @@ public partial class MyTicketsDialog : Window
             Tickets.SelectedItem = tickets.FirstOrDefault(t => t.Id == selected) ?? tickets.FirstOrDefault();
             StatusText.Text = "";
         }
-        catch (Exception ex) { if (request == refreshRequest) StatusText.Text = ex.Message; }
+        catch (Exception ex) { var error=ApplicationErrorStore.Record("Заявки","Загрузка списка заявок",ex); if (request == refreshRequest) StatusText.Text = error.Summary; }
     }
 
     private async void Tickets_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -131,7 +132,7 @@ public partial class MyTicketsDialog : Window
             if (Messages.Items.Count > 0) Messages.ScrollIntoView(Messages.Items[Messages.Items.Count - 1]);
             StatusText.Text = "";
         }
-        catch (Exception ex) { if (request == selectionRequest) StatusText.Text = ex.Message; }
+        catch (Exception ex) { var error=ApplicationErrorStore.Record("Заявки","Загрузка переписки",ex); if (request == selectionRequest) StatusText.Text = error.Summary; }
     }
 
     private void SetTicketState(Ticket ticket)
@@ -141,13 +142,17 @@ public partial class MyTicketsDialog : Window
         TicketState.Inlines.Add(new Run(ticket.StateLabel));
         if (ticket.IssueId is not { } issueId) return;
         TicketState.Inlines.Add(new Run(" · "));
-        if (Uri.TryCreate(ticket.IssueUrl, UriKind.Absolute, out var uri))
-        {
-            var link = new Hyperlink(new Run($"Okdesk #{issueId}")) { NavigateUri = uri };
-            link.RequestNavigate += OkdeskLink_RequestNavigate;
-            TicketState.Inlines.Add(link);
-        }
-        else TicketState.Inlines.Add(new Run($"Okdesk #{issueId}"));
+        Uri? uri = null;
+        if (Uri.TryCreate(ticket.IssueUrl, UriKind.Absolute, out var configuredUri) &&
+            configuredUri is not null && configuredUri.Scheme == Uri.UriSchemeHttps &&
+            configuredUri.Host.EndsWith(".okdesk.ru", StringComparison.OrdinalIgnoreCase)) uri = configuredUri;
+        uri ??= new Uri($"https://it-seti.okdesk.ru/issues/{issueId}");
+        var link = new Hyperlink(new Run($"Okdesk #{issueId}")) { NavigateUri = uri };
+        link.TextDecorations = TextDecorations.Underline;
+        link.Foreground = new SolidColorBrush(Color.FromRgb(23, 70, 150));
+        link.ToolTip = "Открыть заявку в Okdesk";
+        link.RequestNavigate += OkdeskLink_RequestNavigate;
+        TicketState.Inlines.Add(link);
     }
 
     private void OkdeskLink_RequestNavigate(object? sender, RequestNavigateEventArgs e)
@@ -178,8 +183,9 @@ public partial class MyTicketsDialog : Window
         }
         catch (Exception ex)
         {
-            StatusText.Text = ex.Message;
+            var error=ApplicationErrorStore.Record("Заявки","Отправка ответа",ex);
             await RefreshAsync();
+            StatusText.Text = error.Summary;
         }
         finally
         {
@@ -237,7 +243,7 @@ public partial class MyTicketsDialog : Window
             File.WriteAllBytes(dialog.FileName, await client.DownloadAsync($"/api/v1/tickets/{ticket.Id}/attachments/{file.Id}"));
             StatusText.Text = "Вложение сохранено.";
         }
-        catch (Exception ex) { StatusText.Text = ex.Message; }
+        catch (Exception ex) { StatusText.Text = ApplicationErrorStore.Record("Заявки","Скачивание вложения",ex).Summary; }
     }
 
     private static string PlainText(string html) => WebUtility.HtmlDecode(Regex.Replace(html, "<[^>]+>", " "));

@@ -7,7 +7,7 @@ namespace ITSeti.Maintenance.App;
 
 internal sealed class ScheduledCheckPrompt : Window
 {
-    public ScheduledCheckPrompt()
+    public ScheduledCheckPrompt(bool isOverdue = false)
     {
         Title = "Плановая проверка · ИТ-Сети";
         Width = 470;
@@ -30,14 +30,14 @@ internal sealed class ScheduledCheckPrompt : Window
         });
         content.Children.Add(new TextBlock
         {
-            Text = "Ночная проверка не завершилась",
+            Text = isOverdue ? "Пора выполнить плановую проверку" : "Ночная проверка не завершилась",
             FontSize = 21,
             FontWeight = FontWeights.SemiBold,
             Foreground = new SolidColorBrush(Color.FromRgb(20, 60, 135))
         });
         content.Children.Add(new TextBlock
         {
-            Text = "Полная проверка или восстановление Windows завершились с ошибкой. Повторить проверку в фоне сейчас? Работу можно продолжать; компьютер не будет перезагружен автоматически.",
+            Text = isOverdue ? "Плановая проверка не была выполнена ночью. Запустить проверку и обслуживание в фоне сейчас? Автоматической перезагрузки не будет." : "Полная проверка или восстановление Windows завершились с ошибкой. Повторить проверку в фоне сейчас? Работу можно продолжать; компьютер не будет перезагружен автоматически.",
             FontSize = 16,
             Foreground = new SolidColorBrush(Color.FromRgb(82, 106, 124)),
             TextWrapping = TextWrapping.Wrap,

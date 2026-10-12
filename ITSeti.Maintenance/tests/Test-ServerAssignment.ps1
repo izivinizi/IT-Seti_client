@@ -1,50 +1,25 @@
-param([string]$Root = (Split-Path $PSScriptRoot -Parent))
+﻿param([string]$Root = (Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference = 'Stop'
-$connectPath = Join-Path $Root 'Connect-Server.ps1'
-$connect = [IO.File]::ReadAllText($connectPath)
-$tokens = $null
-$errors = $null
-[void][Management.Automation.Language.Parser]::ParseFile($connectPath, [ref]$tokens, [ref]$errors)
-if ($errors.Count) { throw ($errors -join [Environment]::NewLine) }
-
-if ($connect -match '\$script:companies\[\$companyBox\.SelectedIndex\]' -or
-    $connect -notmatch '\$script:visibleCompanies\[\$companyBox\.SelectedIndex\]') {
-    throw 'Filtered company selection must resolve to its matching catalog record.'
-}
-if ($connect -notmatch '\$script:visibleSites\[\$siteBox\.SelectedIndex\]') {
-    throw 'Selected site must resolve from the filtered, company-specific list.'
-}
-if ($connect -notmatch 'companyBox\.Add_TextUpdate' -or $connect -notmatch 'siteBox\.Add_TextUpdate' -or
-    $connect -notmatch '\$script:sites\s*=\s*@\(\$catalog\[''sites''\]\)') {
-    throw 'Company/object catalog search is incomplete.'
-}
-if ($connect -match 'elseif\s*\(\$script:visibleCompanies\.Count\s*-gt\s*0\)\s*\{\s*\$companyBox\.SelectedIndex\s*=\s*0') {
-    throw 'New device enrollment must not silently select the first company.'
-}
-if ($connect -notmatch '/api/v1/auto-enroll' -or
-    $connect -notmatch 'Invoke-AutomaticEnrollment \(Get-LocalEnrollmentBody\)' -or
-    $connect -notmatch 'Save-DeviceKey \$automatic') {
-    throw 'A new PC must try unambiguous IP assignment before asking for the registration password.'
-}
 
 $installer = [IO.File]::ReadAllText((Join-Path $Root 'Installer.iss'))
 $win7Installer = [IO.File]::ReadAllText((Join-Path $Root 'Installer-Win7.iss'))
 $appXaml = [IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml'))
 $appCode = [IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml.cs'))
-if ($installer -notmatch 'Source: "Connect-Server\.ps1"' -or
-    $win7Installer -notmatch 'Source: "Connect-Server\.ps1"' -or
-    $appXaml -notmatch 'Click="OpenServerAssignment_Click"') {
-    throw 'The assignment script is not packaged or its engineer-mode button is not wired.'
-}
+$client = [IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\ServerEnrollmentClient.cs'))
+$dialog = [IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\ServerAssignmentDialog.xaml.cs'))
+$win7Dialog = [IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Win7.Port\Win7ServerEnrollmentDialog.cs'))
+
 foreach ($setup in @($installer, $win7Installer)) {
-    if ($setup -notmatch 'if not WizardSilent then' -or $setup -notmatch 'SW_SHOWNORMAL' -or $setup -notmatch '-SkipIfConnected') {
-        throw 'Setup must skip enrollment for a connected PC while retaining first-install assignment.'
+    if ($setup -match 'Connect-Server\.ps1' -or $setup -match 'SkipIfConnected' -or $setup -match 'Пароль подключения') {
+        throw 'Setup must not package or launch the removed PowerShell enrollment prompt.'
     }
 }
-if ($connect -notmatch 'AssignmentConsole.*ShowWindow' -or
-    $connect -notmatch 'form\.ShowDialog' -or
-    $appCode -notmatch 'WindowStyle = ProcessWindowStyle\.Hidden') {
-    throw 'Assignment must show its dialog without a PowerShell console.'
+if ($appXaml -notmatch 'Click="OpenServerAssignment_Click"' -or
+    $appCode -notmatch 'TryAutomaticServerEnrollmentAsync' -or
+    $client -notmatch 'api/v1/auto-enroll' -or $client -notmatch 'api/v1/enroll' -or
+    $dialog -notmatch 'ServerAssignmentDialog' -or $dialog -notmatch 'sites.Count == 2' -or
+    $win7Dialog -notmatch 'TryAutomaticEnrollmentAsync') {
+    throw 'Passwordless in-app IP/company/site enrollment is incomplete.'
 }
 
 $serverRoot = Split-Path $Root -Parent
@@ -52,23 +27,20 @@ $serverProgram = [IO.File]::ReadAllText((Join-Path $serverRoot 'ITSeti.Server\Pr
 $database = [IO.File]::ReadAllText((Join-Path $serverRoot 'ITSeti.Server\Database.cs'))
 $serverHtml = [IO.File]::ReadAllText((Join-Path $serverRoot 'ITSeti.Server\wwwroot\index.html'))
 $serverJs = [IO.File]::ReadAllText((Join-Path $serverRoot 'ITSeti.Server\wwwroot\app.js'))
-if ($serverHtml -notmatch 'id="device-company"' -or $serverHtml -notmatch 'id="device-site"' -or
-    $serverHtml -match 'id="device-pc"' -or $serverJs -notmatch '/computer-tree') {
-    throw 'The server computer view must navigate by company, object and PC without displaying host names.'
-}
-if ($serverProgram -notmatch 'MapGet\("/device-options"' -or
-    $serverProgram -notmatch 'fingerprint is null' -or
-    $serverJs -match 'device\.name|alert\.computer|ticket\.computer') {
-    throw 'PC selection and serial-based identification are not consistently wired through the server UI.'
-}
-if ($serverProgram -notmatch 'MapPost\("/api/v1/auto-enroll"' -or
+if ($serverProgram -notmatch 'MapGet\("/api/v1/catalog"' -or
+    $serverProgram -notmatch 'MapPost\("/api/v1/enroll"' -or
+    $serverProgram -notmatch 'MapPost\("/api/v1/auto-enroll"' -or
     $serverProgram -notmatch 'AutomaticIpEnrollment\.ResolveUnique' -or
     $serverProgram -notmatch 'AutomaticIpEnrollment\.CanReuseExisting\(previousIp, clientIp\)') {
-    throw 'IP enrollment must be assignment-only, unambiguous, and unable to re-key an existing PC from a different IP.'
+    throw 'Server passwordless catalog/enrollment/IP reuse routes are incomplete.'
+}
+if ($serverHtml -notmatch 'id="device-company"' -or $serverHtml -notmatch 'id="device-site"' -or
+    $serverHtml -match 'id="device-pc"' -or $serverJs -notmatch '/computer-tree' -or
+    $serverJs -match 'device\.name|alert\.computer|ticket\.computer') {
+    throw 'The server computer view must navigate by company, optional object and serial-identified PC.'
 }
 if ($database -notmatch 'DROP INDEX IF EXISTS ix_devices_hardware_fingerprint' -or
-    $database -notmatch 'SELECT id,serial_number FROM devices WHERE serial_number IS NOT NULL' -or
     $database -notmatch 'UPDATE ticket_requests child' -or $database -notmatch 'UPDATE check_runs child') {
     throw 'Startup migration must re-key duplicate serials and preserve their report/ticket history.'
 }
-Write-Output 'PASS: setup preserves enrollment, inline assignment search and serial-based server identity.'
+'PASS: passwordless in-app enrollment, IP reuse and serial-based server identity contracts'

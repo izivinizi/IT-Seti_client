@@ -19,6 +19,12 @@ public static class ServerReportQueue
         try
         {
             var report = JsonSerializer.SerializeToNode(snapshot)!.AsObject();
+            var applicationErrors = ApplicationErrorStore.ReadUnreported();
+            report["HasApplicationErrors"] = applicationErrors.Count > 0;
+            report["ApplicationErrors"] = JsonSerializer.SerializeToNode(applicationErrors.Select(error => new
+            {
+                error.Id, error.OccurredAt, error.Component, error.Operation, error.Summary, error.ExceptionType
+            }));
             report["Notes"] = JsonSerializer.SerializeToNode(snapshot.Notes.Where(note =>
                 !note.StartsWith("Ограничение интерфейса", StringComparison.OrdinalIgnoreCase) &&
                 !note.StartsWith("Без доступа к исполняемому файлу процессов", StringComparison.OrdinalIgnoreCase)));
@@ -28,6 +34,7 @@ public static class ServerReportQueue
             report["MemoryUsedPercent"] = snapshot.MemoryUsedPercent;
             await File.WriteAllTextAsync(temporary, report.ToJsonString());
             File.Move(temporary, target, true);
+            ApplicationErrorStore.MarkReported(applicationErrors);
         }
         finally
         {

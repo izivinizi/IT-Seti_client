@@ -16,7 +16,7 @@ public sealed record DiagnosticSnapshot(
     DateTimeOffset? LastBootAt = null, string? WindowsEdition = null, string? WindowsRelease = null,
     int? WindowsBuild = null, double? CpuTemperatureC = null, string? CpuTemperatureStatus = null,
     double? ActiveUptimeHours = null, double? DiskReadLatencyMs = null, double? DiskWriteLatencyMs = null,
-    HwInfoSnapshot? HwInfo = null)
+    HwInfoSnapshot? HwInfo = null, List<NetworkAdapterSnapshot>? NetworkAdapters = null)
 {
     public double MemoryUsedPercent => TotalMemoryBytes > 0
         ? 100.0 * (TotalMemoryBytes - AvailableMemoryBytes) / TotalMemoryBytes : 0;
@@ -67,6 +67,8 @@ public sealed record DiagnosticSnapshot(
 }
 
 public sealed record PhysicalDiskDetails(string Model, string MediaType, string Health, long? PowerOnHours = null);
+public sealed record NetworkAdapterSnapshot(string Name, string Type, string Status, string LinkSpeed,
+    string MacAddress, string Addresses);
 public sealed record SmartDiskDetails(string Model, string Status, string Letters, string MediaType, string TransferMode, long? PowerOnHours = null)
 {
     public string SmartWarnings { get; init; } = "";
@@ -84,7 +86,11 @@ public static class DiskLifetime
         return $"{value:N0} ч (около {daysTotal / 365} г. {daysTotal % 365} дн.)";
     }
 }
-public sealed record ProcessDetails(string Name, string Description, string Publisher, string Signature, string Path);
+public sealed record ProcessDetails(string Name, string Description, string Publisher, string Signature, string Path)
+{
+    public bool CanTrustPublisher => Signature.Equals("Valid", StringComparison.OrdinalIgnoreCase)
+        && !string.IsNullOrWhiteSpace(Publisher);
+}
 public sealed record MemoryProcessDetails(string DisplayName, string ProcessName, long WorkingSetBytes, string Publisher)
 {
     public string MemoryLabel => $"{WorkingSetBytes / 1073741824.0:N1} ГБ";
@@ -114,8 +120,13 @@ public sealed record HwInfoSnapshot(string Source, string ToolVersion, DateTimeO
     public double? PchTemperatureC => Sensors.Where(item => item.Category == "PchTemperature").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
     public double? Rail12V => Sensors.FirstOrDefault(item => item.Category == "Rail12V")?.Value;
     public double? Rail5V => Sensors.FirstOrDefault(item => item.Category == "Rail5V")?.Value;
+    public double? Rail3V => Sensors.FirstOrDefault(item => item.Category == "Rail3V")?.Value;
+    public double? MemoryLoadPercent => Sensors.FirstOrDefault(item => item.Category == "MemoryLoad")?.Value;
     public double? CpuVoltageV => Sensors.Where(item => item.Category == "CpuVoltage").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
-    public double? CpuLoadPercent => Sensors.Where(item => item.Category == "CpuLoad").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
+    public double? CpuLoadPercent => Sensors.Where(item => item.Category == "CpuLoad")
+        .OrderByDescending(item => item.Name.Contains("total cpu usage",StringComparison.OrdinalIgnoreCase)?2:item.Name.Contains("total", StringComparison.OrdinalIgnoreCase) || item.Name.Contains("суммар", StringComparison.OrdinalIgnoreCase)?1:0)
+        .ThenByDescending(item=>item.Value)
+        .Select(item => (double?)item.Value).FirstOrDefault();
     public IReadOnlyList<HwInfoSensorReading> AlertingSensors => Sensors.Where(item => item.IsWarning || item.IsCritical).ToArray();
 }
 public sealed record FullDiagnosticDetails(string CpuName, string GpuName, bool Elevated,
@@ -142,5 +153,5 @@ public interface IHistoryStore
 {
     Task SaveAsync(DiagnosticSnapshot snapshot);
     Task SaveManyAsync(IReadOnlyCollection<DiagnosticSnapshot> snapshots);
-    Task<IReadOnlyList<DiagnosticSnapshot>> GetRecentAsync(int limit = 100);
+    Task<IReadOnlyList<DiagnosticSnapshot>> GetRecentAsync(int limit = 25, int offset = 0);
 }

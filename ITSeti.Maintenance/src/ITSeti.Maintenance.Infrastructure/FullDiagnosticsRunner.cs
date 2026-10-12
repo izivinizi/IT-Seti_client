@@ -9,7 +9,6 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
 {
     private static readonly string InstalledRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance");
     private const string InstalledTask = "ITSeti-Maintenance-Full";
-    private const string InstalledQuickTask = "ITSeti-Maintenance-QuickFull";
     private static readonly Lazy<bool> HasInstalledTask = new(() =>
     {
         try
@@ -18,21 +17,6 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
             {
                 UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true,
                 RedirectStandardError = true, ArgumentList = { "/Query", "/TN", InstalledTask }
-            });
-            if (query is null) return false;
-            if (!query.WaitForExit(3000)) { query.Kill(); return false; }
-            return query.ExitCode == 0;
-        }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or UnauthorizedAccessException) { return false; }
-    });
-    private static readonly Lazy<bool> HasInstalledQuickTask = new(() =>
-    {
-        try
-        {
-            using var query = Process.Start(new ProcessStartInfo("schtasks.exe")
-            {
-                UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true,
-                RedirectStandardError = true, ArgumentList = { "/Query", "/TN", InstalledQuickTask }
             });
             if (query is null) return false;
             if (!query.WaitForExit(3000)) { query.Kill(); return false; }
@@ -103,19 +87,18 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
             }
         return false;
     }
-    public Task<DiagnosticSnapshot> RunAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default) => RunCoreAsync(progress, false, false, cancellationToken);
-    public Task<DiagnosticSnapshot> RunUserAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default) => RunCoreAsync(progress, true, false, cancellationToken);
-    public Task<DiagnosticSnapshot> RunQuickAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default) => RunCoreAsync(progress, false, true, cancellationToken);
-    public Task<DiagnosticSnapshot> RunUserQuickAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default) => RunCoreAsync(progress, true, true, cancellationToken);
+    public Task<DiagnosticSnapshot> RunAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default) => RunCoreAsync(progress, false, cancellationToken);
+    public Task<DiagnosticSnapshot> RunUserAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default) => RunCoreAsync(progress, true, cancellationToken);
+    public Task<DiagnosticSnapshot> RunQuickAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default) => RunAsync(progress, cancellationToken);
+    public Task<DiagnosticSnapshot> RunUserQuickAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default) => RunUserAsync(progress, cancellationToken);
 
-    private async Task<DiagnosticSnapshot> RunCoreAsync(IProgress<DiagnosticProgress> progress, bool userMode, bool quickMode, CancellationToken cancellationToken)
+    private async Task<DiagnosticSnapshot> RunCoreAsync(IProgress<DiagnosticProgress> progress, bool userMode, CancellationToken cancellationToken)
     {
-        var installedTask = quickMode ? InstalledQuickTask : InstalledTask;
         // All installed checks use the same SYSTEM pipeline. The UI remains an
         // unprivileged client; it only starts the task and displays its report.
-        if (IsInstalled && (!quickMode || HasInstalledQuickTask.Value))
+        if (IsInstalled)
         {
-            try { return await AddCpuTemperatureAsync(await RunInstalledAsync(progress, installedTask, cancellationToken)); }
+            try { return await AddCpuTemperatureAsync(await RunInstalledAsync(progress, InstalledTask, cancellationToken)); }
             catch (InstalledTaskUnavailableException ex)
             {
                 progress.Report(new(ElevatedProcessLauncher.IsCurrentProcessElevated
@@ -127,7 +110,7 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         Directory.CreateDirectory(root);
         var backend = Path.Combine(AppContext.BaseDirectory, "Backend");
         foreach (var file in Directory.GetFiles(backend)) File.Copy(file, Path.Combine(root, Path.GetFileName(file)));
-        var tools = ToolsRoot ?? FindTools(!userMode || quickMode);
+        var tools = ToolsRoot ?? FindTools(!userMode);
         var worker = Path.Combine(root, "FullCheckWorker.ps1");
         var info = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
         {
@@ -143,14 +126,9 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         info.ArgumentList.Add(root);
         info.ArgumentList.Add("-ToolsRoot");
         info.ArgumentList.Add(tools);
-        if (userMode && !quickMode) info.ArgumentList.Add("-InteractiveDiskMark");
+        if (userMode) info.ArgumentList.Add("-InteractiveDiskMark");
         else info.ArgumentList.Add("-HeadlessDiskSpd");
         if (userMode) info.ArgumentList.Add("-UserMode");
-        if (quickMode)
-        {
-            info.ArgumentList.Add("-SkipResourceSampling");
-            info.ArgumentList.Add("-SkipDiskBenchmark");
-        }
         var currentElevated = ElevatedProcessLauncher.IsCurrentProcessElevated;
         progress.Report(new(userMode
             ? currentElevated
@@ -217,10 +195,8 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
             return snapshot;
 
         var reading = await CpuTemperatureCache.RequestFreshAsync(TimeSpan.FromSeconds(5));
-        if (reading is null && !IsInstalled)
-            reading = await CpuTemperatureReader.ReadAsync();
         return WithCpuTemperature(snapshot, reading?.TemperatureC,
-            reading?.Status ?? snapshot.CpuTemperatureStatus ?? "Системный опрос датчика не вернул свежие данные");
+            reading?.Status ?? snapshot.CpuTemperatureStatus ?? "Служба HWiNFO не вернула свежие данные");
     }
 
     private static DiagnosticSnapshot WithCpuTemperature(DiagnosticSnapshot snapshot, double? temperature, string status) => snapshot with
@@ -284,9 +260,7 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         try { waitForCompletion = File.ReadAllText(GetInstalledScriptPath()).Contains("completed.txt", StringComparison.Ordinal); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         var previous = File.Exists(latest) ? (await File.ReadAllTextAsync(latest)).Trim() : "";
-        var operation = taskName == InstalledQuickTask
-            ? MaintenanceServiceOperation.QuickCheck : MaintenanceServiceOperation.FullCheck;
-        var service = await MaintenanceServiceClient.StartAsync(operation, cancellationToken);
+        var service = await MaintenanceServiceClient.StartAsync(MaintenanceServiceOperation.FullCheck, cancellationToken);
         if (service.Connected)
         {
             if (!service.Accepted) throw new InvalidOperationException(service.Message);
@@ -315,14 +289,22 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         }
 
         var queued = service.Connected && service.Message.Contains("очеред", StringComparison.OrdinalIgnoreCase);
+        var joined = service.Connected && service.Message.Contains("Присоедин", StringComparison.OrdinalIgnoreCase);
+        if (joined && service.Message.Contains("плановой", StringComparison.OrdinalIgnoreCase))
+            latest = Path.Combine(InstalledRoot, "latest-auto-full.txt");
         var deadline = DateTime.UtcNow.AddMinutes(queued ? 10 : 1);
         string? root = null;
         while (DateTime.UtcNow < deadline)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                await StopInstalledTaskAsync(taskName);
+                throw new OperationCanceledException(cancellationToken);
+            }
             try
             {
                 var current = (await File.ReadAllTextAsync(latest)).Trim();
-                if (current != previous && Path.GetFullPath(current).StartsWith(Path.Combine(InstalledRoot, "Runs") + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                if ((current != previous || joined) && Path.GetFullPath(current).StartsWith(Path.Combine(InstalledRoot, "Runs") + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 {
                     root = current;
                     break;
@@ -339,7 +321,7 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         if (root is null) throw new TimeoutException("Задача запущена, но новый каталог отчёта не появился. Проверьте планировщик задач.");
 
         var ownership = $"owner:{Environment.ProcessId}:{Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks}";
-        try { await File.WriteAllTextAsync(Path.Combine(root, "cancel-request.txt"), ownership); }
+        try { if (!joined) await File.WriteAllTextAsync(Path.Combine(root, "cancel-request.txt"), ownership); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             await CancelInstalledRunAsync(root, taskName);
@@ -393,7 +375,7 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         var request = Path.Combine(root, "cancel-request.txt");
         try { await File.WriteAllTextAsync(request, "cancel"); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-        var deadline = DateTime.UtcNow.AddSeconds(45);
+        var deadline = DateTime.UtcNow.AddSeconds(5);
         while (DateTime.UtcNow < deadline)
         {
             if (File.Exists(Path.Combine(root, "cancelled.txt"))) return;
@@ -407,9 +389,7 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
 
     private static async Task StopInstalledTaskAsync(string taskName)
     {
-        var operation = taskName == InstalledQuickTask
-            ? MaintenanceServiceOperation.QuickCheck : MaintenanceServiceOperation.FullCheck;
-        var service = await MaintenanceServiceClient.StopAsync(operation);
+        var service = await MaintenanceServiceClient.StopAsync(MaintenanceServiceOperation.FullCheck);
         if (service.Connected && service.Accepted) return;
         using var stop = Process.Start(new ProcessStartInfo("schtasks.exe")
         {
@@ -427,7 +407,7 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         try
         {
             if (File.ReadAllText(installedScript).Contains("latest-full.txt", StringComparison.Ordinal))
-                return Path.Combine(InstalledRoot, taskName == InstalledQuickTask ? "latest-quick.txt" : "latest-full.txt");
+                return Path.Combine(InstalledRoot, "latest-full.txt");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         return Path.Combine(InstalledRoot, "latest.txt");

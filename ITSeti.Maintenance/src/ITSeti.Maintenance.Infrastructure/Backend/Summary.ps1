@@ -21,6 +21,15 @@ function Get-WindowsVersionDetails($OperatingSystem,$WindowsKey) {
 function Test-TrustedProcess([string]$SignatureStatus,[string]$Signer) {
     return $SignatureStatus -eq 'Valid' -and (Test-AllowedPublisher $Signer)
 }
+function Get-ActiveUptimeHours($OperatingSystem) {
+    try {
+        if(!$OperatingSystem -or !$OperatingSystem.LastBootUpTime){return $null}
+        $lastBoot=[Management.ManagementDateTimeConverter]::ToDateTime([string]$OperatingSystem.LastBootUpTime)
+        $hours=([DateTime]::Now-$lastBoot).TotalHours
+        if([double]::IsNaN($hours) -or [double]::IsInfinity($hours) -or $hours -lt 0 -or $hours -gt 87600){return $null}
+        return [math]::Round($hours,1)
+    } catch {return $null}
+}
 function Get-MaintenanceComparison($Previous,$Current) {
     if(!$Previous){'Первая проверка с историей: сохранена исходная точка.';return}
     'Предыдущая проверка: {0:dd.MM.yyyy HH:mm}' -f $Previous.CapturedAt
@@ -105,14 +114,36 @@ function Set-DesignatedAdminPasswordPolicy($Snapshot) {
         }
     }
 }
+function Get-NetworkSnapshot {
+    try {
+        $configs=@(Get-WmiObject Win32_NetworkAdapterConfiguration -Filter 'IPEnabled=True' -ErrorAction Stop)
+        foreach($config in $configs) {
+            $addresses=@($config.IPAddress | Where-Object {$_ -match '^(?:\d{1,3}\.){3}\d{1,3}$' -or $_ -match ':'})
+            $mac=([string]$config.MACAddress).Trim()
+            if(!$addresses.Count -and !$mac){continue}
+            [pscustomobject]@{
+                Name=[string]$config.Description
+                Type='Сетевой адаптер'
+                Status='Подключён'
+                LinkSpeed=''
+                MacAddress=$mac
+                Addresses=($addresses -join ', ')
+            }
+        }
+    } catch {
+        $script:Snapshot.Notes+=('Сеть: '+$_.Exception.Message)
+    }
+}
 function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
     $scanTimer=[Diagnostics.Stopwatch]::StartNew()
     Write-Host 'Проверка: оборудование, нагрузка, процессы и журналы...' -ForegroundColor Cyan
     $previousSmart=@(); $previousNotes=@()
     if($script:PreserveDiskSnapshot){$previousSmart=@($script:Snapshot.Smart | Where-Object {$_});$previousNotes=@($script:Snapshot.Notes | Where-Object {$_})}
     $script:PreserveDiskSnapshot=$false
-    $script:Snapshot = @{Notes=$previousNotes; Processes=@(); Events=@(); Volumes=@(); Disks=@(); Smart=$previousSmart; CPU='нет данных'; GPU='нет данных'; CpuTemperatureC=$null; CpuTemperatureStatus=$null; MemoryType='нет данных'; TotalRAM=$null; FreeRAM=$null; Load=$null; LastBootAt=$null; ActiveUptimeHours=$null; EventLimited=$false; EventUnavailable=0; ProcessUnavailable=0}
+    $script:Snapshot = @{Notes=$previousNotes; Processes=@(); Events=@(); Volumes=@(); Disks=@(); Smart=$previousSmart; HwInfo=$null; NetworkAdapters=@(); CPU='нет данных'; GPU='нет данных'; CpuTemperatureC=$null; CpuTemperatureStatus=$null; MemoryType='нет данных'; TotalRAM=$null; FreeRAM=$null; Load=$null; LastBootAt=$null; ActiveUptimeHours=$null; EventLimited=$false; EventUnavailable=0; ProcessUnavailable=0}
     $s=$script:Snapshot
+    $s.HwInfo=Read-HwInfoCache
+    $s.NetworkAdapters=@(Get-NetworkSnapshot)
     if(Get-Command Start-WindowsUpdatePolicyChange -ErrorAction SilentlyContinue){Start-WindowsUpdatePolicyChange}
     Set-DesignatedAdminPasswordPolicy $s
     $script:WindowsUpdateStatus=$null
@@ -121,7 +152,8 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
     try {
         $s.CPU=((Get-WmiObject Win32_Processor -ErrorAction Stop | ForEach-Object {$_.Name.Trim()}) -join ', ')
         $s.GPU=((Get-WmiObject Win32_VideoController -ErrorAction Stop | Where-Object {$_.Name -notmatch 'Virtual|Parsec|USB Mobile'} | ForEach-Object {$_.Name}) -join ', ')
-        $s.CpuTemperatureC=Get-CpuTemperatureC
+        $s.CpuTemperatureC=Get-HwInfoCpuTemperatureC
+        if($null -eq $s.CpuTemperatureC){$s.CpuTemperatureStatus='HWiNFO не вернул допустимый датчик CPU.'}
         if(!$s.GPU) {$s.GPU='только виртуальные адаптеры / нет данных'}
         try {
             $types=@(Get-WmiObject Win32_PhysicalMemory -ErrorAction Stop | ForEach-Object {
@@ -136,19 +168,21 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
         $s.WindowsRelease=$windows.Release
         $s.WindowsBuild=$windows.Build
         try {$s.LastBootAt=([DateTimeOffset]([Management.ManagementDateTimeConverter]::ToDateTime($os.LastBootUpTime))).ToString('o')} catch {$s.Notes+=('Время последней загрузки: '+$_.Exception.Message)}
-        $s.ActiveUptimeHours=Get-ActiveUptimeHours
+        $s.ActiveUptimeHours=Get-ActiveUptimeHours $os
         $s.TotalRAM=[double]$os.TotalVisibleMemorySize/1MB
         $loads=@(); $free=@()
         for($i=0;$i -lt $Samples;$i++) {
-            $loads += [double](Get-CpuLoadPercent)
+            $hwLoad=Get-HwInfoCpuLoadPercent
+            if($null -ne $hwLoad){$loads += [double]$hwLoad}
             $free += [double](Get-WmiObject Win32_OperatingSystem -ErrorAction Stop).FreePhysicalMemory/1MB
             if($i -lt $Samples-1) {Start-Sleep -Seconds 1}
         }
-        $s.Load=($loads | Measure-Object -Average).Average
+        $s.Load=if($loads.Count){($loads | Measure-Object -Average).Average}else{$null}
         $s.FreeRAM=($free | Measure-Object -Average).Average
-        $measuredTemperature=Get-CpuTemperatureC
+        $measuredTemperature=Get-HwInfoCpuTemperatureC
         if($null -ne $measuredTemperature -and ($null -eq $s.CpuTemperatureC -or $measuredTemperature -gt $s.CpuTemperatureC)){$s.CpuTemperatureC=$measuredTemperature}
-        if($s.Load -ge 85) {$s.Notes += 'Высокая загрузка CPU: проверьте процессы на обычной рабочей нагрузке.'}
+        if($null -eq $s.Load){$s.Notes += 'Загрузка CPU не получена из свежего отчёта HWiNFO.'}
+        elseif($s.Load -ge 85) {$s.Notes += 'Высокая загрузка CPU по HWiNFO: проверьте процессы на обычной рабочей нагрузке.'}
         if(Get-Process dism,sfc -ErrorAction SilentlyContinue) {$s.Notes += 'Уже идёт восстановление Windows; оно влияет на текущую нагрузку.'}
     } catch {$s.Notes += ('Оборудование/нагрузка: '+$_.Exception.Message)}
     if($Live){Write-Host ("ПК: $env:COMPUTERNAME"); Show-InitialSection 1}
@@ -278,6 +312,7 @@ function Get-SummaryLines {
     if($null -ne $s.FreeRAM -and $s.TotalRAM -gt 0) {'ОЗУ: {0:N1} ГБ | свободно {1:N1} ГБ | занято {2:N0}%' -f $s.TotalRAM,$s.FreeRAM,(100*(1-$s.FreeRAM/$s.TotalRAM))}
     else {'ОЗУ: замер недоступен'}
     'GPU: '+$s.GPU
+    'Сеть: '+$(if(@($s.NetworkAdapters).Count){(@($s.NetworkAdapters | ForEach-Object {('{0} | MAC {1} | IP {2}' -f $_.Name,$_.MacAddress,$_.Addresses)}) -join '; ')}else{'данные недоступны'})
     '02 | ДИСКИ И МЕСТО'
     $systemDrive=$env:SystemDrive
     $systemSmart=@($s.Smart | Where-Object {[regex]::IsMatch([string]$_.Letters,('(?i)(?<![A-Z])'+[regex]::Escape($systemDrive)))} | Select-Object -First 1)
@@ -397,29 +432,6 @@ function Get-CriticalFindings {
             $message
         }
     }
-}
-function Get-CpuTemperatureC {
-    $values=@()
-    foreach($namespace in @('root\LibreHardwareMonitor','root\OpenHardwareMonitor')) {
-        try {
-            foreach($sensor in @(Get-WmiObject -Namespace $namespace -Class Sensor -ErrorAction Stop)) {
-                if([string]$sensor.SensorType -ne 'Temperature'){continue}
-                $identity=([string]$sensor.Identifier+' '+[string]$sensor.Parent+' '+[string]$sensor.Name)
-                if($identity -match '(?i)(distance|tjmax|thermal limit)'){continue}
-                if($identity -notmatch '(?i)(/(intelcpu|amdcpu)/\d+/|CPU\s*(Package|Core)|Tctl|Tdie|Package\s*id)'){continue}
-                $value=0.0
-            if([double]::TryParse([string]$sensor.Value,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$value) -and $value -gt 0 -and $value -le 120){$values+= $value}
-            }
-        } catch {}
-    }
-    try {
-        foreach($zone in @(Get-WmiObject -Namespace 'root\wmi' -Class MSAcpi_ThermalZoneTemperature -ErrorAction Stop | Where-Object {$_.InstanceName -match '(?i)CPU|PROCESSOR|PROCHOT|TCTL|TDIE'})) {
-            $value=([double]$zone.CurrentTemperature/10)-273.15
-            if($value -gt 0 -and $value -le 120){$values+=$value}
-        }
-    } catch {}
-    if($values.Count){return [double](($values | Measure-Object -Maximum).Maximum)}
-    return $null
 }
 function Get-DiskLinkWarning($Disk) {
     $parts=@(([string]$Disk.TransferMode) -split '\|')

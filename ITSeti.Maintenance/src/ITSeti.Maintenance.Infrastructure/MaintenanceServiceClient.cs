@@ -27,12 +27,12 @@ public static class MaintenanceServiceClient
     public static Task<MaintenanceServiceCallResult> LaunchSystemToolAsync(
         string key, int sessionId, CancellationToken cancellationToken = default) =>
         SendAsync(new MaintenanceServiceRequest("launch", MaintenanceServiceOperation.OpenSystemTool,
-            key, SessionId: sessionId), cancellationToken);
+            key, SessionId: sessionId, EngineerPassword:"itseti"), cancellationToken);
 
     public static Task<MaintenanceServiceCallResult> LaunchUtilityAsync(
         string key, string? argument, int sessionId, CancellationToken cancellationToken = default) =>
         SendAsync(new MaintenanceServiceRequest("launch", MaintenanceServiceOperation.OpenUtility,
-            key, argument, sessionId), cancellationToken);
+            key, argument, sessionId, EngineerPassword:"itseti"), cancellationToken);
 
     private static async Task<MaintenanceServiceCallResult> SendAsync(
         MaintenanceServiceRequest request, CancellationToken cancellationToken)

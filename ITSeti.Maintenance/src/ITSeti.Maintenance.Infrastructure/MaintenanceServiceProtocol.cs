@@ -23,7 +23,7 @@ public sealed record MaintenanceServiceRequest(
     MaintenanceServiceOperation? Operation = null,
     string? Target = null,
     string? Argument = null,
-    int? SessionId = null);
+    int? SessionId = null, string? EngineerPassword = null);
 
 public sealed record MaintenanceServiceResponse(bool Success, string Message, string? Version = null);
 

@@ -1,5 +1,6 @@
 using System.IO;
 using ITSeti.Maintenance.Core;
+using ITSeti.Maintenance.Infrastructure;
 
 namespace ITSeti.Maintenance.App;
 
@@ -8,7 +9,7 @@ public sealed record DebugFile(string Name, string Path);
 
 public sealed class DiagnosticDebugView
 {
-    public string Source { get; private set; } = "Проверка ещё не выполнялась";
+    public string Source { get; private set; } = "Ошибок приложения не зарегистрировано";
     public string Stage { get; private set; } = "—";
     public string Error { get; private set; } = "Ошибок запуска не обнаружено";
     public string DirectoryPath { get; private set; } = "";
@@ -19,57 +20,16 @@ public sealed class DiagnosticDebugView
     {
         Steps.Clear();
         Files.Clear();
-        var selectedRoot = snapshot?.Full?.ReportDirectory;
-        var failedRoot = preferSelected ? null : FindRecentFailedRun(snapshot);
-        DirectoryPath = failedRoot ?? (currentError is null && Directory.Exists(selectedRoot) ? selectedRoot! : "");
-        Source = failedRoot is not null ? "Последняя незавершённая проверка"
-            : currentError is not null ? "Последняя проверка завершилась с ошибкой"
-            : snapshot is not null ? $"{snapshot.KindLabel} проверка от {snapshot.DateLabel}"
-            : "Проверка ещё не выполнялась";
-        Stage = ReadSmallFile("stage.txt") ?? currentStage ?? "—";
-        Error = ReadSmallFile("error.txt") ?? currentError ?? "Ошибок запуска не обнаружено";
-
-        if (failedRoot is not null)
-        {
-            Steps.Add(new("Запуск проверки", "Ошибка", Error));
-        }
-        else if (currentError is not null) Steps.Add(new("Запуск проверки", "Ошибка", currentError));
-        else if (snapshot?.Full is { } full)
-        {
-            Steps.Add(new("Запуск проверки", "Готово", full.Elevated ? "Проверка с правами администратора" : "Проверка от текущей учётной записи"));
-            var sample = full.ResourceSampling;
-            Steps.Add(new("Нагрузка CPU и ОЗУ", sample is { Samples: >= 6, Error: "" } ? "Готово" : "Не получено",
-                sample?.Error is { Length: > 0 } sampleError ? sampleError : sample is null ? Note(snapshot, "Замер нагрузки:") ?? "Нет результата замера" : $"Получено {sample.Samples} отсчётов"));
-            Steps.Add(new("Состояние дисков (SMART)", full.SmartDisks.Count > 0 ? "Готово" : "Не получено",
-                full.SmartDisks.Count > 0 ? $"Получено для {full.SmartDisks.Count} накопителей" : Note(snapshot, "SMART:") ?? "CrystalDiskInfo не вернул данные"));
-            var benchmark = full.Benchmark;
-            Steps.Add(new("Скорость диска", benchmark.State == "Completed" ? "Готово" : benchmark.State == "Running" ? "Выполняется" : "Ошибка",
-                benchmark.State == "Completed" ? $"{benchmark.Drive}: чтение {benchmark.ReadLabel}, запись {benchmark.WriteLabel}" : string.IsNullOrWhiteSpace(benchmark.Error) ? "Результат теста не получен" : benchmark.Error));
-            Steps.Add(new("Процессы", full.ProcessUnavailable == 0 ? "Готово" : "Частично",
-                $"Вне списка: {full.Processes.Count}"));
-            Steps.Add(new("События Windows", full.EventLimited || full.EventUnavailable > 0 ? "Частично" : "Готово",
-                $"Получено: {full.Events.Count}; недоступно: {full.EventUnavailable}"));
-            var repair = ReadSmallFile(Path.Combine("repair", "status.txt"));
-            var repairStarted = File.Exists(Path.Combine(DirectoryPath, "repair", "started.txt"));
-            Steps.Add(new("Восстановление Windows", repair is not null ? "Статус" : repairStarted ? "Запущено" : "Не запускалось",
-                repair ?? (repairStarted ? "DISM и SFC выполняются отдельно от диагностики" : "Для проверки пользователя не требуется")));
-            foreach (var note in snapshot.Notes.Where(n => n.Contains(':') && !n.StartsWith("Проверка выполнена", StringComparison.OrdinalIgnoreCase)
-                && !n.StartsWith("Без доступа к исполняемому файлу процессов", StringComparison.OrdinalIgnoreCase)))
-                Steps.Add(new("Примечание", "Информация", note));
-        }
-
-        if (snapshot is not null)
-        {
-            var temperature = snapshot.CpuTemperatureC ?? snapshot.Full?.CpuTemperatureC;
-            Steps.Add(new("Температура CPU", temperature is null ? "Не получено" : "Готово",
-                temperature is null ? snapshot.CpuTemperatureStatus ?? "Источник температуры не проверялся в этой версии" : $"{temperature:N0} °C · {snapshot.CpuTemperatureStatus ?? "источник датчика не указан"}"));
-        }
-
-        foreach (var name in new[] { "error.txt", "full-check.log", "disk-worker.log", "resource-sampler.err.txt", "disk-result.xml", "cpu-temperature.json", "result.json", "stage.txt", Path.Combine("repair", "status.txt") })
-        {
-            var path = Path.Combine(DirectoryPath, name);
-            if (DirectoryPath.Length > 0 && File.Exists(path)) Files.Add(new(name, path));
-        }
+        DirectoryPath = Path.GetDirectoryName(ApplicationErrorStore.JsonLogPath) ?? "";
+        var errors = ApplicationErrorStore.ReadRecent(100);
+        Source = errors.Count == 0 ? "Ошибок приложения не зарегистрировано" : $"Зарегистрировано ошибок: {errors.Count}";
+        Stage = errors.Count == 0 ? "—" : errors[0].OccurredAt.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss");
+        Error = errors.Count == 0 ? "Ошибок запуска не обнаружено" : errors[0].Summary;
+        foreach (var error in errors)
+            Steps.Add(new($"{error.OccurredAt.ToLocalTime():dd.MM HH:mm:ss} · {error.Component}", error.Operation,
+                $"{error.Summary}\nКод: {error.Id:N}\n{error.ExceptionType}\n{error.TechnicalDetails}"));
+        if (File.Exists(ApplicationErrorStore.TextLogPath)) Files.Add(new("application-errors.log", ApplicationErrorStore.TextLogPath));
+        if (File.Exists(ApplicationErrorStore.JsonLogPath)) Files.Add(new("application-errors.jsonl", ApplicationErrorStore.JsonLogPath));
     }
 
     private string? ReadSmallFile(string relative)

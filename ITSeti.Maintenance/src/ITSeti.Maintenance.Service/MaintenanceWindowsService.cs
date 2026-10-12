@@ -24,7 +24,10 @@ internal sealed class MaintenanceWindowsService : ServiceBase
         coordinator.ValidateInstallation();
         running = Task.Run(() => coordinator.RunAsync(cancellation.Token));
         _ = running.ContinueWith(task =>
-            Environment.FailFast("Служба обслуживания аварийно остановилась.", task.Exception),
+        {
+            ApplicationErrorStore.Record("Системная служба", "Аварийная остановка", task.Exception!);
+            Environment.FailFast("Служба обслуживания аварийно остановилась.", task.Exception);
+        },
             CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
     }
 

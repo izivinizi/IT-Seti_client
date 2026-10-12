@@ -41,6 +41,7 @@ public sealed class OkdeskWebClient : IOkdeskClient, IDisposable
         {
             "/api/v1/companies/list" => ("company", "/companies"),
             "/api/v1/maintenance_entities/list" => ("maintenance_entity", "/maintenance_entities"),
+            "/api/v1/equipments/list" => ("equipment", "/equipments"),
             _ => throw new InvalidOperationException("Unsupported web catalog.")
         };
         await gate.WaitAsync(cancellationToken);
@@ -60,7 +61,7 @@ public sealed class OkdeskWebClient : IOkdeskClient, IDisposable
                 expectedPages = pages;
                 foreach (var row in data.RootElement.GetProperty("records").GetProperty("data").EnumerateArray())
                 {
-                    var item = Normalize(row, entity == "company");
+                    var item = entity == "equipment" ? NormalizeEquipment(row) : Normalize(row, entity == "company");
                     var id = item.GetProperty("id").GetInt64();
                     if (!ids.Add(id)) throw new JsonException("Catalog pagination repeated a record.");
                     items.Add(item);
@@ -177,6 +178,39 @@ public sealed class OkdeskWebClient : IOkdeskClient, IDisposable
         var companyId = ReadId(attrs.GetProperty("company").GetProperty("id"));
         return JsonSerializer.SerializeToElement(new { id, name, active, company_id = companyId,
             company_name = JsonRead.String(attrs.GetProperty("company"), "name"), address = JsonRead.String(attrs, "address") });
+    }
+
+    public static JsonElement NormalizeEquipment(JsonElement row)
+    {
+        var attrs = row.GetProperty("attributes");
+        var id = ReadId(row.GetProperty("id"));
+        var maintenanceEntity = JsonRead.Property(attrs, "maintenance_entity", "maintenanceEntity");
+        var company = JsonRead.Property(attrs, "company");
+        var nestedCompany = maintenanceEntity is { ValueKind: JsonValueKind.Object }
+            ? JsonRead.Property(maintenanceEntity.Value, "company") : null;
+        var companyId = RelatedId(attrs, ["company_id", "companyId"])
+            ?? (company is { ValueKind: JsonValueKind.Object } ? RelatedId(company.Value, ["id"]) : null)
+            ?? (nestedCompany is { ValueKind: JsonValueKind.Object } ? RelatedId(nestedCompany.Value, ["id"]) : null);
+        var siteId = RelatedId(attrs, ["maintenance_entity_id", "maintenanceEntityId", "service_object_id"])
+            ?? (maintenanceEntity is { ValueKind: JsonValueKind.Object } ? RelatedId(maintenanceEntity.Value, ["id"]) : null);
+        return JsonSerializer.SerializeToElement(new
+        {
+            id,
+            name = JsonRead.String(attrs, "name", "title"),
+            inventory_number = JsonRead.String(attrs, "inventory_number", "inventoryNumber", "inventory_code"),
+            serial_number = JsonRead.String(attrs, "serial_number", "serialNumber"),
+            company_id = companyId,
+            maintenance_entity_id = siteId
+        });
+    }
+
+    private static long? RelatedId(JsonElement item, string[] names)
+    {
+        var raw = JsonRead.Property(item, names);
+        if (raw is null) return null;
+        if (raw.Value.ValueKind == JsonValueKind.Object) raw = JsonRead.Property(raw.Value, "id");
+        return raw is { ValueKind: JsonValueKind.Number } && raw.Value.TryGetInt64(out var id) ? id
+            : raw is { ValueKind: JsonValueKind.String } && long.TryParse(raw.Value.GetString(), out id) ? id : null;
     }
 
     private static long ReadId(JsonElement value)

@@ -61,7 +61,7 @@ if($counterFunction.Count -ne 1){throw 'Resource counter delta helper was not fo
 if((CounterDelta 20 10) -ne 10 -or $null -ne (CounterDelta 10 20)){throw 'Reset performance counters must be ignored, not treated as 32-bit rollover.'}
 $install=[IO.File]::ReadAllText((Join-Path $Root 'Install-Maintenance.ps1'),[Text.Encoding]::UTF8)
 $uninstall=[IO.File]::ReadAllText((Join-Path $Root 'Uninstall-Maintenance.ps1'),[Text.Encoding]::UTF8)
-foreach($name in @('Full','QuickFull','AutoFullRepair','Repair','Cleanup','OrganizationSetup','DisableUpdates','RestoreUpdates','Update','Temperature')) {
+foreach($name in @('Full','QuickFull','AutoFullRepair','Repair','Cleanup','OrganizationSetup','DisableUpdates','RestoreUpdates','Update')) {
     if(!$uninstall.Contains("'ITSeti-Maintenance-$name'")){throw "Uninstall leaves behind task $name."}
 }
 if($install -notmatch 'Register-ScheduledTask' -or $install -notmatch "-UserId 'S-1-5-18'" -or $install -notmatch 'LogonType ServiceAccount' -or $install -notmatch 'GRGX;;;BU' -or $install -notmatch 'icacls.exe') {throw 'Installed task privilege boundary is missing.'}
@@ -69,13 +69,15 @@ if($install -notmatch 'ITSeti-Maintenance-OrganizationSetup' -or $install -notma
    $install -notmatch 'OrganizationSetupRequests' -or $install -notmatch 'OrganizationSetupRuns' -or
    $install -match 'Copy-Item[^\r\n]+Install-OrganizationSoftware.ps1') {throw 'Server-backed organization software task contract is invalid.'}
 if(!$install.Contains('install.log') -or !$install.Contains('install-status.txt') -or !$install.Contains('throw "Не удалось зарегистрировать обязательную задачу')) {throw 'A failed required SYSTEM task must abort installation with logged details.'}
-if(!$install.Contains("'ITSeti-Maintenance-Temperature'") -or !$install.Contains('cpu-temperature.json') -or !$install.Contains("-Execute (Join-Path `$install 'ITSeti.Maintenance.exe')")) {throw 'The SYSTEM CPU-temperature task is not installed.'}
+if([regex]::IsMatch($install,'Register-ScheduledTask[^\r\n]*ITSeti-Maintenance-Temperature') -or [regex]::IsMatch($install,'foreach\(\$name in [^\r\n]*ITSeti-Maintenance-Temperature')) {throw 'The removed standalone CPU-temperature scheduled task must not be installed.'}
 $tempSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\CpuTemperatureCache.cs'),[Text.Encoding]::UTF8)
-if(!$tempSource.Contains('DateTimeOffset.UtcNow - capturedAt') -or !$tempSource.Contains('ITSeti-Maintenance-Temperature') -or !$tempSource.Contains('"/Run"') -or !$tempSource.Contains('RequestFreshAsync') -or !$tempSource.Contains('double.IsFinite')) {throw 'Temperature cache expiry, validation or on-demand SYSTEM probe is missing.'}
-$temperatureReader=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\CpuTemperatureReader.cs'),[Text.Encoding]::UTF8)
-if(!$temperatureReader.Contains('SelectBestReading') -or !$temperatureReader.Contains('IsDistanceToThermalLimit') -or !$temperatureReader.Contains('tctl')) {throw 'CPU temperature sensor ranking must prefer physical temperatures and exclude distance-to-limit sensors.'}
+if(!$tempSource.Contains('DateTimeOffset.UtcNow - capturedAt') -or !$tempSource.Contains('RequestProbeAsync') -or !$tempSource.Contains('double.IsFinite')) {throw 'Temperature cache expiry or service-backed probing is missing.'}
+if(Test-Path -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\CpuTemperatureReader.cs')) {throw 'The removed legacy CPU-temperature reader is still present.'}
+$hwInfoReader=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\HwInfoReader.cs'),[Text.Encoding]::UTF8)
+if(!$hwInfoReader.Contains('ITSeti.HwInfoBridge.SensorReader.Read()') -or
+   $hwInfoReader.Contains('ArgumentList.Add("-l" + temporary)')) {throw 'HWiNFO32 must use Shared Memory rather than unsupported CLI logging.'}
 $installedCheck=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCheck.ps1'),[Text.Encoding]::UTF8)
-if(!$installedCheck.Contains('ITSeti-Maintenance-Temperature') -or !$installedCheck.Contains('WaitForExit(5000)') -or !$installedCheck.Contains('Read-FreshTemperature') -or $installedCheck.Contains('--cpu-temperature-probe')) {throw 'Full checks must reuse the shared SYSTEM temperature probe instead of starting a second reader.'}
+if($installedCheck.Contains('ITSeti-Maintenance-Temperature') -or !$installedCheck.Contains('Read-FreshTemperature') -or $installedCheck.Contains('--cpu-temperature-probe')) {throw 'Full checks must consume the service HWiNFO cache without a second scheduled reader.'}
 $installedCheckTokens=$null;$installedCheckErrors=$null
 $installedCheckAst=[Management.Automation.Language.Parser]::ParseInput($installedCheck,[ref]$installedCheckTokens,[ref]$installedCheckErrors)
 if($installedCheckErrors){throw 'Installed check has PowerShell syntax errors.'}
@@ -94,13 +96,13 @@ try {
     if($null -ne (Read-FreshTemperature $temperatureTestFile 45)){throw 'PowerShell accepted a stale shared CPU temperature cache.'}
 } finally {Remove-Item -LiteralPath $temperatureTestFile -Force -ErrorAction SilentlyContinue}
 $summary=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Summary.ps1'),[Text.Encoding]::UTF8)
-if(!$summary.Contains("`$identity -match '(?i)(distance|tjmax|thermal limit)'")){throw 'PowerShell fallback can still misreport thermal-limit distance as CPU temperature.'}
+if(!$summary.Contains('Get-HwInfoCpuTemperatureC') -or $summary.Contains('LibreHardwareMonitor') -or $summary.Contains('OpenHardwareMonitor')){throw 'PowerShell summary must use HWiNFO and contain no legacy sensor provider.'}
 $viewModel=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainViewModel.cs'),[Text.Encoding]::UTF8)
 $window=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml.cs'),[Text.Encoding]::UTF8)
 $liveRefreshStart=$viewModel.IndexOf('public async Task RefreshLiveStatusAsync',[StringComparison]::Ordinal)
 $liveRefreshEnd=$viewModel.IndexOf('private async Task RequestTemperatureProbeAsync',[StringComparison]::Ordinal)
 $liveRefresh=if($liveRefreshStart -ge 0 -and $liveRefreshEnd -gt $liveRefreshStart){$viewModel.Substring($liveRefreshStart,$liveRefreshEnd-$liveRefreshStart)}else{''}
-if(!$liveRefresh.Contains('RunLiveAsync') -or !$window.Contains('TimeSpan.FromSeconds(10)') -or !$liveRefresh.Contains('CpuTemperatureCache.ReadFresh(maxAge: TimeSpan.FromSeconds(45))') -or !$liveRefresh.Contains('CpuTemperatureC = temperature?.TemperatureC') -or $liveRefresh.Contains('Selected?.CpuTemperatureC')) {throw 'Live resource refresh must be periodic, fresh and must not reuse stale temperature values.'}
+if(!$liveRefresh.Contains('RunLiveAsync') -or !$window.Contains('TimeSpan.FromSeconds(5)') -or !$liveRefresh.Contains('CpuTemperatureCache.ReadFresh(maxAge: TimeSpan.FromSeconds(45))') -or !$liveRefresh.Contains('CpuTemperatureC = temperature?.TemperatureC') -or $liveRefresh.Contains('Selected?.CpuTemperatureC')) {throw 'Live resource refresh must be periodic, fresh and must not reuse stale temperature values.'}
 $treeSize=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\TreeSizeLauncher.cs'),[Text.Encoding]::UTF8)
 $diskTools=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\FullDiagnosticsRunner.cs'),[Text.Encoding]::UTF8)
 $elevatedLauncher=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\ElevatedProcessLauncher.cs'),[Text.Encoding]::UTF8)
@@ -156,7 +158,8 @@ $setupUninstaller=[IO.File]::ReadAllText((Join-Path $Root 'OrganizationUninstall
 $supportView=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\SupportDialog.xaml'),[Text.Encoding]::UTF8)
 $supportCode=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\SupportDialog.xaml.cs'),[Text.Encoding]::UTF8)
 if(!$appProject.Contains('Tools\Software\**\*') -or $softwareCode.Contains('MatchesPassword') -or !$softwareCode.Contains('ConfigureEngineerShell();') -or
-   !$softwareCode.Contains('HandoffToEngineer(launch.Process)') -or $softwareCode.Contains('ChooseOrganizationInstallMode') -or
+   !$softwareCode.Contains('EngineerPassword = "itseti"') -or $softwareCode.Contains('HandoffToEngineer(launch.Process)') -or
+   $softwareCode.Contains('TryStartWithWindowsCredentials') -or $softwareCode.Contains('ChooseOrganizationInstallMode') -or
    !$softwareAudit.Contains('"Установлено" => "Удалить"') -or
    !$softwareCode.Contains('RunUninstallComponentAsync') -or !$systemTools.Contains('"ms-settings:"') -or
    !$setupUninstaller.Contains('[switch]$Silent') -or $setupUninstaller -notmatch '(?i)данные обслуживания сохранены') {
@@ -185,19 +188,23 @@ $bootstrap=[IO.File]::ReadAllText((Join-Path $Root 'Install-ITSeti.ps1'),[Text.E
 if($bootstrap -match 'LoadUserProfile' -or !$bootstrap.Contains('NativeErrorCode') -or !$bootstrap.Contains("Get-Service -Name 'seclogon'") -or !$bootstrap.Contains('Start-AdministratorHelper -PowerShell $powershell') -or !$bootstrap.Contains('[Diagnostics.Process]::Start($start)') -or !$bootstrap.Contains('Start-Process -FilePath $setup -Verb RunAs')) {throw 'Credential bootstrap must launch as the selected administrator and fall back to the Windows UAC prompt.'}
 if($install -notmatch 'ITSeti-Maintenance-Status' -or $install -notmatch 'CurrentVersion\\Run') {throw 'Failed-night-check status startup is missing.'}
 $entry=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCheck.ps1'),[Text.Encoding]::UTF8)
-if(!$install.Contains('ITSeti-Maintenance-QuickFull') -or !$install.Contains('-Quick')) {throw 'Installed quick full-check task is missing.'}
-if($install -notmatch 'DaysInterval 14' -or !$install.Contains('ITSeti-Maintenance-AutoFullRepair') -or !$install.Contains('Initialize-ScheduledFullBaseline') -or !$install.Contains('$autoFullSettings')) {throw 'The 14-day check and gated 60-day full maintenance schedule must remain.'}
+$scheduledPolicy=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\ScheduledFull.ps1'),[Text.Encoding]::UTF8)
+if(!$install.Contains('foreach($obsoleteQuickTask in @(''ITSeti-Maintenance-QuickFull'',''ITSeti-Maintenance-AutoQuick''))') -or
+   $install -match 'foreach\(\$name in @\([^\r\n]*ITSeti-Maintenance-QuickFull') {throw 'Legacy quick-check tasks must be removed, not registered again.'}
+if($install -notmatch 'New-ScheduledTaskTrigger -Daily -At' -or $scheduledPolicy -notmatch 'FromDays\(60\)' -or
+   !$install.Contains('ITSeti-Maintenance-AutoFullRepair') -or !$install.Contains('Initialize-ScheduledFullBaseline') -or !$install.Contains('$autoFullSettings')) {throw 'The single full diagnostic and gated 60-day maintenance schedule must remain.'}
+if(!$install.Contains('ITSeti-Maintenance-Tickets') -or !$install.Contains('Notifier\ITSeti.Maintenance.TicketNotifier.exe')) {throw 'Ticket notifications must start with the user session, independent of the main app window.'}
 $appSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\App.xaml.cs'),[Text.Encoding]::UTF8)
 $promptSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\ScheduledCheckPrompt.cs'),[Text.Encoding]::UTF8)
 $scheduledQuickStart=$appSource.IndexOf('if (e.Args.Contains("--scheduled-quick"',[StringComparison]::Ordinal)
 $scheduledQuickEnd=$appSource.IndexOf('if (MainWindow is null)',[Math]::Max(0,$scheduledQuickStart),[StringComparison]::Ordinal)
 $scheduledQuickBlock=if($scheduledQuickStart -ge 0 -and $scheduledQuickEnd -gt $scheduledQuickStart){$appSource.Substring($scheduledQuickStart,$scheduledQuickEnd-$scheduledQuickStart)}else{''}
 if(!$scheduledQuickBlock.Contains('GetPendingAutoFullMaintenance') -or
-   !$scheduledQuickBlock.Contains('new ScheduledCheckPrompt().ShowDialog()') -or
+   !$scheduledQuickBlock.Contains('new ScheduledCheckPrompt(pendingFull=="overdue").ShowDialog()') -or
    !$scheduledQuickBlock.Contains('full-maintenance-remind-after.txt') -or
    !$appSource.Contains('Runs", runId, "error.txt"') -or
    $entry.Contains('ScheduledCheckPrompt') -or !$promptSource.Contains('Повторить проверку')) {
-    throw 'Only a failed night full check may prompt the user; completed and quick checks stay unattended.'
+    throw 'Failed or overdue full maintenance must prompt the user; completed and quick checks stay unattended.'
 }
 if(!$install.Contains('ITSeti-Maintenance-DisableUpdates') -or !$install.Contains('ITSeti-Maintenance-RestoreUpdates')) {throw 'Windows Update policy tasks are missing.'}
 $updater=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Update-Application.ps1'
@@ -239,13 +246,11 @@ $updateTokens=$null;$updateErrors=$null
 if($updateErrors){throw 'Windows Update policy worker has PowerShell syntax errors.'}
 $updateSource=[IO.File]::ReadAllText($updatePolicy,[Text.Encoding]::UTF8)
 if($updateSource -notmatch 'original-policy\.json' -or $updateSource -notmatch 'ChangedExternally' -or $updateSource -notmatch 'NoAutoUpdate') {throw 'Windows Update policy worker must preserve and protect the existing setting.'}
-if(!$entry.Contains('[switch]$Quick') -or !$entry.Contains('[switch]$SmartOnly') -or
-   $entry.Contains('-SkipResourceSampling:$Quick') -or $entry.Contains('-SkipDiskBenchmark:$Quick') -or
-   $entry.Contains('$workerArgs += ''-UserMode''') -or
-   !$entry.Contains('$workerArgs') -or !$entry.Contains('-SkipDiskBenchmark') -or
-   !$entry.Contains('last-quick-run.txt') -or !$entry.Contains('TimeSpan]::FromDays(14)') -or
-   !$entry.Contains('latest-quick.txt') -or !$entry.Contains('latest-smart.txt') -or !$entry.Contains('last-smart-run.txt') -or !$entry.Contains('latest-full.txt')) {
-    throw 'The 14-day SYSTEM check must use full diagnostics and skip runs after a recent full check.'
+if(!$entry.Contains('[switch]$SmartOnly') -or $entry.Contains('[switch]$ScheduledQuick') -or
+   !$entry.Contains('-SkipResourceSampling') -or !$entry.Contains('-SkipDiskBenchmark') -or
+   $entry.Contains('last-quick-run.txt') -or $entry.Contains('latest-quick.txt') -or
+   !$entry.Contains('latest-smart.txt') -or !$entry.Contains('last-smart-run.txt') -or !$entry.Contains('latest-full.txt')) {
+    throw 'Only passive service monitoring, SMART refresh and the single full diagnostic pipeline may remain.'
 }
 if(!$entry.Contains('Test-ScheduledFullDue') -or !$entry.Contains('Complete-ScheduledFullCheck') -or
    !$entry.Contains('ITSeti-Maintenance-Update') -or !$entry.Contains('cancel-request.txt') -or
@@ -276,9 +281,10 @@ if($userCleanupErrors -or $userCleanupWorker -notmatch 'thumbcache_\*\.db' -or
    $userCleanupWorker -notmatch 'D3DSCache' -or $userCleanupWorker -notmatch 'SHEmptyRecycleBin') {
     throw 'User-context fallback cleanup must include thumbnails, temporary and internet/Direct3D caches, and the current user recycle bin.'
 }
-if(!$entry.Contains('[switch]$ScheduledQuick') -or !$entry.Contains('if($ScheduledQuick)') -or
-   $install -notmatch 'ITSeti-Maintenance-AutoQuick' -or $install -notmatch '\-ScheduledQuick') {
-    throw 'The scheduled 14-day quick check must not suppress an on-demand quick check.'
+if($entry.Contains('[switch]$Quick') -or $entry.Contains('[switch]$ScheduledQuick') -or
+   $install -match 'Register-ScheduledTask[^\r\n]*ITSeti-Maintenance-AutoQuick' -or
+   $install -match 'Register-ScheduledTask[^\r\n]*ITSeti-Maintenance-QuickFull') {
+    throw 'The duplicate quick-check execution path must stay removed.'
 }
 $accountScript=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Create-LocalAdmin.ps1'
 $accountTokens=$null;$accountErrors=$null
@@ -311,4 +317,4 @@ $repairTokens=$null;$repairErrors=$null
 if($repairErrors){throw 'Installed repair worker has PowerShell syntax errors.'}
 if((Get-Content -LiteralPath $repairEntry -Raw) -notmatch 'finished.txt') {throw 'Installed repair has no completion marker.'}
 if($entry -notmatch "ITSeti\\Maintenance" -or $entry -notmatch 'HeadlessDiskSpd' -or $entry -notmatch "'ResourceSampler.ps1'") {throw 'Installed worker is missing a fixed path or resource sampler.'}
-'PASS: DiskSpd XML parser, Windows Update policy safety, 14/60-day schedules, and installed-task contract; no privileged task created.'
+'PASS: DiskSpd XML parser, Windows Update policy safety, one full-check schedule, and installed-task contract; no privileged task created.'

@@ -17,6 +17,7 @@
       <nav class="navigation" aria-label="Разделы">
         <button class="nav-item active" type="button" data-view="computers" aria-current="page">Компьютеры</button>
         <button class="nav-item" type="button" data-view="monitoring">Мониторинг <span id="monitor-badge" class="nav-count hidden">0</span></button>
+        <button class="nav-item" type="button" data-view="connections">Новые подключения</button>
         <button class="nav-item" type="button" data-view="tickets">Заявки</button>
         <button class="nav-item" type="button" data-view="packages">ПО и обновления</button>
       </nav>
@@ -52,21 +53,23 @@
               <div class="pager"><button id="device-prev" type="button" class="secondary compact">Назад</button><span id="device-page">Страница 1</span><button id="device-next" type="button" class="secondary compact">Далее</button></div>
             </section>
             <section class="detail-pane" aria-label="Проверки компьютера">
-              <div class="section-heading"><div><h2 id="selected-title">Выберите компьютер</h2><span id="selected-meta" class="meta"></span></div></div>
+              <div class="section-heading"><div><h2 id="selected-title">Выберите компьютер</h2><span id="selected-meta" class="meta"></span></div><button id="ticket-block-toggle" type="button" class="secondary compact" disabled>Заявки ПК</button></div>
               <div id="run-list" class="run-list"></div>
               <div id="run-detail" class="run-detail"></div>
             </section>
           </div>
         </section>
 
+        <section id="view-connections" class="view" aria-labelledby="connections-title">
+          <div class="page-heading"><h1 id="connections-title">Новые подключения</h1><button id="refresh-connections" type="button" class="secondary">Обновить</button></div>
+          <div class="filterbar"><label><span>Период</span><select id="connections-days" class="field"><option value="1">24 часа</option><option value="7" selected>7 дней</option><option value="30">30 дней</option><option value="90">90 дней</option></select></label><span id="connections-count" class="meta"></span></div>
+          <div id="connections-status" class="status" role="status"></div>
+          <div id="monitor-connections" class="monitor-connections-list"></div>
+          <div id="monitor-connections-empty" class="empty hidden">Новых компьютеров за выбранный период нет.</div>
+        </section>
         <section id="view-monitoring" class="view" aria-labelledby="monitoring-title">
           <div class="page-heading"><div><h1 id="monitoring-title">Мониторинг</h1><p>Проблемы, появившиеся после предыдущей проверки ПК</p></div><button id="refresh-monitoring" type="button" class="secondary">Обновить</button></div>
           <div class="monitor-summary"><strong id="monitor-total">—</strong><span>новых событий за 7 дней по всем ПК</span></div>
-          <section class="monitor-connections" aria-labelledby="connections-title">
-            <div class="section-heading"><h2 id="connections-title">Новые подключения</h2><span id="connections-count" class="meta"></span></div>
-            <div id="monitor-connections" class="monitor-connections-list"></div>
-            <div id="monitor-connections-empty" class="empty hidden">Новых компьютеров за выбранный период нет.</div>
-          </section>
           <div class="filterbar monitoring-filters">
             <label><span>Важность</span><select id="monitor-severity" class="field"><option value="1" selected>Только критические</option><option value="2">Предупреждения</option><option value="0">Все проблемы</option></select></label>
             <label><span>Период</span><select id="monitor-days" class="field"><option value="1">24 часа</option><option value="7" selected>7 дней</option><option value="30">30 дней</option><option value="90">90 дней</option></select></label>

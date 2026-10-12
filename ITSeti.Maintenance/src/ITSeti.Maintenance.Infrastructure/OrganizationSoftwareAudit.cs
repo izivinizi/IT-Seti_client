@@ -21,6 +21,7 @@ public static class OrganizationSoftwareAudit
 
     public static IReadOnlyList<OrganizationComponent> Inspect(string? bundledDirectory)
     {
+        if (!ServerSoftwareCatalog.IsConnected) return [];
         var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
         var programFiles86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
         var data = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
@@ -67,7 +68,7 @@ public static class OrganizationSoftwareAudit
             }
             return serverRows;
         }
-        return rows;
+        return [];
     }
 
     private static OrganizationComponent EvaluateStandalone(string name, string key, string? executable, string package, Version required)

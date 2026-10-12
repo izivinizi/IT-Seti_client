@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using Microsoft.Win32;
+using ITSeti.Maintenance.Infrastructure;
 
 namespace ITSeti.Maintenance.App;
 
@@ -51,6 +52,9 @@ public partial class SupportDialog : Window
     {
         if (TicketTitle.Text.Trim().Length < 3 || string.IsNullOrWhiteSpace(TicketBody.Text) || TicketService.SelectedItem is not Service service)
         { TicketStatus.Text = "Введите тему, сервис и суть заявки."; return; }
+        var contact = TicketContact.Text.Trim();
+        if (contact.Length == 0)
+        { TicketStatus.Text = "Укажите ФИО, почту и номер телефона."; return; }
         SubmitTicket.IsEnabled = false;
         Composer.IsEnabled = false;
         TicketStatus.Text = "Отправляю заявку…";
@@ -58,7 +62,6 @@ public partial class SupportDialog : Window
         {
             using var client = ServerSupportClient.Open() ?? throw new InvalidOperationException(
                 "Компьютер ещё не подключён к серверу. Укажите компанию и объект в режиме инженера.");
-            var contact = TicketContact.Text.Trim();
             var contactSaved = true;
             try
             {
@@ -80,7 +83,7 @@ public partial class SupportDialog : Window
             pendingPayload = null;
             TicketTitle.Clear(); TicketBody.Clear(); files.Clear(); RefreshFiles();
         }
-        catch (Exception ex) { TicketStatus.Text = ex.Message; }
+        catch (Exception ex) { TicketStatus.Text = ApplicationErrorStore.Record("Заявки","Создание заявки",ex).Summary; }
         finally { SubmitTicket.IsEnabled = true; Composer.IsEnabled = true; }
     }
 

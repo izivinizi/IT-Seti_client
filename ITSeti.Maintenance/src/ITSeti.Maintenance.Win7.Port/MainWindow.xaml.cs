@@ -28,11 +28,13 @@ namespace ITSeti.Maintenance.App
         private static readonly Brush Red = new SolidColorBrush(Color.FromRgb(161, 57, 57));
         private readonly Win7ViewModel view = new Win7ViewModel();
         private readonly string dataPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ITSeti", "MaintenanceWin7");
-        private readonly bool engineer;
+        private bool engineer;
         private readonly string cleanupUserSid;
         private UserProfileCleanupBridge cleanupBridge;
         private LegacySnapshot current;
         private List<LegacySnapshot> history = new List<LegacySnapshot>();
+        private int historyPage;
+        private const int HistoryPageSize = 30;
         private bool running;
         private CancellationTokenSource checkCancellation;
         private bool closeAfterCheck;
@@ -85,6 +87,7 @@ namespace ITSeti.Maintenance.App
                 cpuTimer.Tick += async (sender, args) => await RefreshCpuAsync();
                 Loaded += async (sender, args) =>
                 {
+                    _ = TryAutomaticServerEnrollmentAsync();
                     await CheckAsync(false);
                     if (!windowClosed)
                     {
@@ -115,6 +118,16 @@ namespace ITSeti.Maintenance.App
                 closeAfterCheck = true;
                 StopCheck();
             };
+        }
+
+        private async Task TryAutomaticServerEnrollmentAsync()
+        {
+            try
+            {
+                using (var enrollment = new Win7ServerEnrollmentClient())
+                    if (await enrollment.TryAutomaticEnrollmentAsync() && current != null) Render(current);
+            }
+            catch (Exception ex) { view.Set("Status", "Автоподключение к серверу отложено: " + ex.Message); }
         }
 
         private async Task RefreshCpuAsync()
@@ -182,6 +195,7 @@ namespace ITSeti.Maintenance.App
             ApplyLocalInventory(snapshot);
             current = snapshot;
             Render(snapshot);
+            historyPage = 0;
             RefreshHistory();
             UpdateDebug();
         }
@@ -209,10 +223,11 @@ namespace ITSeti.Maintenance.App
             foreach (var name in new[] { "IsBusy", "CheckProgressIsRunning" }) view.Set(name, true);
             view.Set("IsFullCheckRunning", true);
             view.Set("CanStopFullCheck", true);
-            foreach (var name in new[] { "CanRunFull", "CanRunQuickFull", "CanRun" }) view.Set(name, false);
-            view.Set("CheckProgressPhase", full ? "Полная диагностика, SMART и тест диска" : "Диагностика и SMART");
-            view.Set("UserStatus", full ? "Идёт полная проверка..." : "Показатели обновляются...");
-            Progress("Проверка", full ? "Запущена полная проверка" : "Запущена быстрая проверка");
+            full = true;
+            foreach (var name in new[] { "CanRunFull", "CanRun" }) view.Set(name, false);
+            view.Set("CheckProgressPhase", "Полная диагностика, SMART и тест диска");
+            view.Set("UserStatus", "Идёт полная проверка...");
+            Progress("Проверка", "Запущена полная проверка");
             try
             {
                 var progress = new Progress<string>(message =>
@@ -240,6 +255,7 @@ namespace ITSeti.Maintenance.App
                     File.WriteAllText(Path.Combine(dataPath, "latest.json"), snapshot.ToJson(), new UTF8Encoding(false));
                     File.WriteAllText(Path.Combine(dataPath, "latest.txt"), snapshot.ToReport(), new UTF8Encoding(false));
                     LegacyHistoryStore.Save(dataPath, snapshot);
+                    historyPage = 0;
                     RefreshHistory();
                 }
                 catch (Exception ex) { Progress("История", "Не удалось сохранить отчёт: " + ex.Message); }
@@ -281,7 +297,7 @@ namespace ITSeti.Maintenance.App
                 foreach (var name in new[] { "IsBusy", "CheckProgressIsRunning" }) view.Set(name, false);
                 view.Set("IsFullCheckRunning", false);
                 view.Set("CanStopFullCheck", false);
-                foreach (var name in new[] { "CanRunFull", "CanRunQuickFull", "CanRun" }) view.Set(name, true);
+                foreach (var name in new[] { "CanRunFull", "CanRun" }) view.Set(name, true);
                 view.Set("CheckProgressPhase", (string)view.Get("Status") == "Проверка остановлена" ? "Проверка остановлена" : "Проверка завершена");
                 if (closeAfterCheck) _ = Dispatcher.BeginInvoke(new Action(Close), DispatcherPriority.Background);
             }
@@ -375,18 +391,64 @@ namespace ITSeti.Maintenance.App
 
         private void RefreshHistory()
         {
-            history = LegacyHistoryStore.Load(dataPath).Concat(LegacyHistoryStore.Load(ScheduledCheckRunner.ResultsRoot))
+            var maximum = Math.Min(500, (historyPage + 1) * HistoryPageSize + 1);
+            history = LegacyHistoryStore.Load(dataPath, maximum).Concat(LegacyHistoryStore.Load(ScheduledCheckRunner.ResultsRoot, maximum))
+                .GroupBy(x => string.IsNullOrWhiteSpace(x.Id)
+                    ? (x.CheckedAt ?? "") + "|" + (x.StartedAt ?? "") + "|" + (x.ComputerName ?? "")
+                    : x.Id, StringComparer.OrdinalIgnoreCase)
+                .Select(x => x.First())
                 .OrderByDescending(x =>
                 {
                     DateTime checkedAt;
                     return DateTime.TryParseExact(x.CheckedAt, "dd.MM.yyyy HH:mm:ss", CultureInfo.InvariantCulture,
                         DateTimeStyles.None, out checkedAt) ? checkedAt : DateTime.MinValue;
-                }).Take(30).ToList();
-            view.Set("History", Rows(history.Select(x => new Win7Row { Snapshot = x, DateLabel = x.CheckedAt,
+                }).Take(maximum).ToList();
+            var first = historyPage * HistoryPageSize;
+            view.Set("History", Rows(history.Skip(first).Take(HistoryPageSize).Select(x => new Win7Row { Snapshot = x, DateLabel = x.CheckedAt,
                 KindLabel = x.Kind, CpuLabel = CpuValue(x.CpuPercent),
                 MemoryLabel = x.TotalMemoryGb > 0 ? Value(100 * (x.TotalMemoryGb - x.FreeMemoryGb) / x.TotalMemoryGb, "%") : "—",
                 HistoryDetailLabel = x.Findings == null || x.Findings.Count == 0 ? "Замечаний нет" : string.Join("; ", x.Findings.Take(2)) })));
-            view.Set("HistoryCount", "Сохранено проверок: " + history.Count);
+            view.Set("HistoryCount", "Загружено проверок: " + Math.Min(history.Count, first + HistoryPageSize));
+            view.Set("CanLoadMoreHistory", history.Count > first + HistoryPageSize);
+        }
+
+        private void LoadMoreHistory_Click(object sender, RoutedEventArgs e)
+        {
+            if (!(view.Get("CanLoadMoreHistory") is bool canLoadMore) || !canLoadMore) return;
+            historyPage++;
+            RefreshHistory();
+        }
+
+        private async void AllowProcess_Click(object sender, RoutedEventArgs e)
+        {
+            var row = (sender as FrameworkElement)?.Tag as Win7Row;
+            if (row == null || string.IsNullOrWhiteSpace(row.Name)) return;
+            var button = sender as Button;
+            if (button != null) button.IsEnabled = false;
+            try
+            {
+                using (var client = new Win7ServerEnrollmentClient())
+                    await client.AllowProcessAsync(row.Name, row.Publisher, row.Signature);
+                view.Set("ProcessAllowStatus", "Правило для " + row.Name + " сохранено на сервере.");
+            }
+            catch (Exception ex) { view.Set("ProcessAllowStatus", "Не удалось сохранить правило: " + ex.Message); }
+            finally { if (button != null) button.IsEnabled = true; }
+        }
+
+        private async void TrustProcessPublisher_Click(object sender, RoutedEventArgs e)
+        {
+            var row = (sender as FrameworkElement)?.Tag as Win7Row;
+            if (row == null || !row.CanTrustPublisher) return;
+            var button = sender as Button;
+            if (button != null) button.IsEnabled = false;
+            try
+            {
+                using (var client = new Win7ServerEnrollmentClient())
+                    await client.TrustPublisherAsync(row.Publisher, row.Signature);
+                view.Set("ProcessAllowStatus", "Издатель " + row.Publisher + " разрешён на сервере.");
+            }
+            catch (Exception ex) { view.Set("ProcessAllowStatus", "Не удалось разрешить издателя: " + ex.Message); }
+            finally { if (button != null) button.IsEnabled = row.CanTrustPublisher; }
         }
 
         private void RefreshSoftware()

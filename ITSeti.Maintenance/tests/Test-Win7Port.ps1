@@ -21,6 +21,18 @@ if ([guid]::Empty -eq [guid]$snapshot.Id -or ![DateTimeOffset]::TryParse($snapsh
 
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 $assembly = [Reflection.Assembly]::LoadFrom($exe)
+$windowType = $assembly.GetType('ITSeti.Maintenance.App.MainWindow', $true)
+$windowFlags = [Reflection.BindingFlags]::Instance -bor [Reflection.BindingFlags]::NonPublic
+foreach($handler in @('AllowProcess_Click','TrustProcessPublisher_Click','LoadMoreHistory_Click')) {
+    if(!$windowType.GetMethod($handler,$windowFlags)){throw "Win7 UI handler is missing: $handler"}
+}
+$enrollmentType = $assembly.GetType('ITSeti.Maintenance.App.Win7ServerEnrollmentClient', $true)
+foreach($method in @('AllowProcessAsync','TrustPublisherAsync')) {
+    if(!$enrollmentType.GetMethod($method,$windowFlags)){throw "Win7 server policy action is missing: $method"}
+}
+$historyType = $assembly.GetType('ITSeti.Maintenance.Win7.LegacyHistoryStore', $true)
+$historyFlags = [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::Public -bor [Reflection.BindingFlags]::NonPublic
+if(!$historyType.GetMethod('Load',$historyFlags,[type[]]@([string],[int]))){throw 'Win7 history pagination is missing.'}
 $adminAudit = $assembly.GetType('ITSeti.Maintenance.App.LegacyAdminAccountAudit',$true)
 $allowedAdmin = $adminAudit.GetMethod('IsAllowedLocalAccount',[Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic)
 foreach($name in @('Admin','it-seti','Administrator',([string][char]0x410+[char]0x434+[char]0x43C+[char]0x438+[char]0x43D+[char]0x438+[char]0x441+[char]0x442+[char]0x440+[char]0x430+[char]0x442+[char]0x43E+[char]0x440))){
@@ -74,12 +86,12 @@ $updater = $assembly.GetType('ITSeti.Maintenance.App.Win7ServerUpdater', $true)
 $flags = [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic
 $parse = $updater.GetMethod('ParseServerPackage', $flags)
 if (!$parse) { throw 'Win7 server package parser is missing.' }
-$version = '2.3.3'
+$version = '2.3.6'
 $manifest = [string]([ordered]@{
     id = '11111111-1111-1111-1111-111111111111'; key = 'application'; platform = 'win7'; version = $version
     fileName = 'ITSeti-Maintenance-Win7-Setup.exe'; sizeBytes = 12345; sha256 = ('a' * 64)
 } | ConvertTo-Json -Compress)
-$current = [version]'2.3.2'
+$current = [version]'2.3.3'
 if ($PSVersionTable.PSEdition -eq 'Desktop') {
     if (!$parse.Invoke($null, @($manifest, $current, [uri]'https://unit.test/'))) { throw 'A newer Win7 server release was not offered.' }
     if ($parse.Invoke($null, @($manifest, [version]$version, [uri]'https://unit.test/'))) { throw 'The installed Win7 release was offered again.' }
@@ -108,9 +120,10 @@ if ($scheduledType.GetField('TaskName', $scheduledFlags).GetRawConstantValue() -
     throw 'Win7 scheduled task names are incorrect.'
 }
 $source = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7\SmartTaskInstaller.cs') -Raw
-if ($source -notmatch 'ScheduledCheckRunner\.TaskName[^\r\n]+,\s*14\)' -or
+if ($source -notmatch 'DeleteTask\(ScheduledCheckRunner\.TaskName' -or
     $source -notmatch 'ScheduledCheckRunner\.FullTaskName[^\r\n]+,\s*1\)' -or
-    $source -notmatch 'StartWhenAvailable = name != ScheduledCheckRunner.FullTaskName' -or
+    $source -match 'ScheduledCheckRunner\.TaskName[^\r\n]+,\s*14\)' -or
+    $source -notmatch 'StartWhenAvailable = true' -or
     $source -notmatch 'ITSeti-Maintenance-Win7-Upload[^\r\n]+--upload-reports' -or
     $source -notmatch 'ITSeti-Maintenance-Win7-Update[^\r\n]+--update-application') {
     throw '14/60-day checks, report upload and application update tasks are not registered.'
@@ -127,7 +140,7 @@ if ($benchmarkSource -notmatch 'TargetVolume = systemDisk' -or $benchmarkSource 
     throw 'DiskSpd report must name the actual system volume and its physical disk model.'
 }
 $scheduledSource = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7\ScheduledCheckRunner.cs') -Raw
-if ($scheduledSource -notmatch 'RunWorker\(\)\s*\{\s*return RunWorker\(false\);\s*\}' -or
+if ($scheduledSource -notmatch 'RunWorker\(\)\s*\{\s*return RunWorker\(true\);\s*\}' -or
     $scheduledSource -notmatch 'LegacyDiagnostics\.Collect\(full,\s*scheduled:\s*true\)' -or
     $scheduledSource -notmatch 'LegacyMaintenance\.RunSfc\(\)' -or
     $scheduledSource.IndexOf('LegacyMaintenance.RunSfc()') -gt $scheduledSource.IndexOf('LegacyMaintenance.CleanupAfterFullCheck(')) {

@@ -49,12 +49,13 @@ public sealed class SqliteHistoryStore(string databasePath) : IHistoryStore
         transaction.Commit();
     });
 
-    public Task<IReadOnlyList<DiagnosticSnapshot>> GetRecentAsync(int limit = 100) => Task.Run<IReadOnlyList<DiagnosticSnapshot>>(() =>
+    public Task<IReadOnlyList<DiagnosticSnapshot>> GetRecentAsync(int limit = 25, int offset = 0) => Task.Run<IReadOnlyList<DiagnosticSnapshot>>(() =>
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT payload FROM runs WHERE schema_version = 1 ORDER BY started_utc DESC LIMIT $limit";
+        command.CommandText = "SELECT payload FROM runs WHERE schema_version = 1 ORDER BY started_utc DESC LIMIT $limit OFFSET $offset";
         command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 1000));
+        command.Parameters.AddWithValue("$offset", Math.Max(0, offset));
         using var reader = command.ExecuteReader();
         var rows = new List<DiagnosticSnapshot>();
         while (reader.Read())

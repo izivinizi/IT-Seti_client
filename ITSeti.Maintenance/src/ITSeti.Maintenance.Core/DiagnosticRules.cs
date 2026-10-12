@@ -88,6 +88,7 @@ public static class DiagnosticRules
         }
         AddRailIssue(issues, "12 В", snapshot.HwInfo?.Rail12V, HwInfoThresholds.Rail12WarningMinV, HwInfoThresholds.Rail12WarningMaxV, HwInfoThresholds.Rail12CriticalMinV, HwInfoThresholds.Rail12CriticalMaxV);
         AddRailIssue(issues, "5 В", snapshot.HwInfo?.Rail5V, HwInfoThresholds.Rail5WarningMinV, HwInfoThresholds.Rail5WarningMaxV, HwInfoThresholds.Rail5CriticalMinV, HwInfoThresholds.Rail5CriticalMaxV);
+        AddRailIssue(issues, "3,3 В", snapshot.HwInfo?.Rail3V, 3.135, 3.465, 2.97, 3.63);
         AddHwInfoAlerts(issues, snapshot.HwInfo);
         if (snapshot.TotalMemoryBytes > 0)
         {
@@ -117,7 +118,10 @@ public static class DiagnosticRules
             issues.Add(new("Процессор долго работал на пределе", "Нагрузка держалась выше 90% большую часть проверки. Из-за этого программы могут отвечать медленно.", "Warning"));
         if (sample is not null && sample.MemoryCriticalSamples >= 3)
             issues.Add(new("Критическая загрузка памяти", $"ОЗУ было занято на 98% и выше в {sample.MemoryCriticalSamples} из {sample.Samples} замеров за 30 секунд.", "Critical"));
-        foreach (var disk in snapshot.Disks.Where(d => d.TotalBytes >= 50L * 1073741824 && d.FreeBytes < 15L * 1073741824))
+        var systemDrive = (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").TrimEnd('\\');
+        foreach (var disk in snapshot.Disks.Where(d =>
+                     string.Equals(d.Name.TrimEnd('\\'), systemDrive, StringComparison.OrdinalIgnoreCase) &&
+                     d.TotalBytes >= 50L * 1073741824 && d.FreeBytes < 15L * 1073741824))
         {
             var severe = disk.FreeBytes < 5L * 1073741824;
             issues.Add(new($"На диске {disk.Name} мало места", $"Свободно {disk.FreeBytes / 1073741824.0:N1} ГБ. Можно выполнить очистку или посмотреть, какие файлы занимают место.", severe ? "Critical" : "Warning"));
@@ -211,6 +215,7 @@ public static class DiagnosticRules
             else if (pchTemperature >= HwInfoThresholds.PchWarningC) findings.Add($"PCH: температура {pchTemperature:N0} °C достигла порога {HwInfoThresholds.PchWarningC:N0} °C.");
         AddRailFinding(findings, "12 В", snapshot.HwInfo?.Rail12V, HwInfoThresholds.Rail12WarningMinV, HwInfoThresholds.Rail12WarningMaxV, HwInfoThresholds.Rail12CriticalMinV, HwInfoThresholds.Rail12CriticalMaxV);
         AddRailFinding(findings, "5 В", snapshot.HwInfo?.Rail5V, HwInfoThresholds.Rail5WarningMinV, HwInfoThresholds.Rail5WarningMaxV, HwInfoThresholds.Rail5CriticalMinV, HwInfoThresholds.Rail5CriticalMaxV);
+        AddRailFinding(findings, "3,3 В", snapshot.HwInfo?.Rail3V, 3.135, 3.465, 2.97, 3.63);
         findings.AddRange(GetHwInfoAlertFindings(snapshot.HwInfo));
         if (sample?.CpuHighSamples >= 5) findings.Add($"CPU: ≥90% в {sample.CpuHighSamples} из {sample.Samples} замеров за 30 секунд");
         if (sample?.CpuCriticalSamples >= 3) findings.Add($"CPU: ≥98% в {sample.CpuCriticalSamples} из {sample.Samples} замеров за 30 секунд");

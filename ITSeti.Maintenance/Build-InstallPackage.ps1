@@ -14,13 +14,14 @@ if($testBuild){
 $distRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'dist')).TrimEnd('\')+'\'
 $outputFull=[IO.Path]::GetFullPath($OutputRoot)
 if(!$outputFull.StartsWith($distRoot,[StringComparison]::OrdinalIgnoreCase)){throw 'Build output must remain inside dist.'}
-Remove-Item -LiteralPath (Join-Path $OutputRoot 'App'),(Join-Path $OutputRoot 'Service') -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $OutputRoot 'App'),(Join-Path $OutputRoot 'Service'),(Join-Path $OutputRoot 'Notifier') -Recurse -Force -ErrorAction SilentlyContinue
 & (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'tests\Test-PowerShellCompatibility.ps1') -Root $PSScriptRoot
 if($LASTEXITCODE -ne 0){throw 'Windows PowerShell compatibility check failed.'}
 $required=@('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe','PawnIO\PawnIO_setup.exe','HWiNFO\HWiNFO32.exe')
 foreach($relative in $required){if(!(Test-Path -LiteralPath (Join-Path $ToolsRoot $relative) -PathType Leaf)){throw "Missing: $relative"}}
 $appProject=Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj'
 $serviceProject=Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.Service\ITSeti.Maintenance.Service.csproj'
+$notifierProject=Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.TicketNotifier\ITSeti.Maintenance.TicketNotifier.csproj'
 $dotnetCommand = Get-Command dotnet -ErrorAction SilentlyContinue
 $dotnet = if($dotnetCommand){$dotnetCommand.Source}else{Join-Path $env:USERPROFILE '.dotnet10\dotnet.exe'}
 if(!(Test-Path -LiteralPath $dotnet -PathType Leaf)){throw 'dotnet SDK executable was not found.'}
@@ -33,10 +34,14 @@ if($LASTEXITCODE -ne 0){
 }
 & $dotnet restore $serviceProject -r win-x64 -p:NuGetAudit=false
 if($LASTEXITCODE -ne 0){throw 'Service restore failed; verify the NuGet connection.'}
+& $dotnet restore $notifierProject -r win-x64 -p:NuGetAudit=false
+if($LASTEXITCODE -ne 0){throw 'Ticket notifier restore failed; verify the NuGet connection.'}
 & $dotnet publish $appProject -c Release -r win-x64 --self-contained true --no-restore -o (Join-Path $OutputRoot 'App')
 if($LASTEXITCODE -ne 0){throw 'dotnet publish failed.'}
 & $dotnet publish $serviceProject -c Release -r win-x64 --self-contained true --no-restore -o (Join-Path $OutputRoot 'Service')
 if($LASTEXITCODE -ne 0){throw 'Service publish failed.'}
+& $dotnet publish $notifierProject -c Release -r win-x64 --self-contained true --no-restore -o (Join-Path $OutputRoot 'Notifier')
+if($LASTEXITCODE -ne 0){throw 'Ticket notifier publish failed.'}
 Remove-Item -LiteralPath (Join-Path $OutputRoot 'Service\Backend') -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $OutputRoot 'App\Setup') -Recurse -Force -ErrorAction SilentlyContinue
 $accessControlPackage=Join-Path $env:USERPROFILE '.nuget\packages\system.threading.accesscontrol\10.0.3\runtimes\win\lib\net9.0\System.Threading.AccessControl.dll'
@@ -45,7 +50,7 @@ if(!(Test-Path -LiteralPath $accessControlPackage -PathType Leaf)){throw 'Restor
 $dependencyVersion=[Reflection.AssemblyName]::GetAssemblyName($accessControlPackage).Version
 if($dependencyVersion -lt [Version]'10.0.0.0'){throw "Unexpected System.Threading.AccessControl version: $dependencyVersion"}
 Copy-Item -LiteralPath $accessControlPackage -Destination $publishedAccessControl -Force
-if([Reflection.AssemblyName]::GetAssemblyName($publishedAccessControl).Version -ne $dependencyVersion){throw 'Published temperature dependency does not match LibreHardwareMonitor.'}
+if([Reflection.AssemblyName]::GetAssemblyName($publishedAccessControl).Version -ne $dependencyVersion){throw 'Published access-control dependency does not match the project lock.'}
 $destination=Join-Path $OutputRoot 'Tools'
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
 Remove-Item -LiteralPath (Join-Path $destination 'Tools.rar'),(Join-Path $OutputRoot 'App\Tools\Tools.rar') -Force -ErrorAction SilentlyContinue

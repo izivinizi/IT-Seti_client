@@ -20,7 +20,10 @@ namespace ITSeti.Maintenance.Win7
         public double? PchTemperatureC { get; set; }
         public double? Rail12V { get; set; }
         public double? Rail5V { get; set; }
+        public double? Rail3V { get; set; }
+        public double? MemoryLoadPercent { get; set; }
         public double? CpuVoltageV { get; set; }
+        public double? CpuLoadPercent { get; set; }
         public List<LegacyHwInfoAlert> Alerts { get; set; } = new List<LegacyHwInfoAlert>();
     }
 
@@ -41,6 +44,8 @@ namespace ITSeti.Maintenance.Win7
         private static readonly TimeSpan CacheLifetime = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan SessionLifetime = TimeSpan.FromHours(10);
         private static DateTime sessionStartedUtc;
+        private static Process sensorProcess;
+        private static DateTime nextStartAttemptUtc;
 
         private static string CachePath
         {
@@ -58,8 +63,17 @@ namespace ITSeti.Maintenance.Win7
 
         public static void ResetSession()
         {
-            lock (SessionGate) sessionStartedUtc = DateTime.UtcNow;
+            lock (SessionGate)
+            {
+                if(sensorProcess != null){try {if(!sensorProcess.HasExited) sensorProcess.Kill();}catch(InvalidOperationException){} sensorProcess.Dispose();sensorProcess=null;}
+                sessionStartedUtc = default(DateTime); nextStartAttemptUtc=default(DateTime);
+            }
             try { File.Delete(CachePath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+
+        public static void StopSession()
+        {
+            lock(SessionGate){if(sensorProcess==null)return;try{if(!sensorProcess.HasExited)sensorProcess.Kill();}catch(Exception ex)when(ex is InvalidOperationException || ex is System.ComponentModel.Win32Exception){}sensorProcess.Dispose();sensorProcess=null;}
         }
 
         public static void Apply(LegacySnapshot snapshot)
@@ -73,6 +87,8 @@ namespace ITSeti.Maintenance.Win7
             snapshot.Rail12V = data.Rail12V;
             snapshot.Rail5V = data.Rail5V;
             snapshot.CpuVoltageV = data.CpuVoltageV;
+            if (data.CpuLoadPercent.HasValue){snapshot.CpuPercent = data.CpuLoadPercent;snapshot.CpuSource="HWiNFO · служба SYSTEM";}
+            if(data.MemoryLoadPercent>=0 && data.MemoryLoadPercent<=100 && snapshot.TotalMemoryGb.HasValue)snapshot.FreeMemoryGb=snapshot.TotalMemoryGb*(100-data.MemoryLoadPercent)/100;
             if (data.CpuTemperatureC.HasValue)
             {
                 snapshot.CpuTemperatureC = data.CpuTemperatureC;
@@ -82,6 +98,7 @@ namespace ITSeti.Maintenance.Win7
             AddTemperatureFinding(snapshot, data.PchTemperatureC, 70, 80, "PCH");
             AddRailFinding(snapshot, data.Rail12V, 10.8, 13.2, "+12 В");
             AddRailFinding(snapshot, data.Rail5V, 4.5, 5.5, "+5 В");
+            AddRailFinding(snapshot, data.Rail3V, 2.97, 3.63, "+3,3 В");
             foreach (var alert in data.Alerts ?? new List<LegacyHwInfoAlert>())
             {
                 var level = alert.IsCritical ? "критично" : "предупреждение";
@@ -112,39 +129,30 @@ namespace ITSeti.Maintenance.Win7
             }
             var executable = FindExecutable();
             if (executable == null) return ReadCached();
-            var temporary = Path.Combine(Path.GetTempPath(), "ITSeti-HWiNFO-" + Guid.NewGuid().ToString("N") + ".json");
             try
             {
-                var start = new ProcessStartInfo
+                lock(SessionGate)
                 {
-                    FileName = executable,
-                    Arguments = "-j\"" + temporary + "\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    WindowStyle = ProcessWindowStyle.Hidden,
-                    RedirectStandardError = true,
-                    RedirectStandardOutput = true
-                };
-                using (var process = new Process { StartInfo = start })
-                {
-                    if (!process.Start()) return ReadCached();
-                    if (!process.WaitForExit(20000))
+                    if((sensorProcess == null || sensorProcess.HasExited) && DateTime.UtcNow >= nextStartAttemptUtc)
                     {
-                        try { process.Kill(); } catch (InvalidOperationException) { }
-                        return ReadCached();
+                        nextStartAttemptUtc=DateTime.UtcNow.AddMinutes(5);
+                        if(sensorProcess != null) sensorProcess.Dispose();
+                        sensorProcess=Process.Start(new ProcessStartInfo(executable){UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden,WorkingDirectory=Path.GetDirectoryName(executable)});
+                        sessionStartedUtc=DateTime.UtcNow;
                     }
                 }
-                if (!File.Exists(temporary) || new FileInfo(temporary).Length <= 0 || new FileInfo(temporary).Length > 8 * 1024 * 1024)
-                    return ReadCached();
-                var data = Parse(File.ReadAllText(temporary), executable);
-                if (data != null) WriteCache(data);
-                return data ?? ReadCached();
+                if(sensorProcess != null && !sensorProcess.HasExited) ITSeti.HwInfoBridge.SensorReader.StartSensors(sensorProcess.Id);
+                var values=ITSeti.HwInfoBridge.SensorReader.Read();
+                var data=new LegacyHwInfoData{Source="HWiNFO Shared Memory",ToolVersion=ReadFileVersion(executable),CapturedAtUtc=DateTime.UtcNow};
+                foreach(var value in values) ApplyCsvValue(data,value.Name,value.Unit,value.Value);
+                WriteCache(data);
+                return data;
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is InvalidOperationException || ex is ArgumentException)
             {
+                LegacyApplicationErrors.Record("HWiNFO","Чтение датчиков",ex);
                 return ReadCached();
             }
-            finally { try { File.Delete(temporary); } catch (IOException) { } }
         }
 
         private static LegacyHwInfoData ReadCached()
@@ -181,6 +189,96 @@ namespace ITSeti.Maintenance.Win7
             Walk(root, "", result);
             return result.CpuTemperatureC.HasValue || result.VrmTemperatureC.HasValue || result.PchTemperatureC.HasValue || result.Rail12V.HasValue || result.Rail5V.HasValue
                 ? result : null;
+        }
+
+        internal static LegacyHwInfoData ParseCsv(string csv, string source)
+        {
+            var lines = csv.Replace("\r", "").Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            if (lines.Length < 2) return null;
+            var separators = new[] { ',', ';', '\t' };
+            var separator = separators.OrderByDescending(value => SplitCsvLine(lines[0], value).Count).First();
+            var headers = SplitCsvLine(lines[0], separator);
+            var result = new LegacyHwInfoData
+            {
+                Source = source,
+                CapturedAtUtc = DateTime.UtcNow,
+                ToolVersion = ReadFileVersion(source)
+            };
+            foreach (var line in lines.Skip(1))
+            {
+                var values = SplitCsvLine(line, separator);
+                for (var index = 0; index < Math.Min(headers.Count, values.Count); index++)
+                {
+                    var name = headers[index].Trim();
+                    if (name.Length == 0 || name.Equals("Date", StringComparison.OrdinalIgnoreCase) ||
+                        name.Equals("Time", StringComparison.OrdinalIgnoreCase) || name.IndexOf("Timestamp", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                    double value;
+                    if (!TryNumber(values[index], out value)) continue;
+                    var unitMatch = Regex.Match(name, @"\[(?<unit>[^\]]+)\]\s*$");
+                    var unit = unitMatch.Success ? unitMatch.Groups["unit"].Value : "";
+                    ApplyCsvValue(result, name, unit, value);
+                }
+            }
+            return result.CpuTemperatureC.HasValue || result.VrmTemperatureC.HasValue || result.PchTemperatureC.HasValue ||
+                result.Rail12V.HasValue || result.Rail5V.HasValue || result.CpuLoadPercent.HasValue ? result : null;
+        }
+
+        private static void ApplyCsvValue(LegacyHwInfoData result, string name, string unit, double value)
+        {
+            var lower = name.ToLowerInvariant();
+            if(lower.Contains("distance to") || lower.Contains("tjmax") || lower.Contains("thermal limit"))return;
+            if(value>0 && !unit.Contains("C") && (lower.Contains("thermal throttling") || lower.Contains("thermal trip") || lower.Contains("critical temperature")))
+                result.Alerts.Add(new LegacyHwInfoAlert{Name=name,Value=value,Unit=unit,IsCritical=true});
+            if(unit.Contains("%") && lower.Contains("physical memory load")){result.MemoryLoadPercent=value;return;}
+            if (unit.Contains("%") && (lower.Contains("cpu") || lower.Contains("processor") || lower.Contains("процессор")) &&
+                (lower.Contains("load") || lower.Contains("usage") || lower.Contains("util") || lower.Contains("загруз") || lower.Contains("использ")))
+            {if(lower.Contains("total cpu usage") || !result.CpuLoadPercent.HasValue)result.CpuLoadPercent=value;}
+            else if ((unit.IndexOf("c", StringComparison.OrdinalIgnoreCase) >= 0 || lower.Contains("temperature") || lower.Contains("temp") || lower.Contains("температур")) &&
+                (lower.Contains("vrm") || lower.Contains("mos") || lower.Contains("vr loop"))) result.VrmTemperatureC = Max(result.VrmTemperatureC, value);
+            else if ((unit.IndexOf("c", StringComparison.OrdinalIgnoreCase) >= 0 || lower.Contains("temperature") || lower.Contains("temp") || lower.Contains("температур")) &&
+                (lower.Contains("pch") || lower.Contains("chipset") || lower.Contains("southbridge") || lower.Contains("platform controller") || lower.Contains("чипсет"))) result.PchTemperatureC = Max(result.PchTemperatureC, value);
+            else if ((unit.IndexOf("c", StringComparison.OrdinalIgnoreCase) >= 0 || lower.Contains("temperature") || lower.Contains("temp") || lower.Contains("температур")) &&
+                (lower.Contains("cpu") || lower.Contains("processor") || lower.Contains("package") || lower.Contains("tctl") || lower.Contains("tdie") || lower.Contains("процессор"))) result.CpuTemperatureC = Max(result.CpuTemperatureC, value);
+            else if (unit.Trim().Equals("V", StringComparison.OrdinalIgnoreCase) || lower.Contains("voltage") || lower.Contains(" vcore"))
+            {
+                if(lower.Contains("3.3") || lower.Contains("3,3")){result.Rail3V=value;return;}
+                if (lower.Contains("12v") || lower.Contains("+12")) result.Rail12V = value;
+                else if (lower.Contains("5v") || lower.Contains("+5")) result.Rail5V = value;
+                else if (lower.Contains("vcore") || lower.Contains("vsoc") || lower.Contains("vsc") || lower.Contains("cpu core")) result.CpuVoltageV = value;
+            }
+        }
+
+        private static List<string> SplitCsvLine(string line, char separator)
+        {
+            var fields = new List<string>();
+            var value = new System.Text.StringBuilder();
+            var quoted = false;
+            for (var index = 0; index < line.Length; index++)
+            {
+                var character = line[index];
+                if (character == '"')
+                {
+                    if (quoted && index + 1 < line.Length && line[index + 1] == '"') { value.Append('"'); index++; }
+                    else quoted = !quoted;
+                }
+                else if (character == separator && !quoted) { fields.Add(value.ToString()); value.Length = 0; }
+                else value.Append(character);
+            }
+            fields.Add(value.ToString());
+            return fields;
+        }
+
+        private static bool TryNumber(string text, out double value)
+        {
+            value = 0;
+            var match = NumberPattern.Match(text ?? "");
+            return match.Success && double.TryParse(match.Value.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+        }
+
+        private static string ReadFileVersion(string path)
+        {
+            try { return FileVersionInfo.GetVersionInfo(path).FileVersion ?? ""; }
+            catch { return ""; }
         }
 
         private static void Walk(object node, string context, LegacyHwInfoData result)

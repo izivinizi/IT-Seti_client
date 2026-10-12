@@ -52,7 +52,7 @@ function short(value, max = 120) { const text = String(value ?? ''); return text
 
 function showView(view) {
   state.view = view;
-  $('page-title').textContent = { computers: 'Компьютеры', monitoring: 'Мониторинг', tickets: 'Заявки', packages: 'ПО и обновления' }[view];
+  $('page-title').textContent = { computers: 'Компьютеры', monitoring: 'Мониторинг', connections:'Новые подключения', tickets: 'Заявки', packages: 'ПО и обновления' }[view];
   for (const item of document.querySelectorAll('.nav-item')) {
     const selected = item.dataset.view === view;
     item.classList.toggle('active', selected);
@@ -60,6 +60,7 @@ function showView(view) {
   }
   for (const item of document.querySelectorAll('.view')) item.classList.toggle('active', item.id === 'view-' + view);
   if (view === 'monitoring') loadMonitoring();
+  if (view === 'connections') loadConnections();
   if (view === 'tickets') loadTickets();
   if (view === 'packages') loadPackages();
 }
@@ -185,23 +186,29 @@ async function loadDevices() {
       status('device-status', ''); return;
     }
     $('computer-list-title').textContent = 'Компьютеры';
-    $('computer-columns').replaceChildren(node('th', 'Инв. №'), node('th', 'Состояние'), node('th', 'Последняя проверка'));
+    $('computer-columns').replaceChildren(node('th', 'Инв. №'), node('th', 'Состояние'), node('th', 'Привязка Okdesk'), node('th', 'Последняя проверка'),node('th','Последняя связь'));
     const result = await api('/api/admin/devices?' + deviceParameters());
     if (requestId !== state.deviceRequest) return;
-    state.devices = result.items || [];
+    const external = await api('/api/admin/okdesk/unbound-equipment?' + deviceParameters());
+    if (requestId !== state.deviceRequest) return;
+    state.devices = [...(result.items || []), ...(external.items || [])];
     const body = $('device-rows'); body.replaceChildren();
     for (const device of state.devices) {
-      const row = node('tr', undefined, 'clickable');
-      row.tabIndex = 0;
+      const row = node('tr', undefined, device.equipmentOnly ? 'external-device' : 'clickable');
+      if (!device.equipmentOnly) row.tabIndex = 0;
       row.classList.toggle('selected', state.selectedDevice?.id === device.id);
-      const serialLabel = device.inventory ? 'Инв. № ' + device.inventory : 'Инвентарник не указан';
+      const serialLabel = device.inventory ? 'Инв. № ' + device.inventory : device.serial ? 'Сер. № ' + device.serial : 'Инвентарник не указан';
       const serial = node('td'); serial.append(node('span', serialLabel, 'cell-main'));
-      const health = node('td', {normal:'Норма',warning:'Требует внимания',critical:'Критическое',unknown:'Нет проверки'}[device.health] || 'Нет проверки',
+      const health = node('td', device.equipmentOnly ? 'Нет клиента' : ({normal:'Норма',warning:'Требует внимания',critical:'Критическое',unknown:'Нет проверки'}[device.health] || 'Нет проверки'),
         {normal:'signal-ok',warning:'signal-warn',critical:'signal-error'}[device.health] || 'muted');
       if (device.remoteAttention) health.append(node('span', 'Нет RMS/OCS', 'meta signal-warn'));
-      row.append(serial, health, node('td', date(device.lastCheck)));
-      row.addEventListener('click', () => selectDevice(device));
-      row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectDevice(device); } });
+      const bindingText = {matched:'Совпадает',other_object:'Другой объект',missing_in_okdesk:'Нет в Okdesk',ambiguous:'Несколько совпадений',okdesk_only:'Okdesk · клиент не подключён'}[device.okdeskStatus] || 'Не сверено';
+      const binding = node('td', bindingText, device.okdeskStatus === 'matched' ? 'signal-ok' : 'signal-warn');
+      row.append(serial, health, binding, node('td', date(device.lastCheck)),node('td',date(device.lastSeen)));
+      if (!device.equipmentOnly) {
+        row.addEventListener('click', () => selectDevice(device));
+        row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectDevice(device); } });
+      }
       body.append(row);
     }
     $('device-empty').classList.toggle('hidden', state.devices.length !== 0);
@@ -214,6 +221,7 @@ async function loadDevices() {
 }
 
 async function selectDevice(device, requestedRunId = null) {
+  if (!device || device.equipmentOnly || !device.id) return;
   const requestId = ++state.selectionRequest;
   ++state.runRequest;
   state.selectedDevice = device;
@@ -224,6 +232,10 @@ async function selectDevice(device, requestedRunId = null) {
   $('selected-title').textContent = device.inventory ? 'Инв. № ' + device.inventory : 'Инвентарник не указан';
   $('selected-meta').textContent = [device.inventory ? 'Инв. № ' + device.inventory : null,
     device.company, device.site, device.os, device.osVersion].filter(Boolean).join(' · ');
+  const blockButton = $('ticket-block-toggle');
+  blockButton.disabled = false;
+  blockButton.textContent = device.ticketsBlocked ? 'Разрешить заявки' : 'Заблокировать заявки';
+  blockButton.classList.toggle('danger', !device.ticketsBlocked);
   $('run-list').replaceChildren(); $('run-detail').replaceChildren();
   try {
     const runs = await api('/api/admin/devices/' + device.id + '/runs');
@@ -246,6 +258,9 @@ function clearDeviceSelection() {
   state.selectedDevice = null;
   $('selected-title').textContent = 'Выберите ПК';
   $('selected-meta').textContent = '';
+  $('ticket-block-toggle').disabled = true;
+  $('ticket-block-toggle').textContent = 'Заявки ПК';
+  $('ticket-block-toggle').classList.remove('danger');
   $('run-list').replaceChildren();
   $('run-detail').replaceChildren();
   for (const row of $('device-rows').rows) row.classList.remove('selected');
@@ -297,12 +312,38 @@ function renderRun(run) {
   ];
   for (const [label, value] of items) { const cell = node('div'); cell.append(node('span', label), node('strong', String(value))); stats.append(cell); }
   root.append(stats);
+  const adapters = list(property(report, 'networkAdapters'));
+  detailSection(root, 'Сеть', adapters.map(adapter => ({
+    text: [property(adapter, 'name'), property(adapter, 'macAddress', 'mac'), property(adapter, 'addresses', 'ipAddresses')]
+      .filter(Boolean).join(' · ')
+  })), 'Сетевые данные не переданы.', true);
+  const hwInfo = property(report, 'hwiNFO', 'hwInfo');
+  const sensorRows = hwInfo ? [
+    ['Источник', [property(hwInfo, 'source'), property(hwInfo, 'toolVersion')].filter(Boolean).join(' · ')],
+    ['Снимок', date(property(hwInfo, 'capturedAtUtc'))],
+    ['CPU', temperature(property(hwInfo, 'cpuTemperatureC'))],
+    ['VRM', temperature(property(hwInfo, 'vrmTemperatureC'))],
+    ['PCH', temperature(property(hwInfo, 'pchTemperatureC'))],
+    ['12 В', property(hwInfo, 'rail12V') == null ? 'Нет данных' : Number(property(hwInfo, 'rail12V')).toFixed(2) + ' В'],
+    ['5 В', property(hwInfo, 'rail5V') == null ? 'Нет данных' : Number(property(hwInfo, 'rail5V')).toFixed(2) + ' В'],
+    ['3,3 В', property(hwInfo, 'rail3V') == null ? 'Нет данных' : Number(property(hwInfo, 'rail3V')).toFixed(2) + ' В'],
+    ['CPU load', property(hwInfo, 'cpuLoadPercent') == null ? 'Нет данных' : Number(property(hwInfo, 'cpuLoadPercent')).toFixed(0) + '%']
+  ].filter(([, value]) => value && value !== 'Нет данных').map(([label, value]) => ({ text: label + ': ' + value })) : [];
+  detailSection(root, 'HWiNFO', sensorRows, 'Свежий снимок HWiNFO не передан.', true);
+  const otherVoltages=list(property(hwInfo,'sensors')).filter(sensor=>property(sensor,'category')==='Voltage');
+  if(otherVoltages.length)detailSection(root,'Другие напряжения',otherVoltages.map(sensor=>({text:property(sensor,'name')+': '+Number(property(sensor,'value')).toFixed(2)+' В'})),'',true);
   const issues = list(run.issues || property(report, 'diagnosticIssues'));
   const critical = issues.filter(issue => Number(property(issue, 'severity')) === 1 || property(issue, 'severity') === 'Critical');
   const warnings = issues.filter(issue => Number(property(issue, 'severity')) === 2 || property(issue, 'severity') === 'Warning');
   const issueRows = values => values.map(issue => ({text: [property(issue, 'title'), property(issue, 'detail')].filter(Boolean).join(' · '), className: 'detail-row ' + (critical.includes(issue) ? 'critical' : 'warning')}));
   detailSection(root, 'Критические проблемы', issueRows(critical), 'Критических проблем не найдено.');
   detailSection(root, 'Предупреждения', issueRows(warnings), 'Предупреждений нет.', true);
+  const applicationErrors = list(property(report, 'applicationErrors'));
+  detailSection(root, 'Ошибки приложения', applicationErrors.map(error => ({
+    text: [date(property(error, 'occurredAt')), property(error, 'component'), property(error, 'operation'), property(error, 'summary'),
+      property(error, 'id') && 'код ' + property(error, 'id')].filter(Boolean).join(' · '),
+    className: 'detail-row critical'
+  })), 'Ошибок приложения для этой проверки нет.', applicationErrors.length === 0);
   const disks = list(property(report, 'disks'));
   const smart = list(property(full, 'smartDisks') || property(report, 'smartDisks'));
   detailSection(root, 'Накопители', disks.map(disk => {
@@ -340,19 +381,14 @@ function monitoringParameters() {
   return params;
 }
 
-async function loadMonitoring() {
-  const requestId = ++state.monitorRequest;
-  status('monitor-status', 'Загружаю события…');
+let connectionsRequest=0;
+async function loadConnections() {
+  const requestId = ++connectionsRequest;
+  status('connections-status', 'Загружаю подключения…');
   try {
-    const params = monitoringParameters();
-    const connectionsParams = new URLSearchParams({ days: $('monitor-days').value });
-    if ($('monitor-company').value) connectionsParams.set('companyId', $('monitor-company').value);
-    if ($('monitor-site').value) connectionsParams.set('siteId', $('monitor-site').value);
-    const [result, connections] = await Promise.all([
-      api('/api/admin/monitoring?' + params),
-      api('/api/admin/new-connections?' + connectionsParams)
-    ]);
-    if (requestId !== state.monitorRequest) return;
+    const connectionsParams = new URLSearchParams({ days: $('connections-days').value });
+    const connections = await api('/api/admin/new-connections?' + connectionsParams);
+    if (requestId !== connectionsRequest) return;
     const connectionContainer = $('monitor-connections'); connectionContainer.replaceChildren();
     for (const item of connections.items || []) {
       const row = node('div', undefined, 'monitor-connection-row');
@@ -370,6 +406,16 @@ async function loadMonitoring() {
     }
     $('connections-count').textContent = connections.items?.length ? `${connections.items.length} новых` : '';
     $('monitor-connections-empty').classList.toggle('hidden', !!connections.items?.length);
+    status('connections-status','');
+  } catch(error) {if(requestId===connectionsRequest)status('connections-status',error.message,'error');}
+}
+
+async function loadMonitoring() {
+  const requestId=++state.monitorRequest;
+  status('monitor-status','Загружаю события…');
+  try {
+    const result=await api('/api/admin/monitoring?'+monitoringParameters());
+    if(requestId!==state.monitorRequest)return;
     const container = $('monitor-list'); container.replaceChildren();
     for (const alert of result.items || []) {
       const row = node('div', undefined, 'monitor-row ' + (alert.severity === 1 ? 'critical' : 'warning'));
@@ -551,7 +597,24 @@ $('ticket-reply-form').addEventListener('submit', async event => {
 });
 $('refresh-devices').addEventListener('click', async () => { await loadOverview(); await refreshDeviceLists(); });
 $('refresh-monitoring').addEventListener('click', async () => { await loadOverview(); await loadMonitoring(); });
+$('refresh-connections').addEventListener('click',loadConnections);
+$('connections-days').addEventListener('change',loadConnections);
 $('refresh-tickets').addEventListener('click', loadTickets);
+$('ticket-block-toggle').addEventListener('click', async () => {
+  const device = state.selectedDevice;
+  if (!device) return;
+  const blocked = !device.ticketsBlocked;
+  try {
+    await api('/api/admin/devices/' + device.id + '/ticket-block', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocked })
+    });
+    device.ticketsBlocked = blocked;
+    $('ticket-block-toggle').textContent = blocked ? 'Разрешить заявки' : 'Заблокировать заявки';
+    $('ticket-block-toggle').classList.toggle('danger', !blocked);
+    status('device-status', blocked ? 'Создание заявок и ответы для этого ПК заблокированы.' : 'Заявки для этого ПК снова разрешены.', 'ok');
+    loadDevices();
+  } catch (error) { status('device-status', error.message, 'error'); }
+});
 async function refreshDeviceLists() { await loadDevices(); }
 let searchTimer;
 $('device-search').addEventListener('input', () => {
@@ -578,7 +641,8 @@ $('sync-okdesk').addEventListener('click', async event => {
     const result = await api('/api/admin/okdesk/sync', { method: 'POST' });
     await Promise.all([loadCatalog(), loadOverview()]);
     await refreshDeviceLists();
-    status('device-status', `Обновлено: ${result.companies} компаний, ${result.sites} объектов.`, 'ok');
+    const equipment = result.equipmentWarning || `Оборудование Okdesk: ${result.equipment ?? 'не получено'}.`;
+    status('device-status', `Обновлено: ${result.companies} компаний, ${result.sites} объектов. ${equipment}`, result.equipmentWarning ? 'error' : 'ok');
   } catch (error) { status('device-status', error.message, 'error'); }
   finally { button.disabled = false; }
 });

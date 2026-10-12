@@ -44,8 +44,20 @@
         <TextBlock Grid.Row="1" Text="Суть заявки" Style="{StaticResource FieldLabel}" />
         <TextBox Grid.Row="2" x:Name="TicketBody" MaxLength="5000" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="150" VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto" PreviewKeyDown="TicketBody_PreviewKeyDown" Margin="0,0,0,16" />
         <StackPanel Grid.Row="3">
-        <TextBlock Text="Контактные данные" Style="{StaticResource FieldLabel}" />
-        <TextBox x:Name="TicketContact" MaxLength="300" Height="38" ToolTip="Телефон или электронная почта" Margin="0,0,0,14" />
+        <TextBlock Text="Контактные данные (обязательно)" Style="{StaticResource FieldLabel}" />
+        <Grid Margin="0,0,0,14">
+          <TextBox x:Name="TicketContact" MaxLength="300" Height="38" ToolTip="ФИО, почта и номер телефона" />
+          <TextBlock Text="ФИО / Почта / Номер телефона" Foreground="#71839A" Margin="11,0" VerticalAlignment="Center" IsHitTestVisible="False">
+            <TextBlock.Style>
+              <Style TargetType="TextBlock">
+                <Setter Property="Visibility" Value="Collapsed" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding Text, ElementName=TicketContact}" Value=""><Setter Property="Visibility" Value="Visible" /></DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </TextBlock.Style>
+          </TextBlock>
+        </Grid>
         <CheckBox x:Name="IncludePcInfo" Content="Добавить данные о ПК" IsChecked="True" FontSize="14" Foreground="#25384C" ToolTip="Инвентарный номер, RMS и AnyDesk" Margin="0,0,0,14" />
         <DockPanel>
           <Button x:Name="RemoveAttachment" DockPanel.Dock="Right" IsEnabled="False" Click="RemoveFile_Click" ToolTip="Удалить выбранное вложение" AutomationProperties.Name="Удалить выбранное вложение">

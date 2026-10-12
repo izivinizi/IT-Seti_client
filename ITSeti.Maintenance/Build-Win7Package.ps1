@@ -81,6 +81,7 @@ New-Item -ItemType Directory -Path $diskMarkTarget -Force | Out-Null
 Get-ChildItem -LiteralPath $diskMarkSource -Force | Copy-Item -Destination $diskMarkTarget -Recurse -Force
 New-Item -ItemType Directory -Path $hwInfoTarget -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $hwInfoSource 'HWiNFO32.exe') -Destination (Join-Path $hwInfoTarget 'HWiNFO32.exe') -Force
+Copy-Item -LiteralPath (Join-Path $hwInfoSource 'HWiNFO32.INI') -Destination (Join-Path $hwInfoTarget 'HWiNFO32.INI') -Force
 New-Item -ItemType Directory -Path (Split-Path -Parent $frameworkTarget) -Force | Out-Null
 Copy-Item -LiteralPath $frameworkSource -Destination $frameworkTarget -Force
 if($PackageDirectory -eq 'dist\Win7\Package'){

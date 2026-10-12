@@ -35,7 +35,8 @@ public static class PackageVersionDetector
         if (string.IsNullOrWhiteSpace(text)) return false;
         var match = VersionPattern.Match(text.Trim());
         if (!match.Success || !Version.TryParse(match.Groups["version"].Value, out var parsed)) return false;
-        version = new Version(parsed.Major, parsed.Minor, Math.Max(parsed.Build, 0), parsed.Revision < 0 ? 0 : parsed.Revision);
+        version = parsed.Revision < 0 ? new Version(parsed.Major, parsed.Minor, Math.Max(parsed.Build, 0))
+            : new Version(parsed.Major, parsed.Minor, Math.Max(parsed.Build, 0), parsed.Revision);
         return true;
     }
 }

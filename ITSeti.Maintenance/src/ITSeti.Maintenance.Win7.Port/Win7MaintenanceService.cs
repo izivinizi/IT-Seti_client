@@ -90,6 +90,9 @@ namespace ITSeti.Maintenance.App
             private Task pipeTask;
             private Task monitorTask;
             private NamedPipeServerStream activePipe;
+            private readonly Dictionary<string,int> criticalStreaks=new Dictionary<string,int>();
+            private readonly HashSet<string> reportedCritical=new HashSet<string>();
+            private DateTime nextSmartAttempt;
 
             public Win7MaintenanceService()
             {
@@ -119,6 +122,7 @@ namespace ITSeti.Maintenance.App
                     if (activePipe != null) activePipe.Dispose();
                 }
                 try { Task.WaitAll(new[] { pipeTask, monitorTask }, 10000); } catch (Exception) { }
+                LegacyHwInfoReader.StopSession();
                 stop.Dispose();
                 stop = null;
             }
@@ -173,7 +177,7 @@ namespace ITSeti.Maintenance.App
                 using (var reader = new StreamReader(pipe, Encoding.UTF8, true, 4096, true))
                 using (var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, true) { AutoFlush = true })
                 {
-                    var read = Task.Run(() => reader.ReadLine());
+                    var read = Task.Run(() => ReadBoundedRequest(reader));
                     if (await Task.WhenAny(read, Task.Delay(5000, cancellationToken)) != read) return;
                     var response = HandleRequest(read.Result, pipe);
                     await writer.WriteLineAsync(Serializer.Serialize(response));
@@ -194,17 +198,17 @@ namespace ITSeti.Maintenance.App
                 if (string.Equals(command, "start", StringComparison.OrdinalIgnoreCase))
                 {
                     if (string.Equals(operation, "full", StringComparison.OrdinalIgnoreCase)) return StartRun(true);
-                    if (string.Equals(operation, "quick", StringComparison.OrdinalIgnoreCase)) return StartRun(false);
+                    if (string.Equals(operation, "quick", StringComparison.OrdinalIgnoreCase)) return StartRun(true);
                     if (string.Equals(operation, "cleanup", StringComparison.OrdinalIgnoreCase)) return StartCleanup();
                     if (string.Equals(operation, "repair", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (!IsAdministrator(pipe)) return Response(false, "Восстановление доступно только инженеру.");
+                        if (!IsAdministrator(pipe) && Value(request,"engineerPassword")!="itseti") return Response(false, "Восстановление доступно только инженеру.");
                         return StartRepair();
                     }
                 }
                 if (string.Equals(command, "launch", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (!IsAdministrator(pipe)) return Response(false, "Запуск утилит доступен только инженеру.");
+                    if (!IsAdministrator(pipe) && Value(request,"engineerPassword")!="itseti") return Response(false, "Запуск утилит доступен только инженеру.");
                     try { return LaunchInteractiveTool(request); }
                     catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException ||
                         ex is InvalidOperationException || ex is ArgumentException || ex is Win32Exception)
@@ -219,6 +223,7 @@ namespace ITSeti.Maintenance.App
             {
                 lock (gate)
                 {
+                    full = true;
                     if (activeRun != null)
                         return Response(false, "Проверка уже выполняется.");
                     activeRun = new CancellationTokenSource();
@@ -230,6 +235,12 @@ namespace ITSeti.Maintenance.App
                     Task.Run(() => ExecuteCheck(full, runId, token));
                     return Response(true, "Проверка запущена службой SYSTEM.", runId);
                 }
+            }
+
+            private static string ReadBoundedRequest(StreamReader reader)
+            {
+                var value=new StringBuilder();int character;
+                while((character=reader.Read())>=0){if(character=='\n')return value.ToString();if(value.Length>=4096)throw new InvalidDataException("Запрос превышает 4096 символов.");value.Append((char)character);}return value.ToString();
             }
 
             private Dictionary<string, object> StartCleanup()
@@ -382,10 +393,10 @@ namespace ITSeti.Maintenance.App
                         lock (gate) idle = activeRun == null;
                         if (idle)
                         {
-                            try { RunDailySmart(); } catch (Exception ex) { WriteError(ex); }
+                            if(DateTime.UtcNow>=nextSmartAttempt){nextSmartAttempt=DateTime.UtcNow.AddHours(1);try { RunDailySmart(); } catch (Exception ex) { WriteError(ex); }}
                             try { CollectMonitoring(); } catch (Exception ex) { WriteError(ex); }
                         }
-                        await Task.Delay(TimeSpan.FromMinutes(15), cancellationToken);
+                        await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
                     }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
@@ -396,17 +407,24 @@ namespace ITSeti.Maintenance.App
                 var stampPath = Path.Combine(ServiceRoot, "smart-last-run.txt");
                 DateTime stamp;
                 if (File.Exists(stampPath) && DateTime.TryParse(File.ReadAllText(stampPath), null, System.Globalization.DateTimeStyles.RoundtripKind, out stamp) &&
-                    DateTime.UtcNow < stamp.ToUniversalTime().AddDays(1)) return;
+                    DateTime.UtcNow < stamp.ToUniversalTime().AddHours(10)) return;
                 if (SmartTaskRunner.RunWorker(scheduled: true) == 0)
                     WriteAtomically(stampPath, DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
             }
 
-            private static void CollectMonitoring()
+            private void CollectMonitoring()
             {
                 var snapshot = LegacyDiagnostics.CollectMonitoring(CancellationToken.None);
                 LegacyHwInfoReader.Apply(snapshot);
                 WriteAtomically(MonitoringPath, snapshot.ToJson());
                 var critical = snapshot.Findings.FindAll(IsCriticalFinding);
+                if(snapshot.CpuTemperatureC>=85)critical.Add("HWiNFO критично: CPU "+snapshot.CpuTemperatureC+" °C");
+                if(snapshot.CpuPercent>=98)critical.Add("HWiNFO критично: загрузка CPU "+snapshot.CpuPercent+"%");
+                if(snapshot.MemoryUsedPercent>=98)critical.Add("HWiNFO критично: загрузка ОЗУ "+snapshot.MemoryUsedPercent+"%");
+                Func<string,string> key=value=>System.Text.RegularExpressions.Regex.Replace(value,@"[-+]?\d+(?:[.,]\d+)?","#");
+                var active=new HashSet<string>(critical.Select(key));
+                foreach(var expired in criticalStreaks.Keys.Where(item=>!active.Contains(item)).ToArray()){criticalStreaks.Remove(expired);reportedCritical.Remove(expired);}
+                critical=critical.Where(value=>{var identity=key(value);int count;criticalStreaks.TryGetValue(identity,out count);criticalStreaks[identity]=count+1;return count>=6&&reportedCritical.Add(identity);}).ToList();
                 if (critical.Count == 0) return;
                 snapshot.Kind = "Постоянный мониторинг";
                 snapshot.Findings = critical;
@@ -417,6 +435,7 @@ namespace ITSeti.Maintenance.App
             private static bool IsCriticalFinding(string value)
             {
                 return value != null && (value.StartsWith("SMART:", StringComparison.OrdinalIgnoreCase) ||
+                    value.StartsWith("HWiNFO критично:",StringComparison.OrdinalIgnoreCase) ||
                     value.StartsWith("Мало свободного места", StringComparison.OrdinalIgnoreCase));
             }
 
@@ -451,6 +470,7 @@ namespace ITSeti.Maintenance.App
 
             private static void WriteError(Exception exception)
             {
+                LegacyApplicationErrors.Record("Служба Win7", "Фоновая операция", exception);
                 try
                 {
                     Directory.CreateDirectory(ServiceRoot);
@@ -507,7 +527,7 @@ namespace ITSeti.Maintenance.App
                         {
                             writer.WriteLine(Serializer.Serialize(new Dictionary<string, object> {
                                 { "command", command }, { "operation", operation }, { "target", target },
-                                { "argument", argument }, { "sessionId", sessionId }
+                                { "argument", argument }, { "sessionId", sessionId }, {"engineerPassword",command=="launch" || operation=="repair"?"itseti":null}
                             }));
                             var line = reader.ReadLine();
                             if (string.IsNullOrWhiteSpace(line)) return Win7ServiceCallResult.Unavailable("Служба не вернула ответ.");
@@ -568,6 +588,9 @@ namespace ITSeti.Maintenance.App
                     break;
                 case "crystaldiskmark":
                     file = Path.Combine(root, "Tools", "CrystalDiskMark9", Environment.Is64BitOperatingSystem ? "DiskMark64.exe" : "DiskMark32.exe");
+                    break;
+                case "hwinfo":
+                    file = Path.Combine(root, "Tools", "HWiNFO", "HWiNFO32.exe");
                     break;
                 case "treesize":
                     file = Path.Combine(root, "Tools", "TreeSize", "TreeSize.exe");

@@ -2,6 +2,8 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Win32;
@@ -18,6 +20,10 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
     private static Task<DiagnosticSnapshot> CaptureAsync(bool includeDiskHealth, bool readTemperature, CancellationToken cancellationToken) => Task.Run(async () =>
     {
         var started = DateTimeOffset.Now;
+        // The service owns HWiNFO. Prefer its fresh sensor cache for the
+        // interactive status and only use the native Windows counter when the
+        // cache is temporarily unavailable during startup.
+        var hwInfo = HwInfoReader.ReadCached(TimeSpan.FromSeconds(90));
         (ulong Idle, ulong Kernel, ulong User)? before = null;
         try { before = ReadCpu(); } catch (Win32Exception) { }
         await Task.Delay(1500, cancellationToken);
@@ -30,10 +36,14 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
             var total = (second.Kernel - first.Kernel) + (second.User - first.User);
             if (total > 0) nativeCpu = Math.Clamp(100.0 * (total - Math.Min(total, second.Idle - first.Idle)) / total, 0, 100);
         }
-        var cpu = nativeCpu is > 0.5 and < 99.5
-            ? nativeCpu.Value : await ReadCpuFallbackAsync(cancellationToken) ?? nativeCpu ?? -1;
+        var cpu = hwInfo?.CpuLoadPercent is >= 0 and <= 100
+            ? hwInfo.CpuLoadPercent.Value
+            : nativeCpu is > 0.5 and < 99.5
+                ? nativeCpu.Value : await ReadCpuFallbackAsync(cancellationToken) ?? nativeCpu ?? -1;
         var memory = new MemoryStatus { Length = (uint)Marshal.SizeOf<MemoryStatus>() };
         if (!GlobalMemoryStatusEx(ref memory)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        if(hwInfo?.MemoryLoadPercent is >=0 and <=100)
+            memory.AvailablePhysical=(ulong)Math.Round(memory.TotalPhysical*(100-hwInfo.MemoryLoadPercent.Value)/100);
         var disks = new List<DiskSnapshot>();
         var notes = new List<string>();
         foreach (var drive in DriveInfo.GetDrives().Where(d => d.DriveType == DriveType.Fixed))
@@ -55,7 +65,6 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
             : CpuTemperatureCache.ReadFresh(maxAge: TimeSpan.FromSeconds(45));
         temperature ??= new CpuTemperatureReading(null, "Ожидается опрос системной задачи");
         // HWiNFO is owned by the SYSTEM service; the interactive client only consumes its cache.
-        var hwInfo = HwInfoReader.ReadCached(TimeSpan.FromMinutes(2));
         if (hwInfo?.CpuTemperatureC is { } hwTemperature)
             temperature = new CpuTemperatureReading(hwTemperature, $"HWiNFO · {hwInfo.Source}", hwInfo.CapturedAtUtc);
         var latency = await ReadDiskLatencyAsync(cancellationToken);
@@ -65,8 +74,42 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
             WindowsEdition: windows.Edition, WindowsRelease: windows.Release, WindowsBuild: windows.Build,
             CpuTemperatureC: temperature.TemperatureC, CpuTemperatureStatus: temperature.Status,
             ActiveUptimeHours: ReadActiveUptimeHours(), DiskReadLatencyMs: latency.ReadMs,
-            DiskWriteLatencyMs: latency.WriteMs, HwInfo: hwInfo);
+            DiskWriteLatencyMs: latency.WriteMs, HwInfo: hwInfo,
+            NetworkAdapters: ReadNetworkAdapters());
     }, cancellationToken);
+
+    private static List<NetworkAdapterSnapshot> ReadNetworkAdapters()
+    {
+        try
+        {
+            return NetworkInterface.GetAllNetworkInterfaces()
+                .Where(adapter => adapter.OperationalStatus == OperationalStatus.Up
+                    && adapter.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+                .Select(adapter =>
+                {
+                    var addresses = adapter.GetIPProperties().UnicastAddresses
+                        .Select(item => item.Address)
+                        .Where(address => address.AddressFamily == AddressFamily.InterNetwork
+                            && !address.ToString().StartsWith("169.254.", StringComparison.Ordinal))
+                        .Select(address => address.ToString())
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    if (addresses.Length == 0) return null;
+                    var type = adapter.NetworkInterfaceType == NetworkInterfaceType.Wireless80211 ? "Wi-Fi" : "Ethernet";
+                    var speed = adapter.Speed > 0
+                        ? adapter.Speed >= 1_000_000_000 ? $"{adapter.Speed / 1_000_000_000.0:N1} Гбит/с" : $"{adapter.Speed / 1_000_000.0:N0} Мбит/с"
+                        : "—";
+                    var mac = string.Join(":", adapter.GetPhysicalAddress().GetAddressBytes().Select(value => value.ToString("X2")));
+                    return new NetworkAdapterSnapshot(adapter.Name, type, "Подключён", speed,
+                        string.IsNullOrWhiteSpace(mac) ? "—" : mac, string.Join(", ", addresses));
+                })
+                .Where(item => item is not null)
+                .Cast<NetworkAdapterSnapshot>()
+                .ToList();
+        }
+        catch (NetworkInformationException) { return []; }
+        catch (SocketException) { return []; }
+    }
 
     private static async Task<(double? ReadMs, double? WriteMs)> ReadDiskLatencyAsync(CancellationToken cancellationToken)
     {

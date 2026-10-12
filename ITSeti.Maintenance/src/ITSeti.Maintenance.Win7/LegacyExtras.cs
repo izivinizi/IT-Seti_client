@@ -57,29 +57,10 @@ namespace ITSeti.Maintenance.Win7
             }
             catch (Exception ex) { snapshot.Unavailable.Add("Тип памяти: " + ex.Message); }
 
-            foreach (var scope in new[] { "root\\LibreHardwareMonitor", "root\\OpenHardwareMonitor" })
-            {
-                try
-                {
-                    using (var search = new ManagementObjectSearcher(scope, "SELECT Name,Value,SensorType FROM Sensor WHERE SensorType='Temperature'"))
-                    using (var values = search.Get())
-                    {
-                        var temperatures = values.Cast<ManagementObject>()
-                            .Where(x => Regex.IsMatch(Convert.ToString(x["Name"]), "CPU Package|CPU Core|Core Max|Tctl|Tdie", RegexOptions.IgnoreCase))
-                            .Select(x => { double value; return double.TryParse(Convert.ToString(x["Value"]), out value) ? value : -1; })
-                            .Where(x => x >= 5 && x <= 120).ToArray();
-                        if (temperatures.Length == 0) continue;
-                        snapshot.CpuTemperatureC = temperatures.Max();
-                        if (snapshot.CpuTemperatureC >= 85) snapshot.Findings.Add("Критическая температура CPU: " + snapshot.CpuTemperatureC.Value.ToString("N0") + " °C.");
-                        else if (snapshot.CpuTemperatureC >= 75) snapshot.Findings.Add("Высокая температура CPU: " + snapshot.CpuTemperatureC.Value.ToString("N0") + " °C.");
-                        break;
-                    }
-                }
-                catch (ManagementException) { }
-                catch (UnauthorizedAccessException) { }
-            }
+            // Win7 uses the same bundled HWiNFO reader as the main client.
+            // Do not query a second, legacy sensor provider here.
             if (!snapshot.CpuTemperatureC.HasValue)
-                snapshot.Unavailable.Add("Температура CPU: совместимый датчик не найден; значение не подменяется температурой платы.");
+                snapshot.Unavailable.Add("Температура CPU: служба HWiNFO не вернула допустимый датчик.");
         }
 
         private static void CollectIdentity(LegacySnapshot snapshot)

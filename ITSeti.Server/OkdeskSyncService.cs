@@ -4,9 +4,14 @@ using NpgsqlTypes;
 
 namespace ITSeti.Server;
 
-public sealed record OkdeskSyncResult(bool Success, int Companies, int Sites, DateTimeOffset? CompletedAt, string? Error);
+public sealed record OkdeskSyncResult(bool Success, int Companies, int Sites, DateTimeOffset? CompletedAt, string? Error)
+{
+    public int? Equipment { get; init; }
+    public string? EquipmentWarning { get; init; }
+}
 
-public sealed class OkdeskSyncService(NpgsqlDataSource dataSource, IOkdeskClient okdesk, ILogger<OkdeskSyncService> logger) : BackgroundService
+public sealed class OkdeskSyncService(NpgsqlDataSource dataSource, IOkdeskClient okdesk,
+    ILogger<OkdeskSyncService> logger) : BackgroundService
 {
     private static readonly TimeSpan CatalogRefreshInterval = TimeSpan.FromDays(3);
     private static readonly TimeSpan RetryInterval = TimeSpan.FromHours(6);
@@ -27,12 +32,16 @@ public sealed class OkdeskSyncService(NpgsqlDataSource dataSource, IOkdeskClient
                         continue;
                     }
                     var result = await SyncOnceAsync(stoppingToken);
-                    if (result.Success)
+                    if (result.Success && result.EquipmentWarning is null)
                     {
-                        logger.LogInformation("Okdesk catalog updated: {Companies} companies, {Sites} sites.", result.Companies, result.Sites);
+                        logger.LogInformation("Okdesk catalog updated: {Companies} companies, {Sites} sites, {Equipment} computers.", result.Companies, result.Sites, result.Equipment);
                         continue;
                     }
-                    logger.LogWarning("Okdesk catalog sync failed: {Error}", result.Error);
+                    if (result.Success)
+                        logger.LogWarning("Okdesk companies and objects were updated, but equipment sync needs retry: {Warning}", result.EquipmentWarning);
+                    else logger.LogWarning("Okdesk catalog sync failed: {Error}", result.Error);
+                    await Task.Delay(RetryInterval, stoppingToken);
+                    continue;
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
                 catch (NpgsqlException)
@@ -79,7 +88,19 @@ public sealed class OkdeskSyncService(NpgsqlDataSource dataSource, IOkdeskClient
                     }));
             }
             await SaveCatalogAsync(completeCompanies, sites, cancellationToken);
-            return new(true, companies.Count, sites.Count, DateTimeOffset.UtcNow, null);
+            try
+            {
+                var equipment = await okdesk.GetAllAsync("/api/v1/equipments/list", cancellationToken);
+                await SaveEquipmentAsync(equipment, cancellationToken);
+                return new(true, companies.Count, sites.Count, DateTimeOffset.UtcNow, null) { Equipment = equipment.Count };
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or NpgsqlException or InvalidOperationException or KeyNotFoundException or OkdeskApiException)
+            {
+                logger.LogWarning("Okdesk equipment sync failed: {ErrorType}.", ex.GetType().Name);
+                return new(true, companies.Count, sites.Count, DateTimeOffset.UtcNow, null)
+                { EquipmentWarning = "Каталог компаний и объектов обновлён, но список оборудования Okdesk не обновился. Проверьте доступ к реестру оборудования в веб-кабинете." };
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (OkdeskApiException ex)
@@ -135,6 +156,53 @@ public sealed class OkdeskSyncService(NpgsqlDataSource dataSource, IOkdeskClient
         }
         await transaction.CommitAsync(cancellationToken);
     }
+
+    private async Task SaveEquipmentAsync(IReadOnlyList<JsonElement> equipment, CancellationToken cancellationToken)
+    {
+        if (equipment.Count > 100_000) throw new JsonException("Okdesk equipment catalog exceeded the item limit.");
+        var items = equipment.Select(item =>
+        {
+            var id = ReadLong(item, "id") ?? throw new JsonException("Okdesk equipment ID is missing.");
+            var companyId = ReadLong(item, "company_id", "companyId")
+                ?? ReadLong(JsonRead.Property(item, "company") ?? default, "id")
+                ?? throw new JsonException("Okdesk equipment company is missing.");
+            var siteId = ReadLong(item, "maintenance_entity_id", "maintenanceEntityId", "service_object_id", "serviceObjectId");
+            return new EquipmentRecord(id, JsonRead.String(item, "inventory_number", "inventoryNumber"),
+                JsonRead.String(item, "serial_number", "serialNumber"), companyId, siteId,
+                JsonRead.String(item, "name", "title"));
+        }).ToArray();
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using (var clear = new NpgsqlCommand("DELETE FROM okdesk_equipment", connection, transaction))
+            await clear.ExecuteNonQueryAsync(cancellationToken);
+        await using var insert = new NpgsqlCommand("""
+            INSERT INTO okdesk_equipment(id,inventory_number,normalized_inventory_number,serial_number,company_id,service_object_id,name,updated_at)
+            VALUES(@id,@inventory,@normalized,@serial,@company,@site,@name,now())
+            """, connection, transaction);
+        var idParam = insert.Parameters.Add("id", NpgsqlDbType.Bigint);
+        var inventoryParam = insert.Parameters.Add("inventory", NpgsqlDbType.Text);
+        var normalizedParam = insert.Parameters.Add("normalized", NpgsqlDbType.Text);
+        var serialParam = insert.Parameters.Add("serial", NpgsqlDbType.Text);
+        var companyParam = insert.Parameters.Add("company", NpgsqlDbType.Bigint);
+        var siteParam = insert.Parameters.Add("site", NpgsqlDbType.Bigint);
+        var nameParam = insert.Parameters.Add("name", NpgsqlDbType.Text);
+        foreach (var item in items)
+        {
+            idParam.Value = item.Id;
+            inventoryParam.Value = (object?)item.InventoryNumber ?? DBNull.Value;
+            normalizedParam.Value = (object?)InventoryNumbers.Normalize(item.InventoryNumber) ?? DBNull.Value;
+            serialParam.Value = (object?)item.SerialNumber ?? DBNull.Value;
+            companyParam.Value = item.CompanyId;
+            siteParam.Value = (object?)item.SiteId ?? DBNull.Value;
+            nameParam.Value = (object?)item.Name ?? DBNull.Value;
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private sealed record EquipmentRecord(long Id, string? InventoryNumber, string? SerialNumber,
+        long CompanyId, long? SiteId, string? Name);
 
     private static long? ReadLong(JsonElement item, params string[] names)
     {

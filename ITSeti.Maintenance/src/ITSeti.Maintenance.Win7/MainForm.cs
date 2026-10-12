@@ -16,8 +16,7 @@ namespace ITSeti.Maintenance.Win7
         private static readonly Color Blue = Color.FromArgb(23, 70, 150);
         private static readonly Color Ink = Color.FromArgb(23, 36, 52);
         private static readonly Color Muted = Color.FromArgb(82, 99, 118);
-        private readonly Button checkButton = Command("Быстрая проверка", false);
-        private readonly Button fullButton = Command("Полная проверка", true);
+        private readonly Button fullButton = Command("Выполнить проверку", true);
         private readonly Button saveButton = Command("Сохранить отчёт", false);
         private readonly Button copyButton = Command("Копировать", false);
         private readonly Label heading = TextLabel("Диагностика ПК", 18, Blue);
@@ -91,16 +90,13 @@ namespace ITSeti.Maintenance.Win7
             layout.Controls.Add(metrics, 0, 1);
 
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
-            checkButton.Width = 160;
-            fullButton.Width = 155;
+            fullButton.Width = 180;
             saveButton.Width = 125;
             copyButton.Width = 100;
-            actions.Controls.Add(checkButton);
             actions.Controls.Add(fullButton);
             actions.Controls.Add(saveButton);
             actions.Controls.Add(copyButton);
             layout.Controls.Add(actions, 0, 2);
-            checkButton.Click += async (sender, args) => await CheckAsync(false);
             fullButton.Click += async (sender, args) => await CheckAsync(true);
             saveButton.Click += SaveReport;
             copyButton.Click += (sender, args) => { if (current != null) Clipboard.SetText(current.ToReport()); };
@@ -145,7 +141,7 @@ namespace ITSeti.Maintenance.Win7
 
             BuildExtraTabs(tabs);
             LoadCachedReport();
-            Shown += async (sender, args) => await CheckAsync(false);
+            Shown += async (sender, args) => await CheckAsync(true);
         }
 
         private static Label TextLabel(string value, int size, Color color)
@@ -166,9 +162,8 @@ namespace ITSeti.Maintenance.Win7
         {
             if (running) return;
             running = true;
-            checkButton.Enabled = false;
             fullButton.Enabled = false;
-            status.Text = full ? "Идёт полная проверка и тест системного диска." : "Идёт быстрая проверка. Работать за компьютером можно как обычно.";
+            status.Text = "Идёт полная проверка и тест системного диска.";
             status.ForeColor = Blue;
             try
             {
@@ -193,7 +188,6 @@ namespace ITSeti.Maintenance.Win7
             finally
             {
                 running = false;
-                checkButton.Enabled = true;
                 fullButton.Enabled = true;
             }
         }

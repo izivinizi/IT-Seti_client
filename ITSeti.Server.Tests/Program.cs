@@ -70,6 +70,10 @@ Check(PackageVersionDetector.TryParse("FileVersion 2.3.3.0", out var detectedVer
 Check(PackageVersionDetector.TryParse("ITSeti-Maintenance-Setup-2.3.3.exe", out var fileNameVersion) && fileNameVersion == new Version(2, 3, 3),
     "application package versions fall back to a semantic version in the filename");
 Check(!PackageVersionDetector.TryParse("latest", out _), "application package upload rejects undetectable versions");
+Check(Monitoring.CurrentIssues(Report("""{"Findings":["HWiNFO критично: CPU 90 °C."]}""")).Single().Severity==1,
+    "Win7 HWiNFO critical findings are classified as critical");
+Check(Monitoring.NewIssues(Report("""{"Findings":["HWiNFO критично: CPU 92 °C."]}"""),Report("""{"Findings":["HWiNFO критично: CPU 90 °C."]}""")).Count==0,
+    "Win7 HWiNFO reading changes do not spam monitoring");
 
 Check(OkdeskWebClient.ReadCreatedIssueId(Report("""{"redirect":{"redirect_path":"/issues/24447"}}""")) == 24447,
     "web creation reads the confirmed sequential ticket number");
@@ -108,6 +112,12 @@ var webCompany = OkdeskWebClient.Normalize(Report("""{"id":"1014927","attributes
 Check(webCompany.GetProperty("id").GetInt64() == 1014927, "web catalog preserves internal company IDs and existing device assignments");
 var webSite = OkdeskWebClient.Normalize(Report("""{"id":"906876","attributes":{"name":"Office","isDisabled":true,"company":{"id":718775},"address":"Fixture address"}}"""), false);
 Check(webSite.GetProperty("company_id").GetInt64() == 718775 && !webSite.GetProperty("active").GetBoolean(), "web catalog maps object owner and disabled state");
+var webEquipment = OkdeskWebClient.NormalizeEquipment(Report("""{"id":"88","attributes":{"name":"PC","inventory_number":" 00-2041 ","serial_number":"SN88","company":{"id":12},"maintenance_entity":{"id":34}}}"""));
+Check(webEquipment.GetProperty("company_id").GetInt64() == 12 && webEquipment.GetProperty("maintenance_entity_id").GetInt64() == 34 &&
+    InventoryNumbers.Normalize(webEquipment.GetProperty("inventory_number").GetString()) == "2041",
+    "web equipment parser reads company/object and normalizes formatted inventory numbers");
+Check(InventoryNumbers.Normalize("IT-00 2041") == "IT002041" && InventoryNumbers.Normalize("000") is null,
+    "inventory normalization ignores separators while preserving nonnumeric identifiers");
 using (var web = new OkdeskWebClient(new ConfigurationBuilder().Build()))
     Check(!web.CanSendTickets && !web.CanReadComments && !web.CanChangeStatus, "unverified web ticket actions stay queued and private comments cannot leak");
 var diagnosticRoot = Path.Combine(Path.GetTempPath(), "itseti-enrollment-" + Guid.NewGuid().ToString("N"));
@@ -220,11 +230,24 @@ try
     var policy = new ProcessPolicy(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?> { ["DataRoot"]=policyRoot }).Build());
     await policy.WriteAsync(new(["chrome.exe","CHROME.exe"],["Microsoft*"]));
     Check(policy.Read().AllowedNames.Length == 1 && policy.IsAllowed(Report("""{"Name":"chrome"}""")), "process policy normalizes names and duplicates");
+    await policy.AllowAsync("agent.exe", "Trusted Publisher", verifiedPublisher: true);
+    Check(policy.IsAllowed(Report("""{"Name":"agent","Signature":"Valid","Publisher":"Trusted Publisher"}""")) &&
+        policy.Read().AllowedNames.Contains("agent", StringComparer.OrdinalIgnoreCase) &&
+        policy.Read().AllowedPublishers.Contains("Trusted Publisher", StringComparer.OrdinalIgnoreCase),
+        "authenticated client approval adds process name and verified publisher to persistent server policy");
+    await policy.AllowAsync("unsigned-tool.exe", "Unverified Publisher", verifiedPublisher: false);
+    Check(policy.Read().AllowedNames.Contains("unsigned-tool", StringComparer.OrdinalIgnoreCase) &&
+        !policy.Read().AllowedPublishers.Contains("Unverified Publisher", StringComparer.OrdinalIgnoreCase),
+        "unverified process approval never creates a publisher-wide exception");
     Check(policy.IsAllowed(Report("""{"Name":"fixture","Signature":"Valid","Publisher":"Microsoft Corporation"}""")) &&
         !policy.IsAllowed(Report("""{"Name":"fixture","Signature":"NotSigned","Publisher":"Microsoft Corporation"}""")),
         "publisher exceptions require a valid signature");
     var restored = new ProcessPolicy(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?> { ["DataRoot"]=policyRoot }).Build());
-    Check(restored.Read().AllowedNames.Single() == "chrome.exe", "process policy survives restart");
+    Check(restored.Read().AllowedNames.Contains("chrome.exe", StringComparer.OrdinalIgnoreCase) &&
+        restored.Read().AllowedNames.Contains("agent", StringComparer.OrdinalIgnoreCase) &&
+        restored.Read().AllowedNames.Contains("unsigned-tool", StringComparer.OrdinalIgnoreCase) &&
+        restored.Read().AllowedPublishers.Contains("Trusted Publisher", StringComparer.OrdinalIgnoreCase),
+        "process names and trusted publishers survive restart");
     File.WriteAllText(Path.Combine(policyRoot, "process-policy.json"), "{broken");
     var recovered = new ProcessPolicy(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?> { ["DataRoot"]=policyRoot }).Build());
     Check(recovered.Read().AllowedNames.Length > 0 && File.ReadAllText(Path.Combine(policyRoot,"process-policy.json")) == "{broken",

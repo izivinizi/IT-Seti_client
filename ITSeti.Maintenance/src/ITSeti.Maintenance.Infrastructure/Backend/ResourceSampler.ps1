@@ -1,6 +1,6 @@
 ﻿param([string]$RunRoot,[int]$Seconds=30,[int]$Interval=5)
 $ErrorActionPreference='Stop'
-. (Join-Path $PSScriptRoot 'CpuLoad.ps1')
+. (Join-Path $PSScriptRoot 'HWiNFO.ps1')
 function CounterDelta([double]$Current,[double]$Previous) {
     $difference=$Current-$Previous
     if($difference -lt 0){return $null}
@@ -21,7 +21,8 @@ try {
         }
         $memory=Get-WmiObject Win32_PerfFormattedData_PerfOS_Memory -ErrorAction Stop
         $disk=Get-WmiObject Win32_PerfRawData_PerfDisk_LogicalDisk -Filter "Name='$env:SystemDrive'" -ErrorAction SilentlyContinue
-        $cpuPercent=[double](Get-CpuLoadPercent)
+        $cpuPercent=Get-HwInfoCpuLoadPercent
+        if($null -eq $cpuPercent){throw 'Свежая загрузка CPU из HWiNFO недоступна.'}
         $availableMb=[double]$memory.AvailableMBytes
         $usedPercent=if($total -gt 0){[math]::Min(100,[math]::Max(0,100*(1-$availableMb*1MB/$total)))}else{0}
         $cpuPercent=[math]::Min(100,[math]::Max(0,$cpuPercent))

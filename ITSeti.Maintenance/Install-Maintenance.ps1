@@ -30,6 +30,7 @@ $installStage='Проверка файлов приложения и инстр�
 $sourceApp=if($PreinstalledApp){$InstallRoot}else{Join-Path $PackageRoot 'App'}
 $sourceTools=if($PreinstalledApp){Join-Path $InstallRoot 'Tools'}else{Join-Path $PackageRoot 'Tools'}
 $sourceService=if($PreinstalledApp){Join-Path $InstallRoot 'Service'}else{Join-Path $PackageRoot 'Service'}
+$sourceNotifier=if($PreinstalledApp){Join-Path $InstallRoot 'Notifier'}else{Join-Path $PackageRoot 'Notifier'}
 if(!(Test-Path -LiteralPath (Join-Path $sourceApp 'ITSeti.Maintenance.exe') -PathType Leaf)){throw 'Published application is missing.'}
 foreach($relative in @('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe','PawnIO\PawnIO_setup.exe')){
     if(!(Test-Path -LiteralPath (Join-Path $sourceTools $relative) -PathType Leaf)){throw "Tool is missing: $relative"}
@@ -39,9 +40,12 @@ foreach($relative in @('Panel\DesktopInfo.ini','Panel\update-support-ids.ps1','P
 }
 $serviceExe=Join-Path $InstallRoot 'Service\ITSeti.Maintenance.Service.exe'
 if(!(Test-Path -LiteralPath (Join-Path $sourceService 'ITSeti.Maintenance.Service.exe') -PathType Leaf)){throw 'Maintenance service executable is missing.'}
+if(!(Test-Path -LiteralPath (Join-Path $sourceNotifier 'ITSeti.Maintenance.TicketNotifier.exe') -PathType Leaf)){throw 'Ticket notification helper is missing.'}
+$oldNotifier=Get-Process -Name 'ITSeti.Maintenance.TicketNotifier' -ErrorAction SilentlyContinue
+if($oldNotifier){$oldNotifier | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500}
 $install=$InstallRoot
 $installStage='Создание каталогов и копирование файлов'
-New-Item -ItemType Directory -Path $install,$data,(Join-Path $data 'Runs'),(Join-Path $data 'Repairs'),(Join-Path $data 'CleanupRequests'),(Join-Path $data 'CleanupRuns'),(Join-Path $data 'MonitoringQueue'),(Join-Path $data 'WindowsUpdate'),(Join-Path $data 'OrganizationSetupRequests'),(Join-Path $data 'OrganizationSetupRuns') -Force | Out-Null
+New-Item -ItemType Directory -Path $install,$data,(Join-Path $data 'Runs'),(Join-Path $data 'Repairs'),(Join-Path $data 'Logs'),(Join-Path $data 'CleanupRequests'),(Join-Path $data 'CleanupRuns'),(Join-Path $data 'MonitoringQueue'),(Join-Path $data 'WindowsUpdate'),(Join-Path $data 'OrganizationSetupRequests'),(Join-Path $data 'OrganizationSetupRuns') -Force | Out-Null
 Remove-Item -LiteralPath (Join-Path $install 'Setup') -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path (Join-Path $install 'Backend') -Force | Out-Null
 if(!$PreinstalledApp){Get-ChildItem -LiteralPath $sourceApp -Force | Copy-Item -Destination $install -Recurse -Force}
@@ -51,7 +55,12 @@ if(!$PreinstalledApp){
     Get-ChildItem -LiteralPath $sourceService -Force | Copy-Item -Destination $serviceTarget -Recurse -Force
 }
 if(!$PreinstalledApp){
-    foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO')){
+    $notifierTarget=Join-Path $install 'Notifier'
+    New-Item -ItemType Directory -Path $notifierTarget -Force | Out-Null
+    Get-ChildItem -LiteralPath $sourceNotifier -Force | Copy-Item -Destination $notifierTarget -Recurse -Force
+}
+if(!$PreinstalledApp){
+    foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO','HWiNFO')){
         $source=Join-Path $sourceTools $folder
         if(Test-Path -LiteralPath $source -PathType Container){
             $target=Join-Path (Join-Path $install 'Tools') $folder
@@ -105,6 +114,9 @@ if(Test-Path -LiteralPath $enrollmentFile -PathType Leaf){
 $cleanupQueue=Join-Path $data 'CleanupRequests'
 & icacls.exe $cleanupQueue /grant:r '*S-1-5-32-545:(OI)(CI)M' | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Could not allow cleanup requests.'}
+$applicationLogs=Join-Path $data 'Logs'
+& icacls.exe $applicationLogs /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)M' | Out-Null
+if($LASTEXITCODE -ne 0){throw 'Could not configure application error log access.'}
 $cleanupRuns=Join-Path $data 'CleanupRuns'
 & icacls.exe $cleanupRuns /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Could not secure cleanup results.'}
@@ -120,9 +132,10 @@ if(!(Test-Path -LiteralPath $inventory -PathType Leaf)){[IO.File]::WriteAllText(
 if($LASTEXITCODE -ne 0){throw 'Could not configure inventory number access.'}
 . (Join-Path $install 'Backend\ScheduledFull.ps1')
 [void](Initialize-ScheduledFullBaseline $data)
+$passwordPolicy=Join-Path $install 'Backend\Set-LocalPasswordsNeverExpire.ps1'
+if(Test-Path -LiteralPath $passwordPolicy){try{& $passwordPolicy -LogPath (Join-Path $data 'local-password-policy.log')}catch{Write-InstallLog ('Local password expiry policy could not be updated: '+$_.Exception.GetType().Name)}}
 $installStage='Регистрация системных задач'
 $taskName='ITSeti-Maintenance-Full'
-$temperatureTaskName='ITSeti-Maintenance-Temperature'
 $uploadTaskName='ITSeti-Maintenance-Upload'
 $catalogTaskName='ITSeti-Maintenance-Catalog'
 $reportQueue=Join-Path $data 'ReportQueue'
@@ -132,40 +145,35 @@ if($LASTEXITCODE -ne 0){throw 'Не удалось разрешить очере
 $worker=Join-Path $install 'Backend\InstalledCheck.ps1'
 try {
     $taskTrigger=New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(20)
-    $quickTrigger=New-ScheduledTaskTrigger -Daily -DaysInterval 14 -At ([DateTime]::Today.AddHours(3))
     $autoFullTrigger=New-ScheduledTaskTrigger -Daily -At ([DateTime]::Today.AddHours(4))
     $uploadTrigger=New-ScheduledTaskTrigger -Daily -At ([DateTime]::Today.AddHours(5.5))
     $taskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 3) -MultipleInstances IgnoreNew
     $autoFullSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 6) -MultipleInstances IgnoreNew
     $updateTaskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -MultipleInstances IgnoreNew
-    $temperatureTaskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew
     $taskPrincipal=New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
     $powershell=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
     if(!(Test-Path -LiteralPath $powershell -PathType Leaf)){throw "PowerShell не найден: $powershell"}
     $scheduler=New-Object -ComObject Schedule.Service
     $scheduler.Connect()
-    foreach($name in @($taskName,'ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoQuick','ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair','ITSeti-Maintenance-Cleanup','ITSeti-Maintenance-OrganizationSetup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates','ITSeti-Maintenance-Update',$temperatureTaskName,$uploadTaskName,$catalogTaskName)){
+    foreach($obsoleteQuickTask in @('ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoQuick')){
+        $oldTask=Get-ScheduledTask -TaskName $obsoleteQuickTask -ErrorAction SilentlyContinue
+        if($oldTask){Unregister-ScheduledTask -TaskName $obsoleteQuickTask -Confirm:$false -ErrorAction Stop;Write-InstallLog "Удалена устаревшая задача быстрой проверки $obsoleteQuickTask."}
+    }
+    foreach($name in @($taskName,'ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair','ITSeti-Maintenance-Cleanup','ITSeti-Maintenance-OrganizationSetup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates','ITSeti-Maintenance-Update',$uploadTaskName,$catalogTaskName)){
         $installStage="Регистрация задачи $name"
-        $isTemperatureTask=$name -eq $temperatureTaskName
-        if($isTemperatureTask){
-            $taskAction=New-ScheduledTaskAction -Execute (Join-Path $install 'ITSeti.Maintenance.exe') -Argument ('--cpu-temperature-probe "'+(Join-Path $data 'cpu-temperature.json')+'"')
-        }else{
-            $script=if($name -eq $uploadTaskName){Join-Path $install 'Backend\Upload-Reports.ps1'}elseif($name -eq 'ITSeti-Maintenance-Repair'){Join-Path $install 'Backend\InstalledRepair.ps1'}elseif($name -eq 'ITSeti-Maintenance-Cleanup'){Join-Path $install 'Backend\InstalledCleanup.ps1'}elseif($name -eq 'ITSeti-Maintenance-OrganizationSetup'){Join-Path $install 'Backend\InstalledOrganizationSetup.ps1'}elseif($name -eq 'ITSeti-Maintenance-Update'){Join-Path $install 'Backend\Update-Application.ps1'}elseif($name -match 'Updates$'){Join-Path $install 'Backend\Set-WindowsAutomaticUpdates.ps1'}else{$worker}
-            $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$script+'"'
-            if($name -eq $catalogTaskName){
-                $script=Join-Path $install 'Backend\ServerSoftware.ps1'
-                $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$script+'" -CatalogOnly'
-            }
-            if($name -in @('ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoQuick')){$arguments+=' -Quick'}
-            if($name -eq 'ITSeti-Maintenance-AutoQuick'){$arguments+=' -ScheduledQuick'}
-            if($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$arguments+=' -StartRepair'}
-            if($name -eq 'ITSeti-Maintenance-DisableUpdates'){$arguments+=' -Action Disable'}
-            if($name -eq 'ITSeti-Maintenance-RestoreUpdates'){$arguments+=' -Action Restore'}
-            if(!(Test-Path -LiteralPath $script -PathType Leaf)){throw "Task script is missing: $script"}
-            $taskAction=New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $install
+        $script=if($name -eq $uploadTaskName){Join-Path $install 'Backend\Upload-Reports.ps1'}elseif($name -eq 'ITSeti-Maintenance-Repair'){Join-Path $install 'Backend\InstalledRepair.ps1'}elseif($name -eq 'ITSeti-Maintenance-Cleanup'){Join-Path $install 'Backend\InstalledCleanup.ps1'}elseif($name -eq 'ITSeti-Maintenance-OrganizationSetup'){Join-Path $install 'Backend\InstalledOrganizationSetup.ps1'}elseif($name -eq 'ITSeti-Maintenance-Update'){Join-Path $install 'Backend\Update-Application.ps1'}elseif($name -match 'Updates$'){Join-Path $install 'Backend\Set-WindowsAutomaticUpdates.ps1'}else{$worker}
+        $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$script+'"'
+        if($name -eq $catalogTaskName){
+            $script=Join-Path $install 'Backend\ServerSoftware.ps1'
+            $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$script+'" -CatalogOnly'
         }
-        $trigger=if($name -eq $uploadTaskName){$uploadTrigger}elseif($name -eq 'ITSeti-Maintenance-AutoQuick'){$quickTrigger}elseif($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$autoFullTrigger}else{$taskTrigger}
-        $settings=if($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$autoFullSettings}elseif($name -eq 'ITSeti-Maintenance-Update'){$updateTaskSettings}elseif($isTemperatureTask){$temperatureTaskSettings}else{$taskSettings}
+        if($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$arguments+=' -StartRepair'}
+        if($name -eq 'ITSeti-Maintenance-DisableUpdates'){$arguments+=' -Action Disable'}
+        if($name -eq 'ITSeti-Maintenance-RestoreUpdates'){$arguments+=' -Action Restore'}
+        if(!(Test-Path -LiteralPath $script -PathType Leaf)){throw "Task script is missing: $script"}
+        $taskAction=New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $install
+        $trigger=if($name -eq $uploadTaskName){$uploadTrigger}elseif($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$autoFullTrigger}else{$taskTrigger}
+        $settings=if($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$autoFullSettings}elseif($name -eq 'ITSeti-Maintenance-Update'){$updateTaskSettings}else{$taskSettings}
         try {
             $lastTaskError=$null
             for($attempt=1;$attempt -le 3;$attempt++){
@@ -201,7 +209,38 @@ try {
     throw
 }
 $installStage='Регистрация системной службы'
+$installStage='Контрольный запуск планового задания SYSTEM'
+$scheduleProbe=[guid]::NewGuid().ToString('N')
+$scheduleRequest=Join-Path $data 'schedule-self-test.request'
+$scheduleResult=Join-Path $data 'schedule-self-test.result'
+try {
+    [IO.File]::WriteAllText($scheduleRequest,$scheduleProbe,[Text.Encoding]::ASCII)
+    Start-ScheduledTask -TaskName 'ITSeti-Maintenance-AutoFullRepair' -ErrorAction Stop
+    $probePassed=$false
+    for($attempt=0;$attempt -lt 120;$attempt++){
+        if((Test-Path -LiteralPath $scheduleResult) -and [IO.File]::ReadAllText($scheduleResult).Trim() -eq $scheduleProbe){$probePassed=$true;break}
+        Start-Sleep -Milliseconds 500
+    }
+    if(!$probePassed){throw 'Плановое задание не прошло контрольный запуск SYSTEM за 60 секунд.'}
+    Write-InstallLog 'Контрольный запуск плановой задачи SYSTEM выполнен успешно.'
+} finally {Remove-Item -LiteralPath $scheduleRequest -Force -ErrorAction SilentlyContinue}
+$installStage='Регистрация системной службы'
 $serviceName='ITSetiMaintenanceService'
+$legacyTemperatureTask=Get-ScheduledTask -TaskName 'ITSeti-Maintenance-Temperature' -ErrorAction SilentlyContinue
+if($legacyTemperatureTask){
+    Unregister-ScheduledTask -TaskName 'ITSeti-Maintenance-Temperature' -Confirm:$false -ErrorAction SilentlyContinue
+    Write-InstallLog 'Удалена устаревшая отдельная задача чтения температуры.'
+}
+$legacyPayloads=@(
+    (Join-Path $install 'Backend\CpuLoad.ps1'),
+    (Join-Path $install 'CpuLoad.ps1'),
+    (Join-Path $install 'LibreHardwareMonitorLib.dll'),
+    (Join-Path $install 'OpenHardwareMonitorLib.dll'),
+    (Join-Path $install 'Tools\LibreHardwareMonitor')
+)
+foreach($legacyPayload in $legacyPayloads){
+    Remove-Item -LiteralPath $legacyPayload -Recurse -Force -ErrorAction SilentlyContinue
+}
 $existingService=Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 if($existingService){
     if($existingService.Status -ne 'Stopped'){
@@ -216,7 +255,7 @@ if($existingService){
     & sc.exe config $serviceName binPath= ('"'+$serviceExe+'"') start= delayed-auto obj= LocalSystem DisplayName= 'ИТ-Сети: обслуживание ПК' | Out-Null
     if($LASTEXITCODE -ne 0){throw 'Не удалось обновить регистрацию службы.'}
 }else{
-    New-Service -Name $serviceName -BinaryPathName ('"'+$serviceExe+'"') -DisplayName 'ИТ-Сети: обслуживание ПК' -Description 'Диагностика, мониторинг и системные операции ИТ-Сети.' -StartupType Automatic | Out-Null
+    New-Service -Name $serviceName -BinaryPathName ('"'+$serviceExe+'"') -DisplayName 'ИТ-Сети: обслуживание ПК' -Description 'Диагностика, мониторинг и системные операции ИТ-Сети.' -StartupType Automatic -ErrorAction Stop | Out-Null
 }
 & sc.exe config $serviceName start= delayed-auto | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Не удалось включить отложенный автоматический запуск службы.'}
@@ -230,6 +269,9 @@ for($attempt=0;$attempt -lt 120;$attempt++){
     Start-Sleep -Milliseconds 250
 }
 if((Get-Service -Name $serviceName -ErrorAction Stop).Status -ne 'Running'){throw 'Служба не перешла в состояние Running.'}
+$serviceCim=Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $serviceName) -ErrorAction Stop
+if($serviceCim.StartName -ne 'LocalSystem' -or $serviceCim.StartMode -notin @('Auto','Automatic')){throw 'Служба зарегистрирована не от LocalSystem или не имеет автоматического запуска.'}
+if([string]$serviceCim.PathName -notmatch [regex]::Escape($serviceExe)){throw 'Служба указывает на другой исполняемый файл.'}
 Write-InstallLog ('Служба '+$serviceName+' зарегистрирована и запущена.')
 $installStage='Завершение установки'
 $legacyTask=Get-ScheduledTask -TaskName 'ITSeti-Maintenance-FullRepair' -ErrorAction SilentlyContinue
@@ -237,6 +279,7 @@ if($legacyTask){Unregister-ScheduledTask -TaskName 'ITSeti-Maintenance-FullRepai
 $runKey='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
 Remove-ItemProperty -Path $runKey -Name 'ITSeti-Maintenance-Quick' -ErrorAction SilentlyContinue
 New-ItemProperty -Path $runKey -Name 'ITSeti-Maintenance-Status' -Value ('"'+(Join-Path $install 'ITSeti.Maintenance.exe')+'" --scheduled-quick') -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $runKey -Name 'ITSeti-Maintenance-Tickets' -Value ('"'+(Join-Path $install 'Notifier\ITSeti.Maintenance.TicketNotifier.exe')+'"') -PropertyType String -Force | Out-Null
 $legacyShortcuts=@((Join-Path $env:PUBLIC 'Desktop\ITSeti Maintenance.lnk'),(Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\ITSeti Maintenance.lnk'))
 if($PreinstalledApp){
     foreach($path in $legacyShortcuts){Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue}

@@ -1,35 +1,29 @@
 using System.IO;
-using System.ComponentModel;
 using System.Windows;
 using System.Diagnostics;
-using System.Security;
-using System.Threading;
 using System.Windows.Input;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
+using ITSeti.Maintenance.Core;
 using ITSeti.Maintenance.Infrastructure;
 
 namespace ITSeti.Maintenance.App;
 
 public partial class MainWindow : Window
 {
+    private const string EngineerPassword = "itseti";
     public MainViewModel ViewModel { get; }
     private readonly FullDiagnosticsRunner fullRunner = new();
     private readonly TaskCompletionSource initializationCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly string historyDatabasePath;
     private bool engineerOnly;
-    private bool closeAfterMaintenance;
-    private bool closeAfterCheck;
-    private bool exitForUpdate;
-    private bool handingOffToEngineer;
     private bool syncingAdminPassword;
     private DispatcherOperation? progressScroll;
     private bool closed;
     private bool refreshingSoftware;
     private DateTime catalogWriteTime;
-    private readonly DispatcherTimer liveMetricsTimer = new() { Interval = TimeSpan.FromSeconds(10) };
-    private readonly TicketMessagePoller? ticketPoller;
+    private readonly DispatcherTimer liveMetricsTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     public MainWindow() : this(DefaultHistoryDatabasePath(), false) { }
 
     public MainWindow(string databasePath) : this(databasePath, false) { }
@@ -39,20 +33,12 @@ public partial class MainWindow : Window
         InitializeComponent();
         historyDatabasePath = Path.GetFullPath(databasePath);
         this.engineerOnly = engineerOnly;
-        if (!engineerOnly && Environment.GetEnvironmentVariable("ITSETI_DISABLE_REPORT_UPLOAD") != "1")
-            ticketPoller = new TicketMessagePoller(this, OpenMyTickets);
-        AdminAccount.Text = Environment.MachineName + "\\" + Environment.UserName;
         if (!engineerOnly) ConfigureUserShellSize();
         ViewModel = new MainViewModel(new WindowsDiagnosticsRunner(), new SqliteHistoryStore(historyDatabasePath),
             fullRunner, engineerOnly ? new UserCleanupRunner(cleanupUserSid, cleanupUserLocalData) : null);
         ViewModel.SetWindowsDefenderAccess(EngineerWindowLauncher.IsAdministrator());
         DataContext = ViewModel;
         if (engineerOnly) ConfigureEngineerShell();
-        ViewModel.PropertyChanged += (_, _) =>
-        {
-            if (closeAfterMaintenance && !ViewModel.IsBackgroundMaintenanceRunning)
-                Dispatcher.BeginInvoke(() => Application.Current.Shutdown());
-        };
         ViewModel.CheckProgressEntries.CollectionChanged += (_, _) => QueueProgressScroll();
         CheckProgressList.IsVisibleChanged += (_, _) => QueueProgressScroll();
         liveMetricsTimer.Tick += async (_, _) =>
@@ -61,14 +47,14 @@ public partial class MainWindow : Window
             var changed = File.GetLastWriteTimeUtc(ServerSoftwareCatalog.CachePath);
             if (changed != catalogWriteTime) { catalogWriteTime = changed; ViewModel.RefreshSetupAudit(); }
         };
-        Closed += (_, _) => { closed = true; ticketPoller?.Dispose(); liveMetricsTimer.Stop(); progressScroll?.Abort(); };
+        Closed += (_, _) => { closed = true; liveMetricsTimer.Stop(); progressScroll?.Abort(); };
         Loaded += async (_, _) =>
         {
             await ViewModel.InitializeAsync();
             await ViewModel.RefreshLiveStatusAsync();
             if (closed) return;
+            _ = TryAutomaticServerEnrollmentAsync();
             liveMetricsTimer.Start();
-            ticketPoller?.Start();
             if (this.engineerOnly)
             {
                 ViewModel.RefreshSetupAudit();
@@ -79,37 +65,22 @@ public partial class MainWindow : Window
             initializationCompleted.TrySetResult();
             _ = RefreshSoftwareCatalogAsync();
         };
-        Closing += (_, e) =>
+    }
+
+    private async Task TryAutomaticServerEnrollmentAsync()
+    {
+        try
         {
-            if (handingOffToEngineer) return;
-            if (ViewModel.IsBusy)
-            {
-                e.Cancel = true;
-                if (ViewModel.IsFullCheckRunning)
-                {
-                    closeAfterCheck = true;
-                    ViewModel.StopFullCheck();
-                }
-                else MessageBox.Show(this, "Действие ещё выполняется. Дождитесь его завершения.", "Операция выполняется", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            else if (ViewModel.IsBackgroundMaintenanceRunning && !exitForUpdate)
-            {
-                e.Cancel = true;
-                closeAfterMaintenance = true;
-                Hide();
-            }
-            else if (!exitForUpdate && ticketPoller is { HasActiveTickets: true, ExitRequested: false })
-            {
-                e.Cancel = true;
-                Hide();
-            }
-        };
+            using var enrollment = new ServerEnrollmentClient();
+            if (await enrollment.TryAutomaticEnrollmentAsync()) ViewModel.RefreshIdentity();
+        }
+        catch (Exception ex) { Debug.WriteLine("Automatic server enrollment deferred: " + ex.Message); }
     }
 
     public async Task RunScheduledQuickCheckAsync()
     {
         await initializationCompleted.Task;
-        await ViewModel.RunScheduledUserQuickAsync();
+        await ViewModel.RunScheduledUserCheckAsync();
     }
 
     private void QueueProgressScroll()
@@ -126,29 +97,16 @@ public partial class MainWindow : Window
 
     private async void RunFull_Click(object sender, RoutedEventArgs e)
     {
+        await TryAutomaticServerEnrollmentAsync();
         AdminTabs.SelectedItem = ProgressTab;
         await ViewModel.RunFullAsync();
-        CloseAfterStoppedCheck();
-    }
-    private async void RunQuickFull_Click(object sender, RoutedEventArgs e)
-    {
-        AdminTabs.SelectedItem = ProgressTab;
-        await ViewModel.RunQuickFullAsync();
-        CloseAfterStoppedCheck();
     }
     private async void RunUserFull_Click(object sender, RoutedEventArgs e)
     {
+        await TryAutomaticServerEnrollmentAsync();
         await ViewModel.RunUserFullAsync();
-        CloseAfterStoppedCheck();
     }
     private void StopFullCheck_Click(object sender, RoutedEventArgs e) => ViewModel.StopFullCheck();
-    private void CloseAfterStoppedCheck()
-    {
-        if (!closeAfterCheck) return;
-        closeAfterCheck = false;
-        if (ViewModel.LastCheckWasStopped) Close();
-        else MessageBox.Show(this, "Не удалось подтвердить остановку проверки. Проверьте её статус перед закрытием окна.", "Остановка проверки", MessageBoxButton.OK, MessageBoxImage.Warning);
-    }
     private async void RunCleanup_Click(object sender, RoutedEventArgs e) => await ViewModel.RunCleanupAsync();
     private async void RunRepair_Click(object sender, RoutedEventArgs e)
     {
@@ -193,7 +151,6 @@ public partial class MainWindow : Window
     private void ShowSupport_Click(object sender, RoutedEventArgs e)
     {
         new SupportDialog(ViewModel.InventoryNumber, ViewModel.RmsId, ViewModel.AnyDeskId) { Owner = this }.ShowDialog();
-        ticketPoller?.RefreshSoon();
     }
     private MyTicketsDialog? ticketsDialog;
     private void OpenMyTickets()
@@ -201,7 +158,7 @@ public partial class MainWindow : Window
         if (ticketsDialog is not null) { ticketsDialog.Activate(); return; }
         ticketsDialog = new MyTicketsDialog { Owner = this };
         try { ticketsDialog.ShowDialog(); }
-        finally { ticketsDialog = null; ticketPoller?.RefreshSoon(); }
+        finally { ticketsDialog = null; }
     }
     private void ShowMyTickets_Click(object sender, RoutedEventArgs e) => OpenMyTickets();
     private void ShowContacts_Click(object sender, RoutedEventArgs e) => new ContactsDialog(
@@ -254,46 +211,12 @@ public partial class MainWindow : Window
     }
     private void ShowAdminPrompt_Click(object sender, RoutedEventArgs e)
     {
-        if (EngineerWindowLauncher.IsAdministrator())
-        {
-            ShowEngineerShell();
-            return;
-        }
-        ClearAdminPassword();
-        AdminAccount.Text = string.Empty;
         AdminError.Visibility = Visibility.Collapsed;
+        ClearAdminPassword();
         AdminUnlock.Visibility = Visibility.Visible;
         AdminPassword.Focus();
-        _ = PopulateAdminAccountsAsync(AdminAccount.Text);
     }
 
-    private async Task PopulateAdminAccountsAsync(string defaultAccount)
-    {
-        var candidates = await Task.Run(WindowsAdminAccountDiscovery.FindCandidates);
-        if (AdminUnlock.Visibility != Visibility.Visible) return;
-
-        var typedAccount = AdminAccount.Text;
-        var keepCurrent = !string.Equals(typedAccount, defaultAccount, StringComparison.OrdinalIgnoreCase);
-        AdminAccount.ItemsSource = candidates;
-        if (keepCurrent)
-        {
-            AdminAccount.Text = typedAccount;
-            return;
-        }
-
-        var currentAccount = candidates.FirstOrDefault(account => account.EndsWith("\\" + Environment.UserName, StringComparison.OrdinalIgnoreCase));
-        var selected = currentAccount
-            ?? candidates.FirstOrDefault(account => account.EndsWith("\\Admin", StringComparison.OrdinalIgnoreCase))
-            ?? candidates.FirstOrDefault(account => account.EndsWith("\\it-seti", StringComparison.OrdinalIgnoreCase))
-            ?? candidates.FirstOrDefault(account => account.EndsWith("\\user", StringComparison.OrdinalIgnoreCase))
-            ?? (candidates.Count == 1 ? candidates[0] : null);
-        AdminAccount.Text = selected ?? string.Empty;
-        if (selected is null)
-        {
-            AdminError.Text = "В локальной группе администраторов не найдена учётная запись для инженерного режима.";
-            AdminError.Visibility = Visibility.Visible;
-        }
-    }
     private void CancelAdmin_Click(object sender, RoutedEventArgs e)
     {
         ClearAdminPassword();
@@ -372,73 +295,25 @@ public partial class MainWindow : Window
     }
     private async void UnlockAdmin_Click(object sender, RoutedEventArgs e) => await UnlockAdminAsync();
 
-    private async Task UnlockAdminAsync()
+    private Task UnlockAdminAsync()
     {
         var password = AdminVisiblePassword.Visibility == Visibility.Visible
-            ? ToSecureString(AdminVisiblePassword.Text)
-            : AdminPassword.SecurePassword.Copy();
+            ? AdminVisiblePassword.Text
+            : AdminPassword.Password;
         ClearAdminPassword();
-        var account = AdminAccount.Text;
-        UnlockButton.IsEnabled = false;
-        try
+        if (!string.Equals(password, EngineerPassword, StringComparison.Ordinal))
         {
-            if (EngineerWindowLauncher.IsAdministrator() && password.Length == 0)
-            {
-                ShowEngineerShell();
-                return;
-            }
-            var launch = await Task.Run(() => EngineerWindowLauncher.TryStartWithWindowsCredentials(
-                account, password, historyDatabasePath));
-            if (launch.Process is null)
-            {
-                AdminError.Text = FormatCredentialError(launch.ErrorCode);
-                AdminError.Visibility = Visibility.Visible;
-                AdminPassword.Focus();
-                return;
-            }
-            HandoffToEngineer(launch.Process);
-        }
-        catch (Win32Exception ex)
-        {
-            AdminError.Text = FormatCredentialError(ex.NativeErrorCode);
+            AdminError.Text = "Неверный пароль инженера.";
             AdminError.Visibility = Visibility.Visible;
             AdminPassword.Focus();
+            return Task.CompletedTask;
         }
-        catch (Exception ex)
-        {
-            AdminError.Text = "Не удалось открыть инженерское окно: " + ex.Message;
-            AdminError.Visibility = Visibility.Visible;
-            AdminPassword.Focus();
-        }
-        finally
-        {
-            password.Dispose();
-            UnlockButton.IsEnabled = true;
-        }
+        ShowEngineerShell();
+        return Task.CompletedTask;
     }
-
-    private static SecureString ToSecureString(string value)
-    {
-        var secure = new SecureString();
-        foreach (var character in value) secure.AppendChar(character);
-        secure.MakeReadOnly();
-        return secure;
-    }
-
-    private static string FormatCredentialError(int errorCode) => errorCode switch
-    {
-        1326 => "Windows не приняла учётную запись или пароль. Введите пароль Windows, не PIN-код.",
-        1327 => "Windows отклонила вход из-за ограничений учётной записи. Проверьте срок действия пароля и разрешение на вход.",
-        1330 => "Срок действия пароля истёк. Сначала смените пароль Windows и повторите вход.",
-        1331 => "Учётная запись отключена. Используйте активную учётную запись администратора.",
-        267 => "Windows не смогла открыть каталог запуска для этой учётной записи. Запустите установленную версию приложения или укажите доступный ей путь.",
-        1385 => "Для этой учётной записи запрещён интерактивный вход в Windows. Используйте другую учётную запись администратора.",
-        _ => $"Не удалось открыть инженерское окно (код Windows {errorCode}). Проверьте формат имени: пользователь, ПК\\пользователь или ДОМЕН\\пользователь."
-    };
 
     private void ShowEngineerShell()
     {
-        engineerOnly = true;
         ConfigureEngineerShell();
         ViewModel.SetWindowsDefenderAccess(EngineerWindowLauncher.IsAdministrator());
         ViewModel.RefreshSetupAudit();
@@ -483,43 +358,6 @@ public partial class MainWindow : Window
         Left = area.Left + Math.Max(0, (area.Width - Width) / 2);
         Top = area.Top + Math.Max(0, (area.Height - Height) / 2);
         Title = "ИТ-Сети | Диагностика ПК";
-    }
-
-    private void HandoffToEngineer(Process process)
-    {
-        var handled = 0;
-        void OnExited()
-        {
-            if (Interlocked.Exchange(ref handled, 1) != 0) return;
-            var exitCode = -1;
-            try { exitCode = process.ExitCode; }
-            catch (InvalidOperationException) { }
-            Dispatcher.BeginInvoke(() =>
-            {
-                process.Dispose();
-                if (exitCode == 0)
-                {
-                    handingOffToEngineer = true;
-                    Close();
-                    return;
-                }
-
-                AdminError.Text = exitCode == 1223
-                    ? "Запуск инженерского окна отменён."
-                    : $"Инженерское окно не запустилось (код {exitCode}).";
-                AdminError.Visibility = Visibility.Visible;
-                AdminUnlock.Visibility = Visibility.Visible;
-                Show();
-                Activate();
-                AdminPassword.Focus();
-            });
-        }
-
-        process.Exited += (_, _) => OnExited();
-        process.EnableRaisingEvents = true;
-        AdminUnlock.Visibility = Visibility.Collapsed;
-        Hide();
-        if (process.HasExited) OnExited();
     }
 
     private static string DefaultHistoryDatabasePath() => Path.Combine(
@@ -577,7 +415,6 @@ public partial class MainWindow : Window
                     + "\nУстановщик уже проверен; обновление продолжится после закрытия приложения.",
                     "Обновление приложения", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
-            exitForUpdate = true;
             Application.Current.Shutdown();
         }
     }
@@ -613,31 +450,41 @@ public partial class MainWindow : Window
         }
         finally { try { File.Delete(ready); } catch (IOException) { } }
     }
-    private void SaveInventory_Click(object sender, RoutedEventArgs e)
+    private async void SaveInventory_Click(object sender, RoutedEventArgs e)
     {
-        try { ViewModel.SaveInventoryNumber(); }
+        try
+        {
+            ViewModel.SaveInventoryNumber();
+            if (string.IsNullOrWhiteSpace(ViewModel.InventoryNumber)) return;
+            using var enrollment = new ServerEnrollmentClient();
+            if (await enrollment.TryAutomaticEnrollmentAsync())
+            {
+                ViewModel.RefreshIdentity();
+                return;
+            }
+            var dialog = new ServerAssignmentDialog { Owner = this };
+            if (dialog.ShowDialog() == true) ViewModel.RefreshIdentity();
+        }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
         {
             MessageBox.Show(this, ex.Message, "Инвентарный номер не сохранён", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+        catch (Exception ex) { MessageBox.Show(this, ex.Message, "Не удалось определить привязку компании и объекта", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
-    private void OpenServerAssignment_Click(object sender, RoutedEventArgs e)
+    private async void OpenServerAssignment_Click(object sender, RoutedEventArgs e)
     {
-        var script = Path.Combine(AppContext.BaseDirectory, "Connect-Server.ps1");
-        if (!File.Exists(script))
-        {
-            MessageBox.Show(this, "Окно подключения к серверу не найдено.", "Компания и объект", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
         try
         {
-            Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-                "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
+            using (var enrollment = new ServerEnrollmentClient())
             {
-                UseShellExecute = true,
-                WindowStyle = ProcessWindowStyle.Hidden,
-                ArgumentList = { "-STA", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", script }
-            });
+                if (await enrollment.TryAutomaticEnrollmentAsync())
+                {
+                    ViewModel.RefreshIdentity();
+                    return;
+                }
+            }
+            var dialog = new ServerAssignmentDialog { Owner = this };
+            if (dialog.ShowDialog() == true) ViewModel.RefreshIdentity();
         }
         catch (Exception ex) { MessageBox.Show(this, ex.Message, "Компания и объект", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
@@ -687,6 +534,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            ApplicationErrorStore.Record("Учётные записи","Создание локального администратора",ex);
             MessageBox.Show(this, ex.Message, "Учётная запись не создана", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
@@ -715,6 +563,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            ApplicationErrorStore.Record("ПО","Удаление компонента "+component,ex);
             ViewModel.SetSetupStatus($"Удаление не выполнено: {ex.Message}");
             ViewModel.SetSetupComponentStatus(component, "Ошибка: " + ex.Message);
             MessageBox.Show(this, ex.Message, "Удаление не выполнено", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -758,6 +607,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            ApplicationErrorStore.Record("ПО","Установка компонента "+component,ex);
             ViewModel.SetSetupStatus("Установка не выполнена: " + ex.Message);
             if (component is not null) ViewModel.SetSetupComponentStatus(component, "Ошибка: " + ex.Message);
             MessageBox.Show(this, ex.Message, "Установка не выполнена", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -767,6 +617,25 @@ public partial class MainWindow : Window
 
     private async void LaunchDiskInfo_Click(object sender, RoutedEventArgs e) => await LaunchDiskToolAsync(diskInfo: true);
     private async void LaunchDiskMark_Click(object sender, RoutedEventArgs e) => await LaunchDiskToolAsync(diskInfo: false);
+    private async void LaunchHwInfo_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            ViewModel.SetSoftwareActionStatus("Открываем HWiNFO через службу…");
+            var result = await MaintenanceServiceClient.LaunchUtilityAsync("HWiNFO", null,
+                Process.GetCurrentProcess().SessionId);
+            var message = result.Connected ? result.Message : "Служба обслуживания недоступна. Переустановите приложение с включённой службой.";
+            ViewModel.SetSoftwareActionStatus(message);
+            if (!result.Accepted)
+                MessageBox.Show(this, message, "HWiNFO", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
+        {
+            ApplicationErrorStore.Record("Утилиты","Открытие HWiNFO",ex);
+            ViewModel.SetSoftwareActionStatus("Не удалось открыть HWiNFO: " + ex.Message);
+            MessageBox.Show(this, ex.Message, "HWiNFO", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
     private async void LaunchTreeSize_Click(object sender, RoutedEventArgs e)
     {
         var volume = ViewModel.SelectedTreeSizeVolume;
@@ -784,6 +653,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            ApplicationErrorStore.Record("Утилиты","Открытие TreeSize",ex);
             ViewModel.SetSoftwareActionStatus("Не удалось запустить TreeSize Free: " + ex.Message);
             MessageBox.Show(this, ex.Message, "TreeSize Free", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
@@ -806,6 +676,11 @@ public partial class MainWindow : Window
         if (sender is not Button { Tag: string key }) return;
         try
         {
+            if (key is "settings" or "security")
+            {
+                SystemToolsLauncher.Launch(key);
+                return;
+            }
             var result = await MaintenanceServiceClient.LaunchSystemToolAsync(key,
                 Process.GetCurrentProcess().SessionId);
             if (!result.Accepted)
@@ -813,6 +688,15 @@ public partial class MainWindow : Window
                     "Системное приложение", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (Exception ex) { MessageBox.Show(this, ex.Message, "Системное приложение", MessageBoxButton.OK, MessageBoxImage.Warning); }
+    }
+    private async void OpenEngineerLowSpaceScan_Click(object sender, RoutedEventArgs e)
+    {
+        try { await ViewModel.OpenLowSpaceScanAsync(engineer: true); }
+        catch (Exception ex)
+        {
+            ApplicationErrorStore.Record("Утилиты", "TreeSize для диска из отчёта", ex);
+            MessageBox.Show(this, ex.Message, "TreeSize", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
     private async Task LaunchDiskToolAsync(bool diskInfo)
     {
@@ -844,6 +728,21 @@ public partial class MainWindow : Window
         ConfigureUserShellSize();
     }
     private void RefreshNetwork_Click(object sender, RoutedEventArgs e) => ViewModel.RefreshNetworkAdapters();
+    private async void AllowProcess_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not ProcessDetails process) return;
+        if (sender is Button button) button.IsEnabled = false;
+        try { await ViewModel.AllowProcessAsync(process); }
+        finally { if (sender is Button control) control.IsEnabled = true; }
+    }
+    private async void TrustProcessPublisher_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not ProcessDetails process || !process.CanTrustPublisher) return;
+        if (sender is Button button) button.IsEnabled = false;
+        try { await ViewModel.TrustProcessPublisherAsync(process); }
+        finally { if (sender is Button control) control.IsEnabled = process.CanTrustPublisher; }
+    }
+    private async void LoadMoreHistory_Click(object sender, RoutedEventArgs e) => await ViewModel.LoadMoreHistoryAsync();
     private void RefreshDebug_Click(object sender, RoutedEventArgs e) => ViewModel.RefreshDebug();
     private void OpenDebugDirectory_Click(object sender, RoutedEventArgs e)
     {

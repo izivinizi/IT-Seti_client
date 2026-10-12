@@ -10,6 +10,16 @@ namespace ITSeti.Maintenance.App
 {
     public partial class App : Application
     {
+        public App()
+        {
+            DispatcherUnhandledException += (sender,args) => {
+                LegacyApplicationErrors.Record("Приложение Win7","Ошибка интерфейса",args.Exception);
+                MessageBox.Show("Ошибка приложения: "+args.Exception.Message+"\nПодробности сохранены во вкладке «Отладка».","ИТ-Сети",MessageBoxButton.OK,MessageBoxImage.Error);
+                args.Handled=true;
+            };
+            AppDomain.CurrentDomain.UnhandledException += (sender,args) => {var exception=args.ExceptionObject as Exception;if(exception!=null)LegacyApplicationErrors.Record("Приложение Win7","Критическая ошибка процесса",exception);};
+            System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (sender,args) => {LegacyApplicationErrors.Record("Приложение Win7","Фоновая операция",args.Exception);args.SetObserved();};
+        }
         protected override void OnStartup(StartupEventArgs e)
         {
             if (e.Args.Length == 1 && string.Equals(e.Args[0], "--service", StringComparison.OrdinalIgnoreCase))

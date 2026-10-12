@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Security.Principal;
 using System.Text;
@@ -31,7 +32,15 @@ namespace ITSeti.Maintenance.Win7
             var temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
-                File.WriteAllText(temporary, snapshot.ToJson(), new UTF8Encoding(false));
+                var serializer=new JavaScriptSerializer{MaxJsonLength=16*1024*1024};
+                var report=serializer.Deserialize<Dictionary<string,object>>(snapshot.ToJson());
+                var errors=LegacyApplicationErrors.Read().Take(20).Select(error=>new {error.Id,error.OccurredAt,error.Component,error.Operation,error.Summary,error.ExceptionType}).ToArray();
+                report["HasApplicationErrors"]=errors.Length>0;
+                report["ApplicationErrors"]=errors;
+                if(snapshot.Kind=="Постоянный мониторинг")report["DiagnosticIssues"]=snapshot.Findings.Select(finding=>new {
+                    Title=System.Text.RegularExpressions.Regex.Replace(finding,@"\s+[-+]?\d+(?:[.,]\d+)?\s*(?:°C|%|В|ГБ)\.?\s*$",""),Detail=finding,Severity="Critical"
+                }).ToArray();
+                File.WriteAllText(temporary, serializer.Serialize(report), new UTF8Encoding(false));
                 try { File.Move(temporary, target); }
                 catch (IOException) { if (!File.Exists(target)) throw; }
             }

@@ -47,3 +47,5 @@ ITSeti.Maintenance/Tools/CrystalDiskInfo9_6_3_Portable/DiskInfo.txt
 .vscode/
 *.user
 *.suo
+ITSeti.Maintenance/Vendor/HwInfoBridge/*.pdb
+ITSeti.Maintenance/Vendor/HwInfoBridge/*.json

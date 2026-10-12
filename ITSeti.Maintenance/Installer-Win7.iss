@@ -3,7 +3,7 @@
 [Setup]
 AppId={{9C83D41A-9753-4E64-8EC8-A9A324BD7D52}
 AppName=ИТ-Сети Обслуживание ПК (Windows 7 beta)
-AppVersion=2.3.3
+AppVersion=2.3.6
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance Win7
 DisableDirPage=yes
@@ -31,12 +31,10 @@ Source: "{#PackageRoot}\Tools\CrystalDiskInfo\*"; DestDir: "{app}\Tools\CrystalD
 Source: "{#PackageRoot}\Tools\CrystalDiskMark9\*"; DestDir: "{app}\Tools\CrystalDiskMark9"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PackageRoot}\Tools\DiskSpd\*"; DestDir: "{app}\Tools\DiskSpd"; Flags: ignoreversion
 Source: "{#PackageRoot}\Tools\HWiNFO\*"; DestDir: "{app}\Tools\HWiNFO"; Flags: ignoreversion
-Source: "Connect-Server.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\ИТ-Сети Обслуживание ПК (Windows 7)"; Filename: "{app}\ITSeti.Maintenance.Win7.Port.exe"
 Name: "{autodesktop}\ИТ-Сети Обслуживание ПК (Windows 7)"; Filename: "{app}\ITSeti.Maintenance.Win7.Port.exe"
-Name: "{autoprograms}\Подключить ПК к серверу ИТ-Сети"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-STA -NoProfile -ExecutionPolicy Bypass -File ""{app}\Connect-Server.ps1"""; IconFilename: "{app}\ITSeti.Maintenance.Win7.Port.exe"
 
 [Run]
 Filename: "{app}\ITSeti.Maintenance.Win7.Port.exe"; Description: "Запустить приложение"; Flags: nowait postinstall skipifsilent runasoriginaluser
@@ -130,7 +128,6 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ExitCode: Integer;
-  ConnectCode: Integer;
   ServiceParams: String;
 begin
   if CurStep = ssInstall then
@@ -165,12 +162,4 @@ begin
   ExitCode := -1;
   if not Exec(ExpandConstant('{app}\ITSeti.Maintenance.Win7.Port.exe'), '--register-smart-task', '', SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
     RaiseException('Не удалось зарегистрировать задачу SMART. Подробности: ' + ExpandConstant('{app}\SmartTaskSetup.error.txt'));
-  if not WizardSilent then
-  begin
-    ConnectCode := -1;
-    if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-      '-STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ExpandConstant('{app}\Connect-Server.ps1') + '" -SkipIfConnected',
-      '', SW_SHOWNORMAL, ewWaitUntilTerminated, ConnectCode) or (ConnectCode <> 0) then
-      MsgBox('Подключение к серверу не удалось открыть. Приложение установлено; подключить ПК можно позже через меню «Пуск».', mbInformation, MB_OK);
-  end;
 end;

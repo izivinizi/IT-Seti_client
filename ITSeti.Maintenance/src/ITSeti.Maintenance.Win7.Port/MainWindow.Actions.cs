@@ -22,15 +22,17 @@ namespace ITSeti.Maintenance.App
         private Win7Release availableUpdate;
         private string DiskInfoPath { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Tools", "CrystalDiskInfo", Environment.Is64BitOperatingSystem ? "DiskInfo64.exe" : "DiskInfo32.exe"); } }
         private string DiskMarkPath { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Tools", "CrystalDiskMark9", Environment.Is64BitOperatingSystem ? "DiskMark64.exe" : "DiskMark32.exe"); } }
+        private string HwInfoPath { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Tools", "HWiNFO", "HWiNFO32.exe"); } }
         private string TreeSizePath { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Tools", "TreeSize", "TreeSize.exe"); } }
         private string RepairLogPath { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSetiMaintenanceWin7", "sfc-last.txt"); } }
 
         private void PopulateTools()
         {
             MyTicketsButton.Visibility = Visibility.Collapsed;
+            SupportButton.Visibility = Visibility.Collapsed;
             UserCleanupButton.ToolTip = "Очищаются временные файлы, корзина, кэш эскизов, интернет-кэш и кэш Direct3D текущего пользователя; системные категории запускаются отдельно от SYSTEM.";
             UserCleanupHint.Text = "Профиль, эскизы, интернет- и Direct3D-кэш, корзина";
-            MaintenanceCleanupHint.Text = "Очищаются категории профиля и корзина текущего пользователя, затем поддерживаемые Windows категории оптимизации доставки, очистки обновлений и пакетов драйверов. Загрузки и профили браузеров не затрагиваются.";
+            MaintenanceCleanupHint.Text = "Очищаются категории профиля и корзина текущего пользователя, затем доступные Windows категории дампов, установочных файлов, обновлений и пакетов драйверов. Личные загрузки и профили браузеров не затрагиваются.";
             MaintenanceRepairHint.Text = "Доступна проверка системных файлов SFC. Автоматической перезагрузки нет.";
             SetupInstallSection.Visibility = Visibility.Collapsed;
             SetupComponentsList.ItemTemplate = (DataTemplate)FindResource("SoftwareAuditOnlyTemplate");
@@ -122,25 +124,23 @@ namespace ITSeti.Maintenance.App
             window.ShowDialog();
         }
 
-        private void OpenServerAssignment_Click(object sender, RoutedEventArgs e)
+        private async void OpenServerAssignment_Click(object sender, RoutedEventArgs e)
         {
-            var script = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Connect-Server.ps1");
-            if (!File.Exists(script)) { MessageBox.Show(this, "Скрипт подключения к серверу отсутствует."); return; }
             try
             {
-                Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
-                    "WindowsPowerShell", "v1.0", "powershell.exe"),
-                    "-STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + script + "\"")
-                { UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Hidden });
+                using (var enrollment = new Win7ServerEnrollmentClient())
+                    if (await enrollment.TryAutomaticEnrollmentAsync()) { if (current != null) Render(current); return; }
+                new Win7ServerEnrollmentDialog(this).ShowDialog();
+                if (current != null) Render(current);
             }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, "Не удалось открыть привязку ПК"); }
         }
 
         private void ShowAllIssues_Click(object sender, RoutedEventArgs e) { }
         private void OpenLowSpaceScan_Click(object sender, RoutedEventArgs e) { LaunchTreeSize_Click(sender, e); }
+        private void OpenEngineerLowSpaceScan_Click(object sender, RoutedEventArgs e) { LaunchTreeSize_Click(sender, e); }
         private async void RunUserFull_Click(object sender, RoutedEventArgs e) { await CheckAsync(true); }
         private void StopFullCheck_Click(object sender, RoutedEventArgs e) { StopCheck(); }
-        private async void RunQuickFull_Click(object sender, RoutedEventArgs e) { await CheckAsync(false); }
         private async void RunFull_Click(object sender, RoutedEventArgs e) { await CheckAsync(true); }
         private async void RunCleanup_Click(object sender, RoutedEventArgs e)
         {
@@ -164,18 +164,15 @@ namespace ITSeti.Maintenance.App
 
         private void UpdateDebug()
         {
-            view.Set("DebugSource", "Локальный отчёт Windows 7");
-            view.Set("DebugStage", current == null ? "Проверка не выполнена" : current.CheckedAt);
-            view.Set("DebugErrorLine", current == null || current.Unavailable == null ? "" : string.Join("; ", current.Unavailable));
-            view.Set("DebugSteps", Rows(current == null ? new Win7Row[0] : new[] {
-                new Win7Row { Name = "Диагностика", State = "Завершена", Detail = current.CheckedAt },
-                new Win7Row { Name = "Загрузка CPU", State = CpuValue(current.CpuPercent), Detail = current.CpuSource ?? "Источник не указан в старом отчёте" },
-                new Win7Row { Name = "SMART", State = current.SmartDisks.Count > 0 ? "Завершён" : "Недоступен", Detail = current.SmartSummary },
-                new Win7Row { Name = "Тест диска", State = current.Benchmark == null ? "Не запускался" : current.Benchmark.State, Detail = current.Benchmark == null ? "" : current.Benchmark.Error } }));
+            var errors=LegacyApplicationErrors.Read();
+            view.Set("DebugSource",errors.Length==0?"Ошибок приложения не зарегистрировано":"Зарегистрировано ошибок: "+errors.Length);
+            view.Set("DebugStage",errors.Length==0?"—":errors[0].OccurredAt);
+            view.Set("DebugErrorLine",errors.Length==0?"":errors[0].Summary);
+            view.Set("DebugSteps",Rows(errors.Select(error=>new Win7Row{Name=error.OccurredAt+" · "+error.Component,State=error.Operation,Detail=error.Summary+"\nКод: "+error.Id+"\n"+error.TechnicalDetails})));
             var files = new[] { Path.Combine(dataPath, "latest.json"), Path.Combine(dataPath, "latest.txt"),
                 Path.Combine(ScheduledCheckRunner.ResultsRoot, "latest.json"),
                 Path.Combine(ScheduledCheckRunner.ResultsRoot, "scheduled-error.txt"),
-                Path.Combine(ScheduledCheckRunner.ResultsRoot, "server-upload-error.txt"), RepairLogPath };
+                Path.Combine(ScheduledCheckRunner.ResultsRoot, "server-upload-error.txt"), LegacyApplicationErrors.PathName, RepairLogPath };
             view.Set("DebugFiles", Rows(files.Where(File.Exists).Select(x => new Win7Row { Name = Path.GetFileName(x), Path = x })));
             view.Set("CanOpenDebugDirectory", Directory.Exists(dataPath));
         }
@@ -191,6 +188,7 @@ namespace ITSeti.Maintenance.App
 
         private async void LaunchDiskInfo_Click(object sender, RoutedEventArgs e) { await LaunchUtilityAsync("CrystalDiskInfo", DiskInfoPath); }
         private async void LaunchDiskMark_Click(object sender, RoutedEventArgs e) { await LaunchUtilityAsync("CrystalDiskMark", DiskMarkPath); }
+        private async void LaunchHwInfo_Click(object sender, RoutedEventArgs e) { await LaunchUtilityAsync("HWiNFO", HwInfoPath); }
         private async void LaunchTreeSize_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -362,35 +360,11 @@ namespace ITSeti.Maintenance.App
 
         private void ShowAdminPrompt_Click(object sender, RoutedEventArgs e)
         {
-            if (new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))
-            {
-                new MainWindow(true).Show();
-                return;
-            }
-            AdminAccount.ItemsSource = null;
-            AdminAccount.Text = "";
             AdminPassword.Clear();
             AdminVisiblePassword.Clear();
             AdminError.Visibility = Visibility.Collapsed;
             AdminUnlock.Visibility = Visibility.Visible;
             AdminPassword.Focus();
-            PopulateAdministratorCandidatesAsync();
-        }
-        private async void PopulateAdministratorCandidatesAsync()
-        {
-            try
-            {
-                var candidates = await Task.Run(LegacyDiagnostics.FindAdministratorCandidates);
-                if (AdminUnlock.Visibility != Visibility.Visible) return;
-                var typed = AdminAccount.Text;
-                AdminAccount.ItemsSource = candidates;
-                AdminAccount.Text = string.IsNullOrWhiteSpace(typed) ? candidates.FirstOrDefault() ?? "" : typed;
-            }
-            catch (Exception)
-            {
-                if (AdminUnlock.Visibility == Visibility.Visible)
-                    ShowAdminError("Не удалось получить список администраторов. Укажите учётную запись вручную.");
-            }
         }
         private void CancelAdmin_Click(object sender, RoutedEventArgs e) { AdminUnlock.Visibility = Visibility.Collapsed; }
         private void ExitAdmin_Click(object sender, RoutedEventArgs e) { Close(); }
@@ -413,19 +387,21 @@ namespace ITSeti.Maintenance.App
                 AdminVisiblePassword.Focus();
             }
         }
-        private async void UnlockAdmin_Click(object sender, RoutedEventArgs e)
+        private void UnlockAdmin_Click(object sender, RoutedEventArgs e)
         {
-            var account = AdminAccount.Text.Trim();
             var password = AdminVisiblePassword.Visibility == Visibility.Visible ? AdminVisiblePassword.Text : AdminPassword.Password;
-            if (account.Length == 0 || password.Length == 0) { ShowAdminError("Укажите учётную запись и пароль."); return; }
-            UnlockButton.IsEnabled = false;
-            try
+            AdminPassword.Clear();
+            AdminVisiblePassword.Clear();
+            if (!string.Equals(password, "itseti", StringComparison.Ordinal))
             {
-                await Task.Run(() => EngineerLauncher.Start(account, password, cleanupUserSid));
-                AdminUnlock.Visibility = Visibility.Collapsed;
+                ShowAdminError("Неверный пароль инженера.");
+                AdminPassword.Focus();
+                return;
             }
-            catch (Exception ex) { ShowAdminError(ex.Message); }
-            finally { UnlockButton.IsEnabled = true; AdminPassword.Clear(); AdminVisiblePassword.Clear(); }
+            engineer = true;
+            SetEngineerMode(true);
+            RefreshSoftware();
+            if (current != null) Render(current);
         }
         private void ShowAdminError(string text) { AdminError.Text = text; AdminError.Visibility = Visibility.Visible; }
     }

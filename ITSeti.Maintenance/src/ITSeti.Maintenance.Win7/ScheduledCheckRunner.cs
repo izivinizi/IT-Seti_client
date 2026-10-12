@@ -13,7 +13,7 @@ namespace ITSeti.Maintenance.Win7
         internal static readonly string ResultsRoot = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSetiMaintenanceWin7");
 
-        public static int RunWorker() { return RunWorker(false); }
+        public static int RunWorker() { return RunWorker(true); }
         public static int RunFullWorker() { return RunWorker(true); }
 
         private static int RunWorker(bool full)
@@ -26,7 +26,14 @@ namespace ITSeti.Maintenance.Win7
                 var root = new DirectoryInfo(ResultsRoot);
                 if (!root.Exists || (root.Attributes & FileAttributes.ReparsePoint) != 0)
                     throw new InvalidOperationException("Каталог результатов проверки не готов.");
-                if (full && !IsFullDue(DateTime.UtcNow, ResultsRoot)) return 0;
+                if(full)
+                {
+                    var probe=Path.Combine(ResultsRoot,"schedule-self-test.request");
+                    if(File.Exists(probe)){var token=File.ReadAllText(probe).Trim();Guid value;if(!Guid.TryParseExact(token,"N",out value))throw new InvalidDataException("Invalid scheduled self-test token.");WriteAtomically(Path.Combine(ResultsRoot,"schedule-self-test.result"),token);File.Delete(probe);return 0;}
+                    WriteAtomically(Path.Combine(ResultsRoot,"scheduled-last-invoked.txt"),DateTimeOffset.UtcNow.ToString("O"));
+                    if(DateTime.Now.Hour>=8 || !IsFullDue(DateTime.UtcNow,ResultsRoot))return 0;
+                    WriteAtomically(Path.Combine(ResultsRoot,"scheduled-last-started.txt"),DateTimeOffset.UtcNow.ToString("O"));
+                }
 
                 var snapshot = LegacyDiagnostics.Collect(full, scheduled: true);
                 var errorPath = Path.Combine(ResultsRoot, "scheduled-error.txt");
@@ -70,10 +77,12 @@ namespace ITSeti.Maintenance.Win7
                 ServerReportUploader.Queue(snapshot);
                 ServerReportUploader.Trigger();
                 QueueApplicationUpdate();
+                if(full)WriteAtomically(Path.Combine(ResultsRoot,"scheduled-last-success.txt"),DateTimeOffset.UtcNow.ToString("O"));
                 return 0;
             }
             catch (Exception ex)
             {
+                LegacyApplicationErrors.Record("Плановая проверка Win7","Автоматическая проверка",ex);
                 try { File.WriteAllText(Path.Combine(ResultsRoot, "scheduled-error.txt"), ex.ToString(), new UTF8Encoding(false)); }
                 catch (Exception) { }
                 if (full)

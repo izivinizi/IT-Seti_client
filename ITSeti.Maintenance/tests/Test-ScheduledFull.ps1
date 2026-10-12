@@ -1,6 +1,8 @@
 param([string]$Root = (Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference='Stop'
 . (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\ScheduledFull.ps1')
+$installed=Get-Content (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCheck.ps1') -Raw
+if(!$installed.Contains('elseif(!$SmartOnly)')){throw 'Daily SMART must not reset the full-check schedule.'}
 $testRoot=Join-Path $env:TEMP ('ITSeti-scheduled-full-'+[guid]::NewGuid().ToString('N'))
 $runs=Join-Path $testRoot 'Runs'
 New-Item -ItemType Directory -Path $runs -Force | Out-Null

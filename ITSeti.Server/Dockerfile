@@ -1,5 +1,6 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
+COPY ITSeti.Maintenance/Directory.Build.props ITSeti.Maintenance/
 COPY ITSeti.Server/ITSeti.Server.csproj ITSeti.Server/
 COPY ITSeti.Maintenance/src/ITSeti.Maintenance.Core/ITSeti.Maintenance.Core.csproj ITSeti.Maintenance/src/ITSeti.Maintenance.Core/
 RUN dotnet restore ITSeti.Server/ITSeti.Server.csproj

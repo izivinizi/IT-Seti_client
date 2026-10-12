@@ -20,7 +20,6 @@ if($service){
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-Full' /F | Out-Null
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-QuickFull' /F | Out-Null
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-AutoQuick' /F | Out-Null
-& schtasks.exe /Delete /TN 'ITSeti-Maintenance-Temperature' /F | Out-Null
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-FullRepair' /F | Out-Null
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-Repair' /F | Out-Null
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-Cleanup' /F | Out-Null
@@ -33,6 +32,9 @@ if($service){
 & schtasks.exe /Delete /TN 'ITSeti-Maintenance-Catalog' /F | Out-Null
 Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'ITSeti-Maintenance-Quick' -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'ITSeti-Maintenance-Status' -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'ITSeti-Maintenance-Tickets' -ErrorAction SilentlyContinue
+$notifierProcesses=Get-Process -Name 'ITSeti.Maintenance.TicketNotifier' -ErrorAction SilentlyContinue
+if($notifierProcesses){$notifierProcesses | Stop-Process -Force -ErrorAction SilentlyContinue}
 $data=Join-Path $env:ProgramData 'ITSeti\Maintenance'
 Remove-Item -LiteralPath (Join-Path $data 'installed.flag') -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $data 'Tools') -Recurse -Force -ErrorAction SilentlyContinue

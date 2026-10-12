@@ -15,16 +15,17 @@ namespace ITSeti.Maintenance.Win7
             Directory.CreateDirectory(directory);
             var path = Path.Combine(directory, DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + ".json");
             File.WriteAllText(path, snapshot.ToJson(), new UTF8Encoding(false));
-            foreach (var old in Directory.GetFiles(directory, "*.json").OrderByDescending(x => x).Skip(30))
+            foreach (var old in Directory.GetFiles(directory, "*.json").OrderByDescending(x => x).Skip(500))
                 File.Delete(old);
         }
 
-        public static List<LegacySnapshot> Load(string root)
+        public static List<LegacySnapshot> Load(string root, int maximumCount = 30)
         {
             var directory = Path.Combine(root, "History");
             if (!Directory.Exists(directory)) return new List<LegacySnapshot>();
             var results = new List<LegacySnapshot>();
-            foreach (var path in Directory.GetFiles(directory, "*.json").OrderByDescending(x => x).Take(30))
+            var count = Math.Max(1, Math.Min(maximumCount, 500));
+            foreach (var path in Directory.GetFiles(directory, "*.json").OrderByDescending(x => x).Take(count))
             {
                 try
                 {

@@ -28,6 +28,17 @@ public static class Database
                 updated_at timestamptz NOT NULL DEFAULT now()
             );
             CREATE INDEX IF NOT EXISTS ix_service_objects_company ON service_objects(company_id,name);
+            CREATE TABLE IF NOT EXISTS okdesk_equipment (
+                id bigint PRIMARY KEY,
+                inventory_number text,
+                normalized_inventory_number text,
+                serial_number text,
+                company_id bigint NOT NULL,
+                service_object_id bigint,
+                name text,
+                updated_at timestamptz NOT NULL DEFAULT now()
+            );
+            CREATE INDEX IF NOT EXISTS ix_okdesk_equipment_inventory ON okdesk_equipment(normalized_inventory_number);
             CREATE TABLE IF NOT EXISTS devices (
                 id uuid PRIMARY KEY,
                 computer_name text NOT NULL,
@@ -49,6 +60,7 @@ public static class Database
             ALTER TABLE devices ADD COLUMN IF NOT EXISTS support_key_hash text;
             ALTER TABLE devices ADD COLUMN IF NOT EXISTS hardware_fingerprint text;
             ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_ip inet;
+            ALTER TABLE devices ADD COLUMN IF NOT EXISTS tickets_blocked boolean NOT NULL DEFAULT false;
             CREATE UNIQUE INDEX IF NOT EXISTS ix_devices_support_key ON devices(support_key_hash) WHERE support_key_hash IS NOT NULL;
             CREATE INDEX IF NOT EXISTS ix_devices_last_ip_seen ON devices(last_ip,last_seen_at DESC) WHERE last_ip IS NOT NULL;
             CREATE TABLE IF NOT EXISTS ticket_requests (

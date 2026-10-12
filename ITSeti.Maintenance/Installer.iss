@@ -3,7 +3,7 @@
 [Setup]
 AppId={{CFA7B53D-16A9-4D77-9D82-EE68369AB185}
 AppName=ИТ-Сети Обслуживание ПК
-AppVersion=2.3.3
+AppVersion=2.3.6
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance
 DefaultGroupName=ИТ-Сети
@@ -29,19 +29,18 @@ Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
 [Files]
 Source: "{#PackageRoot}\App\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PackageRoot}\Service\*"; DestDir: "{app}\Service"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PackageRoot}\Notifier\*"; DestDir: "{app}\Notifier"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PackageRoot}\Tools\*"; DestDir: "{app}\Tools"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "Install-Maintenance.ps1"; DestDir: "{tmp}\ITSeti-Package"; Flags: ignoreversion deleteafterinstall
 Source: "Uninstall-Maintenance.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Uninstall-Options.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "OrganizationUninstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
-Source: "Connect-Server.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Uninstall-ITSeti.cmd"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\ИТ-Сети Обслуживание ПК"; Filename: "{app}\ITSeti.Maintenance.exe"
 Name: "{autodesktop}\ИТ-Сети Обслуживание ПК"; Filename: "{app}\ITSeti.Maintenance.exe"
 Name: "{autoprograms}\Удалить ИТ-Сети"; Filename: "{app}\Uninstall-ITSeti.cmd"; IconFilename: "{app}\ITSeti.Maintenance.exe"
-Name: "{autoprograms}\Подключить ПК к серверу ИТ-Сети"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-STA -NoProfile -ExecutionPolicy Bypass -File ""{app}\Connect-Server.ps1"""; IconFilename: "{app}\ITSeti.Maintenance.exe"
 
 [Run]
 Filename: "{app}\ITSeti.Maintenance.exe"; Description: "Запустить ИТ-Сети Обслуживание ПК"; Flags: nowait postinstall skipifsilent runasoriginaluser
@@ -139,7 +138,6 @@ var
   Code: Integer;
   MaintenanceResult: String;
   MaintenanceText: AnsiString;
-  ConnectCode: Integer;
 begin
   if CurStep = ssInstall then
   begin
@@ -166,15 +164,6 @@ begin
       if not LoadStringFromFile(MaintenanceResult, MaintenanceText) then
         MaintenanceText := 'PowerShell не записал подробности. Проверьте C:\ProgramData\ITSeti\Maintenance\install.log.';
       RaiseException('Установка приложения не завершена. Код: ' + IntToStr(Code) + #13#10 + MaintenanceText);
-    end;
-    if not WizardSilent then
-    begin
-      WizardForm.StatusLabel.Caption := 'Подключение компьютера к серверу...';
-      ConnectCode := -1;
-      if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-        '-STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ExpandConstant('{app}\Connect-Server.ps1') + '" -SkipIfConnected',
-        '', SW_SHOWNORMAL, ewWaitUntilTerminated, ConnectCode) or (ConnectCode <> 0) then
-        MsgBox('Не удалось открыть подключение к серверу. Локальная установка завершена; подключить ПК можно позже через меню «Пуск».', mbInformation, MB_OK);
     end;
     WizardForm.ProgressGauge.Style := npbstNormal;
     WizardForm.ProgressGauge.Position := WizardForm.ProgressGauge.Max;

@@ -1,13 +1,13 @@
 using System.ComponentModel;
-using System.Diagnostics;
 using System.Security;
 using System.Text.Json;
 
 namespace ITSeti.Maintenance.Infrastructure;
 
+public sealed record CpuTemperatureReading(double? TemperatureC, string Status, DateTimeOffset? CapturedAtUtc = null);
+
 public static class CpuTemperatureCache
 {
-    public const string TaskName = "ITSeti-Maintenance-Temperature";
     public static string InstalledPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
         "ITSeti", "Maintenance", "cpu-temperature.json");
@@ -67,23 +67,9 @@ public static class CpuTemperatureCache
         {
             var service = await MaintenanceServiceClient.StartAsync(MaintenanceServiceOperation.ProbeTemperature, cancellationToken);
             if (service.Connected) return service.Accepted;
-            var scheduler = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "schtasks.exe");
-            using var process = Process.Start(new ProcessStartInfo(scheduler)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                ArgumentList = { "/Run", "/TN", TaskName }
-            });
-            if (process is null) return false;
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(5));
-            try { await process.WaitForExitAsync(timeout.Token); }
-            catch (OperationCanceledException)
-            {
-                try { process.Kill(); } catch (InvalidOperationException) { }
-                return false;
-            }
-            return process.ExitCode == 0;
+            // Sensor polling belongs to the SYSTEM service. Do not launch a
+            // second elevated reader or a scheduled PowerShell fallback.
+            return false;
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException
             or UnauthorizedAccessException or SecurityException or ArgumentException or NotSupportedException)

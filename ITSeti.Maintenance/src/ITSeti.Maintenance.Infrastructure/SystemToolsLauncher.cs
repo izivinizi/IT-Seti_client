@@ -20,8 +20,8 @@ public static class SystemToolsLauncher
         var tool = Resolve(key);
         if (tool.Shell)
         {
-            var explorer = Path.Combine(System, "explorer.exe");
-            return new(explorer, [tool.FileName], System);
+            var explorer = Path.Combine(Windows, "explorer.exe");
+            return new(explorer, [tool.FileName], Windows);
         }
         return new(tool.FileName, tool.Arguments, Path.GetDirectoryName(tool.FileName)!);
     }
@@ -29,6 +29,8 @@ public static class SystemToolsLauncher
     public static Process? Launch(string key)
     {
         var tool = Resolve(key);
+        if (tool.Shell)
+            return Process.Start(new ProcessStartInfo(tool.FileName) { UseShellExecute = true });
         if (!File.Exists(tool.FileName) && !tool.Shell)
             throw new FileNotFoundException("Системное приложение недоступно в этой редакции Windows.", tool.FileName);
 
@@ -66,8 +68,6 @@ public static class SystemToolsLauncher
 
     private static Tool Terminal()
     {
-        var alias = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "wt.exe");
-        if (File.Exists(alias)) return new("terminal", "Терминал", "\uE756", alias, ["-w", "new"]);
         var powershell = Path.Combine(Windows, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
         return new("terminal", "Терминал PowerShell", "\uE756", powershell, ["-NoLogo", "-NoExit"]);
     }

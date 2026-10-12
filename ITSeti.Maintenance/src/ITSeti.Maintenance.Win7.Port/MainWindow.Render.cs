@@ -67,6 +67,7 @@ namespace ITSeti.Maintenance.App
             view.Set("UserCoverage", userUnavailable.Count == 0 ? "" : "Недоступные показатели: " + string.Join("; ", userUnavailable));
             view.Set("HasMoreUserIssues", false);
             view.Set("HasLowDiskSpace", findings.Any(x => x.IndexOf("места", StringComparison.OrdinalIgnoreCase) >= 0));
+            view.Set("HasEngineerLowDiskSpace", System.IO.File.Exists(TreeSizePath) && findings.Any(x => x.IndexOf("места", StringComparison.OrdinalIgnoreCase) >= 0));
             view.Set("UserStatus", findings.Count > 0 ? "Проверка завершена. Есть замечания: " + findings.Count : userUnavailable.Count > 0 ? "Проверка завершена. Часть показателей недоступна." : "Проверка завершена. Замечаний нет.");
             view.Set("Status", "Проверка от " + (s.CheckedAt ?? "") + " · " + (s.Kind ?? ""));
             view.Set("UserLiveSummary", "");
@@ -113,7 +114,8 @@ namespace ITSeti.Maintenance.App
             view.Set("NetworkAdapters", Rows((s.Network ?? new List<LegacyNetworkAdapter>()).Select(x => new Win7Row { Name = x.Name, Type = x.Kind, Status = x.Status, LinkSpeed = x.Speed, Addresses = x.Addresses })));
             view.Set("Processes", Rows((s.Processes ?? new List<LegacyProcess>()).Select(x => new Win7Row { Name = x.Name,
                 Description = x.Path == null || x.Path == "нет доступа" ? "Нет доступа" : System.IO.Path.GetFileName(x.Path),
-                Publisher = x.Signer ?? "—", Signature = x.Signature ?? "Не проверена" })));
+                Publisher = x.Signer ?? "—", Signature = x.Signature ?? "Не проверена",
+                CanTrustPublisher = string.Equals(x.Signature, "Valid", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(x.Signer) })));
             view.Set("ProcessStatus", "Процессов: " + (s.Processes == null ? 0 : s.Processes.Count));
             var progress = view.Get<ObservableCollection<Win7Row>>("CheckProgressEntries");
             if (progress.Count == 0)

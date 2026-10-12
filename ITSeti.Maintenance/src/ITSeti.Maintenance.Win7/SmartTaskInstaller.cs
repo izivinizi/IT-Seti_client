@@ -37,6 +37,8 @@ namespace ITSeti.Maintenance.Win7
             queueAcl.AddAccessRule(new FileSystemAccessRule(admins, FileSystemRights.FullControl, children, PropagationFlags.None, AccessControlType.Allow));
             queueAcl.AddAccessRule(new FileSystemAccessRule(users, FileSystemRights.Modify, children, PropagationFlags.None, AccessControlType.Allow));
             new DirectoryInfo(reportQueue).SetAccessControl(queueAcl);
+            Directory.CreateDirectory(LegacyApplicationErrors.Root);
+            new DirectoryInfo(LegacyApplicationErrors.Root).SetAccessControl(queueAcl);
             foreach (var name in new[] { "smart", "benchmark", "cleanup-system" })
             {
                 foreach (var suffix in new[] { "-cancel.txt", "-stopped.txt" })
@@ -65,15 +67,25 @@ namespace ITSeti.Maintenance.Win7
             service.Connect();
             dynamic root = service.GetFolder("\\");
             if (!File.Exists(Path.Combine(folder,"full-check-baseline.txt"))) ScheduledCheckRunner.SetFullBaseline(DateTime.UtcNow);
+            try { root.DeleteTask(ScheduledCheckRunner.TaskName, 0); }
+            catch (Exception ex) when (IsMissingTask(ex)) { }
             RegisterTask(service, root, SmartTaskRunner.TaskName, "--collect-smart", "PT1M", "Сбор SMART");
             RegisterTask(service, root, SmartTaskRunner.ScheduledTaskName, "--collect-smart-scheduled", "PT1M", "Плановый сбор SMART");
             RegisterTask(service, root, BenchmarkTaskRunner.TaskName, "--collect-benchmark", "PT5M", "Тест системного диска DiskSpd");
             RegisterTask(service, root, BenchmarkTaskRunner.ScheduledTaskName, "--collect-benchmark-scheduled", "PT5M", "Плановый тест системного диска DiskSpd");
             RegisterTask(service, root, SystemCleanupTaskRunner.TaskName, "--cleanup-system", "PT30M", "Очистка системных обновлений и пакетов драйверов");
-            RegisterTask(service, root, ScheduledCheckRunner.TaskName, "--scheduled-check", "PT30M", "Плановая быстрая проверка раз в 14 дней", 14);
-            RegisterTask(service, root, ScheduledCheckRunner.FullTaskName, "--scheduled-full", "PT2H", "Плановая полная проверка и SFC раз в 60 дней", 1);
+            RegisterTask(service, root, ScheduledCheckRunner.FullTaskName, "--scheduled-full", "PT2H", "Единая плановая полная проверка и SFC раз в 60 дней", 1);
             RegisterTask(service, root, "ITSeti-Maintenance-Win7-Upload", "--upload-reports", "PT2M", "Отправка диагностических отчётов на сервер");
             RegisterTask(service, root, "ITSeti-Maintenance-Win7-Update", "--update-application", "PT20M", "Фоновая проверка и установка обновления приложения");
+            var probeToken=Guid.NewGuid().ToString("N");
+            var probeRequest=Path.Combine(folder,"schedule-self-test.request");var probeResult=Path.Combine(folder,"schedule-self-test.result");
+            try {
+                File.WriteAllText(probeRequest,probeToken);
+                root.GetTask(ScheduledCheckRunner.FullTaskName).Run(null);
+                var passed=false;
+                for(var attempt=0;attempt<120;attempt++){if(File.Exists(probeResult)&&File.ReadAllText(probeResult).Trim()==probeToken){passed=true;break;}System.Threading.Thread.Sleep(500);}
+                if(!passed)throw new InvalidOperationException("Плановая задача Windows 7 не прошла контрольный запуск SYSTEM.");
+            }finally{if(File.Exists(probeRequest))File.Delete(probeRequest);}
             var setupError = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "SmartTaskSetup.error.txt");
             if (File.Exists(setupError)) File.Delete(setupError);
         }
@@ -91,7 +103,7 @@ namespace ITSeti.Maintenance.Win7
             task.Settings.StopIfGoingOnBatteries = false;
             if (intervalDays > 0)
             {
-                task.Settings.StartWhenAvailable = name != ScheduledCheckRunner.FullTaskName;
+                task.Settings.StartWhenAvailable = true;
                 var start = DateTime.Today.AddDays(1).AddHours(3).ToString("yyyy-MM-ddTHH:mm:ss");
                 try
                 {

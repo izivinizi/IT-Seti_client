@@ -81,7 +81,7 @@ builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>
 {
     options.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor |
         Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
-    options.KnownNetworks.Clear();
+    options.KnownIPNetworks.Clear();
     options.KnownProxies.Clear();
     options.ForwardLimit = 1;
 });
@@ -179,11 +179,17 @@ app.MapPost("/api/v1/catalog", async (HttpRequest request, NpgsqlDataSource db, 
     return Results.Ok(new { companies, sites });
 }).RequireRateLimiting("registration");
 
-app.MapPost("/api/v1/enroll", async (HttpRequest request, EnrollRequest body, NpgsqlDataSource db, IConfiguration configuration, EnrollmentDiagnostics diagnostics) =>
+app.MapGet("/api/v1/catalog", async (NpgsqlDataSource db) =>
 {
-    if (!RegistrationPassword.Verify(request, configuration))
-        return diagnostics.Reject(request.HttpContext, 401, "registration_password_rejected", "Неверный пароль подключения.");
-    if (string.IsNullOrWhiteSpace(body.ComputerName) || body.CompanyId <= 0 || body.SiteId is <= 0)
+    await using var connection = await db.OpenConnectionAsync();
+    var companies = await Database.ReadCatalogAsync(connection, "SELECT id,name,active FROM companies WHERE active ORDER BY name", "company");
+    var sites = await Database.ReadCatalogAsync(connection, "SELECT id,name,address,company_id AS parent_id FROM service_objects WHERE active ORDER BY name", "site");
+    return Results.Ok(new { companies, sites });
+}).RequireRateLimiting("registration");
+
+app.MapPost("/api/v1/enroll", async (HttpRequest request, EnrollRequest body, NpgsqlDataSource db, EnrollmentDiagnostics diagnostics) =>
+{
+    if (string.IsNullOrWhiteSpace(body.ComputerName) || body.CompanyId <= 0)
         return diagnostics.Reject(request.HttpContext, 400, "invalid_assignment_fields", "Укажите имя компьютера и компанию.", body);
     var fingerprint = DeviceIdentity.CreateFingerprint(body.SerialNumber, body.HardwareUuid);
     if (fingerprint is null)
@@ -246,7 +252,7 @@ app.MapPost("/api/v1/auto-enroll", async (HttpRequest request, AutoEnrollRequest
         return diagnostics.Reject(request.HttpContext, 400, "automatic_hardware_identity_unusable",
             "Для автоматического подключения нужен серийный номер или аппаратный UUID.");
     var clientIp = AutomaticIpEnrollment.Normalize(request.HttpContext.Connection.RemoteIpAddress);
-    if (clientIp is null) return Results.NotFound();
+    var normalizedInventory = InventoryNumbers.Normalize(body.InventoryNumber);
 
     await using var connection = await db.OpenConnectionAsync(request.HttpContext.RequestAborted);
     await using var transaction = await connection.BeginTransactionAsync(request.HttpContext.RequestAborted);
@@ -265,13 +271,18 @@ app.MapPost("/api/v1/auto-enroll", async (HttpRequest request, AutoEnrollRequest
         {
             existingId = reader.GetGuid(0);
             var previousIp = reader.IsDBNull(3) ? null : reader.GetString(3);
-            if (!AutomaticIpEnrollment.CanReuseExisting(previousIp, clientIp))
+            if (clientIp is null || !AutomaticIpEnrollment.CanReuseExisting(previousIp, clientIp))
                 return Results.Conflict(new { error = "Адрес компьютера изменился. Подтвердите подключение паролем." });
             assignment = new(reader.GetInt64(1), reader.IsDBNull(2) ? null : reader.GetInt64(2));
         }
     }
+    if (assignment is null && normalizedInventory is not null)
+        assignment = await InventoryAssignmentResolver.ResolveAsync(connection, normalizedInventory,
+            request.HttpContext.RequestAborted, transaction);
     if (assignment is null)
     {
+        if (clientIp is null)
+            return Results.Conflict(new { error = "Для инвентарного номера не найдена однозначная привязка, а IP определить не удалось. Выберите компанию и объект." });
         var candidates = new List<IpAssignment>();
         await using var infer = new NpgsqlCommand("""
             SELECT DISTINCT d.company_id,d.service_object_id
@@ -296,6 +307,8 @@ app.MapPost("/api/v1/auto-enroll", async (HttpRequest request, AutoEnrollRequest
     var affected = 0;
     if (existingId.HasValue)
     {
+        if (clientIp is null)
+            return Results.Conflict(new { error = "Для повторного подключения требуется определить текущий IP-адрес." });
         await using var update = new NpgsqlCommand("""
             UPDATE devices SET computer_name=@name,
               serial_number=COALESCE(NULLIF(@serial,''),serial_number),inventory_number=@inventory,
@@ -328,7 +341,7 @@ app.MapPost("/api/v1/auto-enroll", async (HttpRequest request, AutoEnrollRequest
         insert.Parameters.Add("site", NpgsqlDbType.Bigint).Value = (object?)assignment.SiteId ?? DBNull.Value;
         insert.Parameters.AddWithValue("key", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))));
         insert.Parameters.AddWithValue("support", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(supportKey))));
-        insert.Parameters.AddWithValue("ip", clientIp);
+        insert.Parameters.Add("ip", NpgsqlDbType.Text).Value = (object?)clientIp ?? DBNull.Value;
         affected = await insert.ExecuteNonQueryAsync(request.HttpContext.RequestAborted);
     }
     if (affected != 1)
@@ -354,7 +367,7 @@ app.MapPost("/api/v1/support-key", async (HttpRequest request, NpgsqlDataSource 
 
 app.MapGet("/api/v1/assignment", async (HttpRequest request, NpgsqlDataSource db) =>
 {
-    if (!await DeviceKeys.AuthenticateSupportAsync(request, db) ||
+    if (!await DeviceKeys.AuthenticateAsync(request, db) ||
         !Guid.TryParse(request.Headers[DeviceKeys.IdHeader].ToString(), out var deviceId)) return Results.Unauthorized();
     await using var connection = await db.OpenConnectionAsync();
     await using var command = new NpgsqlCommand("""
@@ -373,8 +386,8 @@ app.MapPut("/api/v1/assignment", async (HttpRequest request, UpdateAssignmentReq
 {
     if (!await DeviceKeys.AuthenticateAsync(request, db) ||
         !Guid.TryParse(request.Headers[DeviceKeys.IdHeader].ToString(), out var deviceId)) return Results.Unauthorized();
-    if (body.CompanyId <= 0 || body.SiteId is <= 0)
-        return diagnostics.Reject(request.HttpContext, 400, "invalid_assignment_fields", "Выберите компанию и объект из списка.");
+    if (body.CompanyId <= 0)
+        return diagnostics.Reject(request.HttpContext, 400, "invalid_assignment_fields", "Выберите компанию из списка.");
     await using var connection = await db.OpenConnectionAsync();
     await using var command = new NpgsqlCommand("""
         UPDATE devices SET company_id=@company,service_object_id=@site,inventory_number=@inventory,
@@ -390,6 +403,53 @@ app.MapPut("/api/v1/assignment", async (HttpRequest request, UpdateAssignmentReq
         (object?)AutomaticIpEnrollment.Normalize(request.HttpContext.Connection.RemoteIpAddress) ?? DBNull.Value;
     return await command.ExecuteNonQueryAsync() == 1 ? Results.Ok(new { updated = true })
         : diagnostics.Reject(request.HttpContext, 400, "company_site_missing_inactive_or_mismatch", "Компания или объект недоступны.");
+});
+
+app.MapPost("/api/v1/assignment/resolve", async (HttpRequest request, ResolveAssignmentRequest body, NpgsqlDataSource db) =>
+{
+    if (!await DeviceKeys.AuthenticateAsync(request, db) ||
+        !Guid.TryParse(request.Headers[DeviceKeys.IdHeader].ToString(), out var deviceId)) return Results.Unauthorized();
+    await using var connection = await db.OpenConnectionAsync(request.HttpContext.RequestAborted);
+    var inventory = InventoryNumbers.Normalize(body.InventoryNumber);
+    IpAssignment? assignment = inventory is null ? null : await InventoryAssignmentResolver.ResolveAsync(
+        connection, inventory, request.HttpContext.RequestAborted);
+    var matchedBy = assignment is not null ? "inventory" : null;
+    var ip = AutomaticIpEnrollment.Normalize(request.HttpContext.Connection.RemoteIpAddress);
+    if (assignment is null && ip is not null)
+    {
+        var candidates = new List<IpAssignment>();
+        await using var infer = new NpgsqlCommand("""
+            SELECT DISTINCT company_id,service_object_id FROM devices
+            WHERE id<>@device AND last_ip=@ip::inet AND last_seen_at>=now()-interval '120 days'
+            LIMIT 2
+            """, connection);
+        infer.Parameters.AddWithValue("device", deviceId);
+        infer.Parameters.AddWithValue("ip", ip);
+        await using var reader = await infer.ExecuteReaderAsync(request.HttpContext.RequestAborted);
+        while (await reader.ReadAsync(request.HttpContext.RequestAborted))
+            candidates.Add(new(reader.GetInt64(0), reader.IsDBNull(1) ? null : reader.GetInt64(1)));
+        assignment = AutomaticIpEnrollment.ResolveUnique(candidates);
+        if (assignment is not null) matchedBy = "ip";
+    }
+    if (assignment is null)
+    {
+        await using var saveInventory = new NpgsqlCommand("UPDATE devices SET inventory_number=@inventory WHERE id=@id", connection);
+        saveInventory.Parameters.Add("inventory", NpgsqlDbType.Text).Value = (object?)body.InventoryNumber?.Trim() ?? DBNull.Value;
+        saveInventory.Parameters.AddWithValue("id", deviceId);
+        await saveInventory.ExecuteNonQueryAsync(request.HttpContext.RequestAborted);
+        return Results.Ok(new { matched = false });
+    }
+    await using var update = new NpgsqlCommand("""
+        UPDATE devices SET company_id=@company,service_object_id=@site,inventory_number=@inventory,
+          last_ip=COALESCE(@ip::inet,last_ip),last_seen_at=now() WHERE id=@id
+        """, connection);
+    update.Parameters.AddWithValue("company", assignment.CompanyId);
+    update.Parameters.Add("site", NpgsqlDbType.Bigint).Value = (object?)assignment.SiteId ?? DBNull.Value;
+    update.Parameters.Add("inventory", NpgsqlDbType.Text).Value = (object?)body.InventoryNumber?.Trim() ?? DBNull.Value;
+    update.Parameters.Add("ip", NpgsqlDbType.Text).Value = (object?)ip ?? DBNull.Value;
+    update.Parameters.AddWithValue("id", deviceId);
+    await update.ExecuteNonQueryAsync(request.HttpContext.RequestAborted);
+    return Results.Ok(new { matched = true, matchedBy, companyId = assignment.CompanyId, siteId = assignment.SiteId });
 });
 
 app.MapGet("/api/v1/ticket-services", async (HttpRequest request, NpgsqlDataSource db) =>
@@ -436,8 +496,10 @@ app.MapGet("/api/v1/ticket-updates", async (HttpRequest request, NpgsqlDataSourc
             messages.Add(new { id = reader.GetGuid(0), requestId = reader.GetGuid(1), title = reader.GetString(2), createdAt = created });
         }
     }
-    // Overlap covers messages committed just after the read; the client deduplicates IDs.
-    if (!hasMore) { cursor = serverTime.AddSeconds(-30); cursorId = Guid.Empty; }
+    // A first request only establishes a silent baseline. Later polls overlap briefly
+    // to cover messages committed just after the read; consumers deduplicate by ID.
+    if (!since.HasValue) { cursor = serverTime; cursorId = Guid.Empty; }
+    else if (!hasMore) { cursor = serverTime.AddSeconds(-30); cursorId = Guid.Empty; }
     return Results.Ok(new { activeCount, cursor, cursorId, hasMore, messages });
 });
 
@@ -546,6 +608,12 @@ app.MapPost("/api/v1/tickets", async (HttpRequest request, CreateTicketRequest b
     if (body.RequestId == Guid.Empty) return Results.BadRequest(new { error = "Укажите requestId." });
 
     await using var connection = await db.OpenConnectionAsync();
+    await using (var blocked = new NpgsqlCommand("SELECT tickets_blocked FROM devices WHERE id=@device", connection))
+    {
+        blocked.Parameters.AddWithValue("device", deviceId);
+        if (await blocked.ExecuteScalarAsync() is true)
+            return Results.Json(new { error = "Создание заявок для этого компьютера заблокировано администратором." }, statusCode: StatusCodes.Status403Forbidden);
+    }
     long companyId;
     long? siteId;
     await using (var assignment = new NpgsqlCommand("""
@@ -575,7 +643,9 @@ app.MapPost("/api/v1/tickets", async (HttpRequest request, CreateTicketRequest b
     int inserted;
     await using (var reserve = new NpgsqlCommand("""
         INSERT INTO ticket_requests(request_id,device_id,company_id,service_object_id,title,description,service_code,payload_hash,state)
-        VALUES(@request,@device,@company,@site,@title,@description,@service,@hash,'queued') ON CONFLICT(request_id) DO NOTHING
+        SELECT @request,@device,@company,@site,@title,@description,@service,@hash,'queued'
+        WHERE EXISTS(SELECT 1 FROM devices WHERE id=@device AND NOT tickets_blocked)
+        ON CONFLICT(request_id) DO NOTHING
         """, connection, transaction))
     {
         reserve.Parameters.AddWithValue("request", body.RequestId);
@@ -591,6 +661,12 @@ app.MapPost("/api/v1/tickets", async (HttpRequest request, CreateTicketRequest b
     if (inserted == 0)
     {
         await transaction.RollbackAsync();
+        await using (var blocked = new NpgsqlCommand("SELECT tickets_blocked FROM devices WHERE id=@device", connection))
+        {
+            blocked.Parameters.AddWithValue("device", deviceId);
+            if (await blocked.ExecuteScalarAsync() is true)
+                return Results.Json(new { error = "Создание заявок для этого компьютера заблокировано администратором." }, statusCode: StatusCodes.Status403Forbidden);
+        }
         await using var existing = new NpgsqlCommand("""
             SELECT payload_hash,state,okdesk_issue_id FROM ticket_requests
             WHERE request_id=@request AND device_id=@device
@@ -629,6 +705,12 @@ app.MapPost("/api/v1/tickets/{requestId:guid}/messages", async (Guid requestId, 
     if (body.MessageId == Guid.Empty || string.IsNullOrWhiteSpace(body.Content) || body.Content.Trim().Length > 5000)
         return Results.BadRequest(new { error = "Введите сообщение до 5000 символов." });
     await using var stateConnection = await db.OpenConnectionAsync();
+    await using (var blocked = new NpgsqlCommand("SELECT tickets_blocked FROM devices WHERE id=@device", stateConnection))
+    {
+        blocked.Parameters.AddWithValue("device", deviceId);
+        if (await blocked.ExecuteScalarAsync() is true)
+            return Results.Json(new { error = "Ответы с этого компьютера заблокированы администратором." }, statusCode: StatusCodes.Status403Forbidden);
+    }
     await using var stateCommand = new NpgsqlCommand("""
         SELECT workflow_state FROM ticket_requests
         WHERE request_id=@request AND device_id=@device
@@ -652,6 +734,7 @@ app.MapPost("/api/v1/tickets/{requestId:guid}/messages", async (Guid requestId, 
         INSERT INTO ticket_messages(id,request_id,direction,content,payload_hash,state)
         SELECT @id,@request,'user',@content,@hash,'queued'
         WHERE EXISTS(SELECT 1 FROM ticket_requests WHERE request_id=@request AND device_id=@device)
+          AND EXISTS(SELECT 1 FROM devices WHERE id=@device AND NOT tickets_blocked)
         ON CONFLICT(id) DO NOTHING
         """, connection, transaction);
     insert.Parameters.AddWithValue("id", body.MessageId);
@@ -663,6 +746,12 @@ app.MapPost("/api/v1/tickets/{requestId:guid}/messages", async (Guid requestId, 
     if (inserted == 0)
     {
         await transaction.RollbackAsync();
+        await using (var blocked = new NpgsqlCommand("SELECT tickets_blocked FROM devices WHERE id=@device", connection))
+        {
+            blocked.Parameters.AddWithValue("device", deviceId);
+            if (await blocked.ExecuteScalarAsync() is true)
+                return Results.Json(new { error = "Ответы с этого компьютера заблокированы администратором." }, statusCode: StatusCodes.Status403Forbidden);
+        }
         await using var existing = new NpgsqlCommand("""
             SELECT payload_hash,state FROM ticket_messages m JOIN ticket_requests t ON t.request_id=m.request_id
             WHERE m.id=@id AND m.request_id=@request AND t.device_id=@device
@@ -712,6 +801,9 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
     var anyDeskId = JsonRead.String(report.RootElement, "AnyDeskId", "anyDeskId");
     var ocsPresent = JsonRead.Bool(report.RootElement, "OcsPresent", "ocsPresent") ?? false;
     var administrators = JsonRead.StringList(report.RootElement, "AdminAccounts", "adminAccounts");
+    var applicationErrors = JsonRead.Property(report.RootElement, "ApplicationErrors", "applicationErrors");
+    var applicationErrorCount = applicationErrors is { ValueKind: JsonValueKind.Array }
+        ? applicationErrors.Value.GetArrayLength() : 0;
     var kind = JsonRead.String(report.RootElement, "KindLabel", "Kind", "kind") ?? "Проверка";
     var summary = JsonSerializer.Serialize(new
     {
@@ -719,7 +811,7 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
         cpuPercent = JsonRead.Number(report.RootElement, "CpuPercent", "cpuPercent"),
         cpuTemperatureC = JsonRead.Number(report.RootElement, "CpuTemperatureC", "cpuTemperatureC"),
         memoryUsedPercent = JsonRead.Number(report.RootElement, "MemoryUsedPercent", "memoryUsedPercent"),
-        inventory, rmsId, anyDeskId, ocsPresent, administrators, findings,
+        inventory, rmsId, anyDeskId, ocsPresent, administrators, findings, applicationErrorCount,
         findingCount = findings.Length,
         result = findings.Length == 0 ? "Без замечаний" : $"Требует внимания: {findings.Length}"
     });
@@ -868,6 +960,25 @@ admin.MapPut("/process-policy", async (ProcessPolicyDocument body, ProcessPolicy
 });
 app.MapGet("/api/v1/process-policy", async (HttpRequest request, NpgsqlDataSource db, ProcessPolicy policy) =>
     await DeviceKeys.AuthenticateAsync(request, db) ? Results.Ok(policy.Read()) : Results.Unauthorized());
+app.MapPost("/api/v1/process-policy/allow", async (HttpRequest request, AllowProcessRequest body, NpgsqlDataSource db, ProcessPolicy policy) =>
+{
+    if (!await DeviceKeys.AuthenticateAsync(request, db)) return Results.Unauthorized();
+    try
+    {
+        var result = await policy.AllowAsync(body.Name ?? "", body.Publisher,
+            string.Equals(body.Signature, "Valid", StringComparison.OrdinalIgnoreCase));
+        return Results.Ok(result);
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+});
+app.MapPost("/api/v1/process-policy/allow-publisher", async (HttpRequest request, TrustPublisherRequest body, NpgsqlDataSource db, ProcessPolicy policy) =>
+{
+    if (!await DeviceKeys.AuthenticateAsync(request, db)) return Results.Unauthorized();
+    if (!string.Equals(body.Signature, "Valid", StringComparison.OrdinalIgnoreCase))
+        return Results.BadRequest(new { error = "Издатель можно разрешить только после проверки действительной подписи." });
+    try { return Results.Ok(await policy.TrustPublisherAsync(body.Publisher ?? "")); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+});
 admin.MapGet("/tickets", async (NpgsqlDataSource db, string? status, long? companyId, long? siteId, int? page) =>
 {
     if (status is not (null or "queued" or "sending" or "created" or "rejected" or "unknown"))
@@ -954,7 +1065,11 @@ admin.MapGet("/devices", async (NpgsqlDataSource db, string? q, long? companyId,
         SELECT d.id,d.serial_number,d.inventory_number,d.os_name,d.os_version,d.last_seen_at,
                c.name,s.name,d.company_id,d.service_object_id,
                (SELECT r.started_at FROM check_runs r WHERE r.device_id=d.id ORDER BY r.started_at DESC,r.received_at DESC LIMIT 1),
-               (SELECT r.details FROM check_runs r WHERE r.device_id=d.id ORDER BY r.started_at DESC,r.received_at DESC LIMIT 1)
+               (SELECT r.details FROM check_runs r WHERE r.device_id=d.id ORDER BY r.started_at DESC,r.received_at DESC LIMIT 1),
+               d.tickets_blocked,
+               (SELECT count(*) FROM okdesk_equipment e WHERE e.normalized_inventory_number=nullif(ltrim(regexp_replace(upper(coalesce(d.inventory_number,'')), '[^[:alnum:]]', '', 'g'),'0'),'')),
+               (SELECT e.company_id FROM okdesk_equipment e WHERE e.normalized_inventory_number=nullif(ltrim(regexp_replace(upper(coalesce(d.inventory_number,'')), '[^[:alnum:]]', '', 'g'),'0'),'') ORDER BY e.id LIMIT 1),
+               (SELECT e.service_object_id FROM okdesk_equipment e WHERE e.normalized_inventory_number=nullif(ltrim(regexp_replace(upper(coalesce(d.inventory_number,'')), '[^[:alnum:]]', '', 'g'),'0'),'') ORDER BY e.id LIMIT 1)
         FROM devices d LEFT JOIN companies c ON c.id=d.company_id LEFT JOIN service_objects s ON s.id=d.service_object_id
         WHERE (@q IS NULL OR coalesce(d.serial_number,'') ILIKE '%'||@q||'%' OR coalesce(d.inventory_number,'') ILIKE '%'||@q||'%' OR d.id::text ILIKE '%'||@q||'%')
           AND (@company IS NULL OR d.company_id=@company) AND (@site IS NULL OR d.service_object_id=@site)
@@ -984,10 +1099,65 @@ admin.MapGet("/devices", async (NpgsqlDataSource db, string? q, long? companyId,
         companyId = reader.IsDBNull(8) ? (long?)null : reader.GetInt64(8), siteId = reader.IsDBNull(9) ? (long?)null : reader.GetInt64(9),
         lastCheck = reader.IsDBNull(10) ? (DateTime?)null : reader.GetDateTime(10),
         health = issues is null ? "unknown" : issues.Any(i => i.Severity == 1) ? "critical" : issues.Count > 0 ? "warning" : "normal",
-        rmsPresent, ocsPresent, remoteAttention = report is not null && (!rmsPresent || !ocsPresent)
+        rmsPresent, ocsPresent, remoteAttention = report is not null && (!rmsPresent || !ocsPresent),
+        ticketsBlocked = reader.GetBoolean(12),
+        okdeskStatus = reader.GetInt64(13) switch
+        {
+            0 => "missing_in_okdesk",
+            > 1 => "ambiguous",
+            _ when reader.GetInt64(14) != reader.GetInt64(8) ||
+                   (reader.IsDBNull(15) ? (long?)null : reader.GetInt64(15)) != (reader.IsDBNull(9) ? (long?)null : reader.GetInt64(9)) => "other_object",
+            _ => "matched"
+        }
         });
     }
     return Results.Ok(new { items = rows.Take(100), hasMore = rows.Count > 100, page = offset / 100 });
+});
+admin.MapGet("/okdesk/unbound-equipment", async (NpgsqlDataSource db, string? q, long? companyId, long? siteId, int? page, bool? unassignedSite) =>
+{
+    var offset = Math.Clamp(page ?? 0, 0, 10000) * 100;
+    await using var connection = await db.OpenConnectionAsync();
+    await using var command = new NpgsqlCommand("""
+        SELECT e.id,e.inventory_number,e.serial_number,c.name,s.name,e.company_id,e.service_object_id,e.name
+        FROM okdesk_equipment e
+        LEFT JOIN companies c ON c.id=e.company_id
+        LEFT JOIN service_objects s ON s.id=e.service_object_id
+        WHERE (@company IS NULL OR e.company_id=@company) AND (@site IS NULL OR e.service_object_id=@site)
+          AND (NOT @unassigned OR e.service_object_id IS NULL)
+          AND (@q IS NULL OR coalesce(e.inventory_number,'') ILIKE '%'||@q||'%' OR coalesce(e.serial_number,'') ILIKE '%'||@q||'%')
+          AND (e.normalized_inventory_number IS NULL OR NOT EXISTS(
+              SELECT 1 FROM devices d WHERE nullif(ltrim(regexp_replace(upper(coalesce(d.inventory_number,'')), '[^[:alnum:]]', '', 'g'),'0'),'')=e.normalized_inventory_number))
+        ORDER BY e.inventory_number NULLS LAST,e.id LIMIT 101 OFFSET @offset
+        """, connection);
+    command.Parameters.Add("company", NpgsqlDbType.Bigint).Value = (object?)companyId ?? DBNull.Value;
+    command.Parameters.Add("site", NpgsqlDbType.Bigint).Value = (object?)siteId ?? DBNull.Value;
+    command.Parameters.AddWithValue("unassigned", unassignedSite ?? false);
+    command.Parameters.Add("q", NpgsqlDbType.Text).Value = string.IsNullOrWhiteSpace(q) ? DBNull.Value : q.Trim()[..Math.Min(q.Trim().Length, 120)];
+    command.Parameters.AddWithValue("offset", offset);
+    await using var reader = await command.ExecuteReaderAsync();
+    var items = new List<object>();
+    while (await reader.ReadAsync()) items.Add(new
+    {
+        id = (Guid?)null, okdeskEquipmentId = reader.GetInt64(0), equipmentOnly = true,
+        inventory = reader.IsDBNull(1) ? null : reader.GetString(1), serial = reader.IsDBNull(2) ? null : reader.GetString(2),
+        company = reader.IsDBNull(3) ? null : reader.GetString(3), site = reader.IsDBNull(4) ? null : reader.GetString(4),
+        companyId = reader.GetInt64(5), siteId = reader.IsDBNull(6) ? (long?)null : reader.GetInt64(6),
+        name = reader.IsDBNull(7) ? null : reader.GetString(7), okdeskStatus = "okdesk_only",
+        health = "unknown", lastSeen = (DateTime?)null, lastCheck = (DateTime?)null, ticketsBlocked = false
+    });
+    return Results.Ok(new { items = items.Take(100), hasMore = items.Count > 100, page = offset / 100 });
+});
+admin.MapPost("/devices/{id:guid}/ticket-block", async (Guid id, TicketBlockRequest body, HttpContext context,
+    IAntiforgery antiforgery, NpgsqlDataSource db) =>
+{
+    if (!await SameOriginAsync(context)) return Results.BadRequest(new { error = "Недопустимый источник запроса." });
+    await antiforgery.ValidateRequestAsync(context);
+    await using var connection = await db.OpenConnectionAsync(context.RequestAborted);
+    await using var command = new NpgsqlCommand("UPDATE devices SET tickets_blocked=@blocked WHERE id=@id", connection);
+    command.Parameters.AddWithValue("id", id);
+    command.Parameters.AddWithValue("blocked", body.Blocked);
+    return await command.ExecuteNonQueryAsync(context.RequestAborted) == 1
+        ? Results.Ok(new { id, blocked = body.Blocked }) : Results.NotFound();
 });
 admin.MapGet("/monitoring", async (NpgsqlDataSource db, int? days, long? companyId, long? siteId, string? category, int? page, int? severity) =>
 {
@@ -1157,13 +1327,13 @@ admin.MapPost("/packages", async (HttpContext context, IAntiforgery antiforgery,
     if (!System.Text.RegularExpressions.Regex.IsMatch(key, "^[a-zA-Z0-9._-]{1,64}$") ||
         platform is not ("windows" or "win7" or "any") || file is null || file.Length == 0 || file.Length > 1024L*1024*1024)
         return Results.BadRequest(new { error = "Проверьте ключ, версию, платформу и файл (до 1 ГБ)." });
-    if (key != "application" && !System.Text.RegularExpressions.Regex.IsMatch(requestedVersion, "^[a-zA-Z0-9.+_-]{1,48}$"))
+    if (key != "application" && !string.IsNullOrWhiteSpace(requestedVersion) && !System.Text.RegularExpressions.Regex.IsMatch(requestedVersion, "^[a-zA-Z0-9.+_-]{1,48}$"))
         return Results.BadRequest(new { error = "Для программ каталога необходимо указать версию." });
     if (key == "application" && platform is not ("windows" or "win7"))
         return Results.BadRequest(new { error = "Приложение можно публиковать только для Windows 10/11 или Windows 7." });
     if (key == "application" && !string.Equals(Path.GetExtension(file.FileName), ".exe", StringComparison.OrdinalIgnoreCase))
         return Results.BadRequest(new { error = "Установщик приложения должен быть EXE-файлом." });
-    if (!string.IsNullOrWhiteSpace(requestedVersion) && !PackageVersionDetector.TryParse(requestedVersion, out _))
+    if (key=="application" && !string.IsNullOrWhiteSpace(requestedVersion) && !PackageVersionDetector.TryParse(requestedVersion, out _))
         return Results.BadRequest(new { error = "Версия должна иметь формат major.minor.patch или определяться автоматически." });
     var version = requestedVersion;
     await using (var checkConnection = await db.OpenConnectionAsync(context.RequestAborted))
@@ -1181,10 +1351,10 @@ admin.MapPost("/packages", async (HttpContext context, IAntiforgery antiforgery,
     string hash;
     await using (var stream = File.OpenRead(destination)) hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, context.RequestAborted));
     var detectedVersion = new Version(0, 0, 0);
-    if (key == "application" && string.IsNullOrWhiteSpace(version) &&
+    if (string.IsNullOrWhiteSpace(version) &&
         !PackageVersionDetector.TryDetect(destination, file.FileName, out detectedVersion))
         return Results.BadRequest(new { error = "Не удалось определить версию установщика. Укажите версию вручную или загрузите EXE с FileVersion." });
-    if (key == "application" && string.IsNullOrWhiteSpace(version)) version = detectedVersion.ToString(3);
+    if (string.IsNullOrWhiteSpace(version)) version = detectedVersion.ToString(3);
     if (string.IsNullOrWhiteSpace(version)) version = "unknown";
     await using var connection = await db.OpenConnectionAsync(context.RequestAborted);
     await using var transaction = await connection.BeginTransactionAsync(context.RequestAborted);
@@ -1235,7 +1405,11 @@ static string LoginPage(string token, string? error = null) => $$"""
 
 public sealed record EnrollRequest(long CompanyId, long? SiteId, string ComputerName, string? SerialNumber, string? HardwareUuid, string? InventoryNumber);
 public sealed record AutoEnrollRequest(string ComputerName, string? SerialNumber, string? HardwareUuid, string? InventoryNumber);
+public sealed record AllowProcessRequest(string? Name, string? Publisher, string? Signature);
+public sealed record TrustPublisherRequest(string? Publisher, string? Signature);
+public sealed record TicketBlockRequest(bool Blocked);
 public sealed record UpdateAssignmentRequest(long CompanyId, long? SiteId, string? InventoryNumber);
+public sealed record ResolveAssignmentRequest(string? InventoryNumber);
 public sealed record CreateTicketRequest(Guid RequestId, string? Title, string? ServiceCode, string? Description,
     IReadOnlyList<TicketAttachmentInput>? Attachments = null);
 public sealed record CreateTicketMessageRequest(Guid MessageId, string? Content,

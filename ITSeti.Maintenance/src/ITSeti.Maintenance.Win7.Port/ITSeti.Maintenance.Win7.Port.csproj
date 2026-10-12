@@ -4,9 +4,9 @@
     <TargetFramework>net48</TargetFramework>
     <UseWPF>true</UseWPF>
     <AssemblyName>ITSeti.Maintenance.Win7.Port</AssemblyName>
-    <Version>2.3.3-beta</Version>
-    <AssemblyVersion>2.3.3.0</AssemblyVersion>
-    <FileVersion>2.3.3.0</FileVersion>
+    <Version>2.3.6-beta</Version>
+    <AssemblyVersion>2.3.6.0</AssemblyVersion>
+    <FileVersion>2.3.6.0</FileVersion>
     <RootNamespace>ITSeti.Maintenance.App</RootNamespace>
     <ApplicationIcon>../ITSeti.Maintenance.App/Assets/favicon.ico</ApplicationIcon>
     <LangVersion>latest</LangVersion>
@@ -18,11 +18,14 @@
     <Content Include="../ITSeti.Maintenance.Infrastructure/Backend/allowed-publishers.txt" Link="allowed-publishers.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Compile Include="../ITSeti.Maintenance.Win7/LegacyProcessTrust.cs" Link="Legacy/LegacyProcessTrust.cs" />
     <Reference Include="System.Management" />
+    <Reference Include="ITSeti.HwInfoBridge"><HintPath>../../Vendor/HwInfoBridge/ITSeti.HwInfoBridge.dll</HintPath><Private>true</Private></Reference>
+    <Reference Include="System.Net.Http" />
     <Reference Include="System.Web" />
     <Reference Include="System.Web.Extensions" />
     <Reference Include="System.ServiceProcess" />
     <Reference Include="Microsoft.CSharp" />
     <Compile Include="../ITSeti.Maintenance.Win7/LegacyDiagnostics.cs" Link="Legacy/LegacyDiagnostics.cs" />
+    <Compile Include="../ITSeti.Maintenance.Win7/LegacyApplicationErrors.cs" Link="Legacy/LegacyApplicationErrors.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/CpuLoadSampler.cs" Link="Legacy/CpuLoadSampler.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/LegacyExtras.cs" Link="Legacy/LegacyExtras.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/LegacyHwInfoReader.cs" Link="Legacy/LegacyHwInfoReader.cs" />

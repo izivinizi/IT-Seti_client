@@ -1,34 +1,48 @@
-﻿param([switch]$StartRepair,[switch]$Quick,[switch]$ScheduledQuick,[switch]$SmartOnly)
+﻿param([switch]$StartRepair,[switch]$SmartOnly,[switch]$UserApproved)
 $ErrorActionPreference='Stop'
 $base=Join-Path $env:ProgramData 'ITSeti\Maintenance'
 $runs=Join-Path $base 'Runs'
 $tools=Join-Path (Split-Path $PSScriptRoot -Parent) 'Tools'
+$identity=[Security.Principal.WindowsIdentity]::GetCurrent()
+if($identity.User -and $identity.User.Value -eq 'S-1-5-18'){
+    $passwordPolicy=Join-Path $PSScriptRoot 'Set-LocalPasswordsNeverExpire.ps1'
+    if(Test-Path -LiteralPath $passwordPolicy){try{& $passwordPolicy -LogPath (Join-Path $base 'local-password-policy.log')}catch{[IO.File]::AppendAllText((Join-Path $base 'local-password-policy.log'),([DateTimeOffset]::UtcNow.ToString('O')+' ERROR '+$_.Exception.GetType().Name+[Environment]::NewLine),[Text.Encoding]::UTF8)}}
+}
 . (Join-Path $PSScriptRoot 'ScheduledFull.ps1')
+if($StartRepair){
+    $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
+    if(!$identity.User -or $identity.User.Value -ne 'S-1-5-18'){throw 'Planned checks must run as SYSTEM.'}
+    $probe=Join-Path $base 'schedule-self-test.request'
+    if(Test-Path -LiteralPath $probe -PathType Leaf){
+        $token=[IO.File]::ReadAllText($probe).Trim()
+        $probeId=[guid]::Empty
+        if(![guid]::TryParseExact($token,'N',[ref]$probeId)){throw 'Invalid schedule self-test request.'}
+        [IO.File]::WriteAllText((Join-Path $base 'schedule-self-test.result'),$token,[Text.Encoding]::ASCII)
+        Remove-Item -LiteralPath $probe -Force
+        exit 0
+    }
+    [IO.File]::WriteAllText((Join-Path $base 'scheduled-last-invoked.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII)
+    if(!$UserApproved -and (Get-Date).Hour -ge 8){exit 0}
+}
 if($StartRepair -and !(Test-ScheduledFullDue $base)){exit 0}
 $run=Join-Path $runs ([guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $run -Force | Out-Null
 trap {
     [IO.File]::WriteAllText((Join-Path $run 'error.txt'), $_.Exception.ToString(), [Text.Encoding]::UTF8)
-    if($StartRepair){[IO.File]::WriteAllText((Join-Path $base 'pending-auto-full-maintenance.txt'),(Split-Path $run -Leaf),[Text.Encoding]::ASCII)}
+    if($StartRepair){
+        [IO.File]::WriteAllText((Join-Path $base 'pending-auto-full-maintenance.txt'),(Split-Path $run -Leaf),[Text.Encoding]::ASCII)
+        [IO.File]::WriteAllText((Join-Path $base 'scheduled-last-error.txt'),([DateTimeOffset]::UtcNow.ToString('O')+[Environment]::NewLine+$_.Exception.ToString()),[Text.Encoding]::UTF8)
+    }
     exit 1
 }
+if($StartRepair){[IO.File]::WriteAllText((Join-Path $base 'scheduled-last-started.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII)}
 $cancelRequest=Join-Path $run 'cancel-request.txt'
 [IO.File]::WriteAllText($cancelRequest,'',[Text.Encoding]::ASCII)
-if(!$StartRepair -and !$ScheduledQuick){
+if(!$StartRepair){
     & icacls.exe $cancelRequest /grant '*S-1-5-32-545:M' | Out-Null
     if($LASTEXITCODE -ne 0){throw 'Could not allow the current user to stop the check.'}
 }
-$latestName=if($SmartOnly){'latest-smart.txt'}elseif($Quick){'latest-quick.txt'}elseif($StartRepair){'latest-auto-full.txt'}else{'latest-full.txt'}
-if($ScheduledQuick){
-    $lastRunFile=Join-Path $base 'last-quick-run.txt'
-    $lastRun=[DateTimeOffset]::MinValue
-    if((Test-Path -LiteralPath $lastRunFile -PathType Leaf) -and
-       [DateTimeOffset]::TryParse([IO.File]::ReadAllText($lastRunFile),[ref]$lastRun) -and
-       [DateTimeOffset]::UtcNow-$lastRun.ToUniversalTime() -lt [TimeSpan]::FromDays(14)){
-        Remove-Item -LiteralPath $run -Recurse -Force
-        exit 0
-    }
-}
+$latestName=if($SmartOnly){'latest-smart.txt'}elseif($StartRepair){'latest-auto-full.txt'}else{'latest-full.txt'}
 $pending=Join-Path $base ($latestName+'.pending')
 [IO.File]::WriteAllText($pending,$run,[Text.Encoding]::UTF8)
 Move-Item -LiteralPath $pending -Destination (Join-Path $base $latestName) -Force
@@ -64,42 +78,30 @@ function Read-FreshTemperature([string]$Path,[int]$MaximumAgeSeconds) {
 $sharedTemperatureFile=Join-Path $base 'cpu-temperature.json'
 $cpuTemperatureFile=Join-Path $run 'cpu-temperature.json'
 $sensor=Read-FreshTemperature $sharedTemperatureFile 90
-if($null -eq $sensor) {
-    $probeStartedAt=[DateTimeOffset]::UtcNow
-    try {
-        $scheduler=Join-Path $env:WINDIR 'System32\schtasks.exe'
-        $probeProcess=Start-Process -FilePath $scheduler -ArgumentList @('/Run','/TN','ITSeti-Maintenance-Temperature') -PassThru -WindowStyle Hidden -ErrorAction Stop
-        if(!$probeProcess.WaitForExit(5000)){
-            try {$probeProcess.Kill()} catch {}
-            throw 'Запрос датчика не ответил за 5 секунд.'
-        }
-        if($probeProcess.ExitCode -ne 0){throw "Задача датчика завершилась с кодом $($probeProcess.ExitCode)."}
-        $deadline=[DateTimeOffset]::UtcNow.AddSeconds(8)
-        do {
-            Start-Sleep -Milliseconds 200
-            $candidate=Read-FreshTemperature $sharedTemperatureFile 300
-            if($candidate) {
-                $candidateTime=ConvertTo-UtcDateTimeOffset $candidate.CapturedAtUtc
-                if($candidateTime -ge $probeStartedAt.AddSeconds(-1)){$sensor=$candidate;break}
-            }
-        } while([DateTimeOffset]::UtcNow -lt $deadline)
-        if($null -eq $sensor){throw 'Системная задача не вернула свежий результат датчика за 8 секунд.'}
-    } catch {$sensorStatus='Не удалось получить температуру CPU: '+$_.Exception.Message}
-}
+$sensorStatus='Служба HWiNFO не вернула свежий результат датчика CPU.'
 if($null -eq $sensor) {
     $sensor=[pscustomobject]@{TemperatureC=$null;Status=$sensorStatus;CapturedAtUtc=[DateTimeOffset]::UtcNow.ToString('O')}
 }
 [IO.File]::WriteAllText($cpuTemperatureFile,($sensor | ConvertTo-Json -Compress),[Text.Encoding]::UTF8)
 $source=$PSScriptRoot
-foreach($file in @('FullCheckWorker.ps1','HeadlessDiskWorker.ps1','ResourceSampler.ps1','CpuLoad.ps1','Summary.ps1','DiskTools.ps1','Runtime.ps1','EventWorker.ps1','Repair.ps1','RepairWorker.ps1','NativeDiskMark.cs','allowed-processes.json','allowed-processes-win7.txt','allowed-publishers.txt','Set-WindowsAutomaticUpdates.ps1','Update-Application.ps1')) {
+if(!$SmartOnly){
+    & (Join-Path $source 'Upload-Reports.ps1') -RefreshPolicyOnly
+}
+foreach($file in @('FullCheckWorker.ps1','HeadlessDiskWorker.ps1','ResourceSampler.ps1','HWiNFO.ps1','Summary.ps1','DiskTools.ps1','Runtime.ps1','EventWorker.ps1','Repair.ps1','RepairWorker.ps1','NativeDiskMark.cs','allowed-processes.json','allowed-processes-win7.txt','allowed-publishers.txt','Set-WindowsAutomaticUpdates.ps1','Update-Application.ps1')) {
     Copy-Item -LiteralPath (Join-Path $source $file) -Destination $run -ErrorAction Stop
 }
 $env:ITSETI_CPU_TEMPERATURE_FILE=$cpuTemperatureFile
-$workerArgs=@('-RunRoot',$run,'-ToolsRoot',$tools,'-HeadlessDiskSpd','-TrustedTools')
+# Do not pass named PowerShell parameters through an untyped string array here.
+# Windows PowerShell can bind the first array item as the positional RunRoot
+# value, making '-RunRoot' reach Resolve-Path as the path itself.
+$worker=[scriptblock]::Create([IO.File]::ReadAllText((Join-Path $run 'FullCheckWorker.ps1'),[Text.Encoding]::UTF8))
 # Installed checks are always launched by SYSTEM (the service or the SYSTEM task).
 # Keep SMART and DiskSpd enabled for user-requested checks without asking for UAC.
-if($SmartOnly){$workerArgs += '-SkipResourceSampling';$workerArgs += '-SkipDiskBenchmark'}
-& ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $run 'FullCheckWorker.ps1'),[Text.Encoding]::UTF8))) @workerArgs
+if($SmartOnly){
+    & $worker -RunRoot $run -ToolsRoot $tools -HeadlessDiskSpd -TrustedTools -SkipResourceSampling -SkipDiskBenchmark
+} else {
+    & $worker -RunRoot $run -ToolsRoot $tools -HeadlessDiskSpd -TrustedTools -SkipResourceSampling
+}
 Remove-Item Env:ITSETI_CPU_TEMPERATURE_FILE -ErrorAction SilentlyContinue
 if((Test-Path -LiteralPath $cancelRequest) -and [IO.File]::ReadAllText($cancelRequest).Trim() -eq 'cancel'){
     [IO.File]::WriteAllText((Join-Path $run 'cancelled.txt'),'cancelled',[Text.Encoding]::ASCII)
@@ -109,9 +111,6 @@ if(Test-Path -LiteralPath (Join-Path $run 'result.json')){
     try { & (Join-Path $env:WINDIR 'System32\schtasks.exe') /Run /TN 'ITSeti-Maintenance-Upload' | Out-Null } catch {}
     if($SmartOnly){
         [IO.File]::WriteAllText((Join-Path $base 'last-smart-run.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII)
-    }
-    elseif($Quick -or $ScheduledQuick){
-        [IO.File]::WriteAllText((Join-Path $base 'last-quick-run.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII)
     }
     if($StartRepair){
         [IO.File]::WriteAllText((Join-Path $run 'stage.txt'),'Плановое восстановление Windows',[Text.Encoding]::UTF8)
@@ -133,7 +132,7 @@ if(Test-Path -LiteralPath (Join-Path $run 'result.json')){
         }
         Remove-Item -LiteralPath (Join-Path $base 'pending-auto-full-maintenance.txt') -Force -ErrorAction SilentlyContinue
     }
-    elseif(!$Quick){
+    elseif(!$SmartOnly){
         Set-ScheduledFullBaseline $base ([DateTimeOffset]::UtcNow)
         Remove-Item -LiteralPath (Join-Path $base 'pending-auto-full-maintenance.txt') -Force -ErrorAction SilentlyContinue
     }
@@ -145,3 +144,7 @@ if(Test-Path -LiteralPath (Join-Path $run 'result.json')){
 }
 if(Test-Path -LiteralPath (Join-Path $run 'cancelled.txt')){exit 0}
 [IO.File]::WriteAllText((Join-Path $run 'completed.txt'),'completed',[Text.Encoding]::ASCII)
+if($StartRepair){
+    [IO.File]::WriteAllText((Join-Path $base 'scheduled-last-success.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII)
+    Remove-Item -LiteralPath (Join-Path $base 'scheduled-last-error.txt') -Force -ErrorAction SilentlyContinue
+}

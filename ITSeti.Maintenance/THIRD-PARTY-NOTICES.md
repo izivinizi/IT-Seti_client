@@ -1,14 +1,5 @@
 # Сторонние компоненты
 
-## LibreHardwareMonitorLib 0.9.6
-
-Используется для чтения температуры процессора. Библиотека включена без
-изменений и распространяется по Mozilla Public License 2.0 (MPL-2.0).
-
-- Исходный код: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
-- Текст MPL-2.0: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/blob/master/LICENSE
-- Уведомления о лицензиях компонентов: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/blob/master/THIRD-PARTY-NOTICES.txt
-
 ## PawnIO 2.2.0
 
 Официальный подписанный установщик PawnIO распространяется без изменений из

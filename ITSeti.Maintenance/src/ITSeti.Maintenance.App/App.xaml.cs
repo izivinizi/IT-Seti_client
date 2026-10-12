@@ -12,6 +12,26 @@ public partial class App : Application
 {
     private bool interactiveWindowShown;
 
+    public App()
+    {
+        DispatcherUnhandledException += (_, args) =>
+        {
+            var entry = ApplicationErrorStore.Record("Приложение", "Необработанная ошибка интерфейса", args.Exception);
+            MessageBox.Show(ApplicationErrorStore.UserMessage(entry), "Ошибка приложения", MessageBoxButton.OK, MessageBoxImage.Error);
+            args.Handled = true;
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            if (args.ExceptionObject is Exception exception)
+                ApplicationErrorStore.Record("Приложение", "Критическая ошибка процесса", exception);
+        };
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            ApplicationErrorStore.Record("Приложение", "Ошибка фоновой операции", args.Exception);
+            args.SetObserved();
+        };
+    }
+
     protected override async void OnStartup(StartupEventArgs e)
     {
         if (e.Args.Contains("--cpu-temperature-probe", StringComparer.OrdinalIgnoreCase))
@@ -24,7 +44,10 @@ public partial class App : Application
             try
             {
                 output = Path.GetFullPath(e.Args[outputIndex]);
-                var reading = (await CpuTemperatureReader.ReadAsync()) with { CapturedAtUtc = DateTimeOffset.UtcNow };
+                var hwInfo = await HwInfoReader.ReadAsync();
+                var reading = hwInfo?.CpuTemperatureC is { } temperature
+                    ? new CpuTemperatureReading(temperature, $"HWiNFO · {hwInfo.Source}", hwInfo.CapturedAtUtc)
+                    : new CpuTemperatureReading(null, "HWiNFO не вернул допустимый датчик CPU.", DateTimeOffset.UtcNow);
                 await WriteTemperatureResultAsync(output, reading);
                 Shutdown();
             }
@@ -77,6 +100,8 @@ public partial class App : Application
                 return;
             }
 
+            StartTicketNotifier();
+
             var database = EngineerWindowLauncher.GetArgument(e.Args, "--history-db")
                 ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ITSeti", "Maintenance", "history.db");
             MainWindow = new MainWindow(database, engineerOnly: true,
@@ -110,7 +135,7 @@ public partial class App : Application
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
 
-                    var retry = new ScheduledCheckPrompt().ShowDialog() == true;
+                    var retry = new ScheduledCheckPrompt(pendingFull=="overdue").ShowDialog() == true;
                     await File.WriteAllTextAsync(reminderPath, DateTimeOffset.UtcNow.AddDays(1).ToString("O"));
                     if (retry) await RunScheduledFullRetryAsync();
                     Shutdown();
@@ -120,12 +145,14 @@ public partial class App : Application
             }
             catch (Exception ex)
             {
+                ApplicationErrorStore.Record("Расписание","Дневное предложение плановой проверки",ex);
                 await File.WriteAllTextAsync(Path.Combine(data, "scheduled-quick-error.txt"), ex.ToString());
                 Shutdown();
             }
             finally { mutex.ReleaseMutex(); }
             return;
         }
+        StartTicketNotifier();
         if (MainWindow is null)
         {
             try
@@ -141,6 +168,26 @@ public partial class App : Application
                 MessageBox.Show($"Не удалось открыть приложение: {ex.Message}", "ИТ-Сети", MessageBoxButton.OK, MessageBoxImage.Error);
                 Shutdown();
             }
+        }
+    }
+
+    private static void StartTicketNotifier()
+    {
+        if (Environment.GetEnvironmentVariable("ITSETI_DISABLE_REPORT_UPLOAD") == "1") return;
+        var notifier = Path.Combine(AppContext.BaseDirectory, "Notifier", "ITSeti.Maintenance.TicketNotifier.exe");
+        if (!File.Exists(notifier)) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo(notifier)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = Path.GetDirectoryName(notifier)!
+            })?.Dispose();
+        }
+        catch (Exception ex) when (ex is Win32Exception or IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            ApplicationErrorStore.Record("Заявки", "Запуск фоновых уведомлений", ex);
         }
     }
 
@@ -177,7 +224,11 @@ public partial class App : Application
     {
         var data = systemDataOverride ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance");
         var pending = Path.Combine(data, "pending-auto-full-maintenance.txt");
-        if (!File.Exists(pending)) return null;
+        if (!File.Exists(pending))
+        {
+            var baseline=Path.Combine(data,"last-full-run.txt");
+            return File.Exists(baseline) && DateTimeOffset.TryParse(File.ReadAllText(baseline),out var last) && DateTimeOffset.UtcNow-last.ToUniversalTime()>=TimeSpan.FromDays(60) && DateTime.Now.Hour>=8 && DateTime.Now.Hour<21 ? "overdue" : null;
+        }
         var runId = File.ReadAllText(pending).Trim();
         if (!Guid.TryParseExact(runId, "N", out _)) return null;
         return File.Exists(Path.Combine(data, "Runs", runId, "error.txt")) ? runId : null;

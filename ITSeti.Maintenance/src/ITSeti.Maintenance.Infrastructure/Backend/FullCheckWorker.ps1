@@ -3,7 +3,7 @@ $ErrorActionPreference='Stop'
 $CpuTemperatureFile=$env:ITSETI_CPU_TEMPERATURE_FILE
 $RunRoot=(Resolve-Path -LiteralPath $RunRoot).Path
 $ScriptRoot=$RunRoot
-. (Join-Path $ScriptRoot 'CpuLoad.ps1')
+. (Join-Path $ScriptRoot 'HWiNFO.ps1')
 $Days=7;$Samples=5
 $script:Admin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 $script:CompactOutput=$true
@@ -105,6 +105,19 @@ function Save-Result([string]$Name,[switch]$Pending) {
         Id=$id;StartedAt=$started;ComputerName=$env:COMPUTERNAME;LastBootAt=$s.LastBootAt;ActiveUptimeHours=$s.ActiveUptimeHours;WindowsEdition=$s.WindowsEdition;WindowsRelease=$s.WindowsRelease;WindowsBuild=$s.WindowsBuild;CpuTemperatureC=$(if($null -ne $s.CpuTemperatureC){[double]$s.CpuTemperatureC}else{$null});CpuTemperatureStatus=[string]$s.CpuTemperatureStatus
         CpuPercent=$(if($null -ne $s.Load){[double]$s.Load}else{-1})
         TotalMemoryBytes=[uint64]([double]$s.TotalRAM*1GB);AvailableMemoryBytes=[uint64]([double]$s.FreeRAM*1GB)
+        NetworkAdapters=@(foreach($adapter in @($s.NetworkAdapters)){@{Name=[string]$adapter.Name;Type=[string]$adapter.Type;Status=[string]$adapter.Status;LinkSpeed=[string]$adapter.LinkSpeed;MacAddress=[string]$adapter.MacAddress;Addresses=[string]$adapter.Addresses}})
+        HWiNFO=$(if($s.HwInfo){@{
+            Source=[string]$s.HwInfo.Source;ToolVersion=[string]$s.HwInfo.ToolVersion;CapturedAtUtc=$s.HwInfo.CapturedAtUtc
+            CpuName=[string]$s.HwInfo.CpuName;Motherboard=[string]$s.HwInfo.Motherboard;BiosVersion=[string]$s.HwInfo.BiosVersion;MemoryType=[string]$s.HwInfo.MemoryType
+            CpuTemperatureC=$(if($null -ne $s.HwInfo.CpuTemperatureC){[double]$s.HwInfo.CpuTemperatureC}else{$null})
+            VrmTemperatureC=$(if($null -ne $s.HwInfo.VrmTemperatureC){[double]$s.HwInfo.VrmTemperatureC}else{$null})
+            PchTemperatureC=$(if($null -ne $s.HwInfo.PchTemperatureC){[double]$s.HwInfo.PchTemperatureC}else{$null})
+            Rail12V=$(if($null -ne $s.HwInfo.Rail12V){[double]$s.HwInfo.Rail12V}else{$null})
+            Rail5V=$(if($null -ne $s.HwInfo.Rail5V){[double]$s.HwInfo.Rail5V}else{$null})
+            CpuVoltageV=$(if($null -ne $s.HwInfo.CpuVoltageV){[double]$s.HwInfo.CpuVoltageV}else{$null})
+            CpuLoadPercent=$(if($null -ne $s.HwInfo.CpuLoadPercent){[double]$s.HwInfo.CpuLoadPercent}else{$null})
+            Sensors=@(foreach($sensor in @($s.HwInfo.Sensors)){@{Name=[string]$sensor.Name;Value=[double]$sensor.Value;Unit=[string]$sensor.Unit;Category=[string]$sensor.Category;Status=[string]$sensor.Status;IsWarning=[bool]$sensor.IsWarning;IsCritical=[bool]$sensor.IsCritical}})
+        }}else{$null})
         Disks=@(foreach($v in $s.Volumes){@{Name=([string]$v.DeviceID+'\');TotalBytes=[long]$v.Size;FreeBytes=[long]$v.FreeSpace;VolumeId=[string]$v.VolumeSerialNumber}})
         Notes=$notes
         Full=@{

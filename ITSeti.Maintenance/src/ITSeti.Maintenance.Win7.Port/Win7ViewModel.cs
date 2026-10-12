@@ -12,15 +12,15 @@ namespace ITSeti.Maintenance.App
         private static readonly string[] Names = (
             "AdminAccountAuditStatus AdminAnyDeskLabel AdminInventoryInput AdminRmsLabel ApplicationUpdateStatus " +
             "BenchmarkRead BenchmarkReadBrush BenchmarkState BenchmarkTitle BenchmarkWrite CanChangeWindowsUpdatePolicy " +
-            "CanCheckApplicationUpdates CanCheckWindowsUpdates CanInstallApplicationUpdate CanInstallSetup CanLaunchDiskTools " +
+            "CanCheckApplicationUpdates CanCheckWindowsUpdates CanInstallApplicationUpdate CanInstallSetup CanLaunchDiskTools CanLoadMoreHistory " +
             "CanLaunchTreeSize CanManageSetup CanOpenDebugDirectory CanOpenRepairLog CanRun CanRunCleanup CanRunFull " +
-            "CanRunQuickFull CanRunRepair CanStopFullCheck CanToggleWindowsDefender CheckProgressEntries CheckProgressIsRunning " +
+            "CanRunRepair CanStopFullCheck CanToggleWindowsDefender CheckProgressEntries CheckProgressIsRunning " +
             "CheckProgressPhase CleanupStatus Comparison ComputerName Cpu CpuDetail CpuStatusBrush DebugErrorLine " +
             "DebugFiles DebugSource DebugStage DebugSteps DiskCount DiskDetail DiskGroups DiskStatusBrush EventMessage " +
-            "EventStatus FilteredEvents FullRunHint Gpu HasAnyDeskId HasInventoryNumber HasLowDiskSpace " +
+            "EventStatus FilteredEvents FullRunHint Gpu HasAnyDeskId HasInventoryNumber HasLowDiskSpace HasEngineerLowDiskSpace " +
             "HasMoreUserIssues HasRmsId History HistoryCount IsBusy IsFullCheckRunning Memory MemoryDetail MemoryStatusBrush MemoryType " +
             "MoreUserIssuesLabel NetworkAdapters OverviewCoverage OverviewIssues OverviewStatus OverviewUptimeLabel " +
-            "Processes ProcessStatus ScheduleStatus Selected SelectedEvent SelectedHistorySummary SelectedTreeSizeVolume " +
+            "Processes ProcessAllowStatus ProcessStatus ScheduleStatus Selected SelectedEvent SelectedHistorySummary SelectedTreeSizeVolume " +
             "SetupBundleStatus SetupBundleTooltip SetupComponents SetupSummary SetupWarning SnapshotDate SoftwareActionStatus " +
             "StandaloneRepairStatus Status SystemDiskSpeedSummary SystemDiskSummary SystemTools TreeSizeVolumes " +
             "UserAnyDeskLabel UserCoverage UserCpuDetail UserCpuLabel UserCpuNameAndTemperature UserCpuValue " +
@@ -38,7 +38,7 @@ namespace ITSeti.Maintenance.App
             foreach (var name in new[] { "DiskGroups", "NetworkAdapters", "Processes", "FilteredEvents", "SetupComponents", "History",
                 "DebugSteps", "DebugFiles", "SystemTools", "TreeSizeVolumes", "OverviewIssues", "UserVisibleIssues", "CheckProgressEntries" })
                 Set(name, new ObservableCollection<Win7Row>());
-            foreach (var name in new[] { "CanRun", "CanRunFull", "CanRunQuickFull", "CanRunCleanup", "CanCheckWindowsUpdates" }) Set(name, true);
+            foreach (var name in new[] { "CanRun", "CanRunFull", "CanRunCleanup", "CanCheckWindowsUpdates" }) Set(name, true);
             foreach (var name in Names.Where(x => x.StartsWith("Can", StringComparison.Ordinal) && !values.ContainsKey(x))) Set(name, false);
             Set("UserCpuValue", 0d);
             Set("UserMemoryValue", 0d);
@@ -120,6 +120,7 @@ namespace ITSeti.Maintenance.App
         public string Description { get; set; }
         public string Publisher { get; set; }
         public string Signature { get; set; }
+        public bool CanTrustPublisher { get; set; }
         public string Time { get; set; }
         public string LevelLabel { get; set; }
         public string Provider { get; set; }

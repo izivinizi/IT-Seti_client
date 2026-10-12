@@ -39,6 +39,51 @@ public sealed class ProcessPolicy
     {
         value = Normalize(value);
         await gate.WaitAsync();
+        try { await SaveAsync(value); }
+        finally { gate.Release(); }
+    }
+
+    public async Task<ProcessPolicyDocument> AllowAsync(string name, string? publisher, bool verifiedPublisher)
+    {
+        name = name.Trim();
+        if (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) name = name[..^4];
+        if (name.Length is 0 or > 200 || name.Any(char.IsControl) || name.IndexOfAny(['\\', '/', ':']) >= 0)
+            throw new ArgumentException("Имя процесса недопустимо.", nameof(name));
+        publisher = publisher?.Trim();
+        if (verifiedPublisher && (string.IsNullOrWhiteSpace(publisher) || publisher.Length > 200 || publisher.Any(char.IsControl)))
+            throw new ArgumentException("Издатель подписи недопустим.", nameof(publisher));
+
+        await gate.WaitAsync();
+        try
+        {
+            var next = Normalize(new ProcessPolicyDocument(
+                current.AllowedNames.Append(name).ToArray(),
+                verifiedPublisher ? current.AllowedPublishers.Append(publisher!).ToArray() : current.AllowedPublishers));
+            await SaveAsync(next);
+            return Read();
+        }
+        finally { gate.Release(); }
+    }
+
+    public async Task<ProcessPolicyDocument> TrustPublisherAsync(string publisher)
+    {
+        publisher = publisher.Trim();
+        if (publisher.Length is 0 or > 200 || publisher.Any(char.IsControl))
+            throw new ArgumentException("Издатель подписи недопустим.", nameof(publisher));
+
+        await gate.WaitAsync();
+        try
+        {
+            var next = Normalize(new ProcessPolicyDocument(current.AllowedNames,
+                current.AllowedPublishers.Append(publisher).ToArray()));
+            await SaveAsync(next);
+            return Read();
+        }
+        finally { gate.Release(); }
+    }
+
+    private async Task SaveAsync(ProcessPolicyDocument value)
+    {
         var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
@@ -47,7 +92,7 @@ public sealed class ProcessPolicy
             File.Move(temporary, path, true);
             current = value;
         }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); gate.Release(); }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
     public bool IsAllowed(JsonElement process)

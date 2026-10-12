@@ -1,4 +1,4 @@
-﻿param([switch]$VerifyOnly)
+﻿param([switch]$VerifyOnly,[switch]$RefreshPolicyOnly)
 $ErrorActionPreference = 'Stop'
 $root = Join-Path $env:ProgramData 'ITSeti\Maintenance'
 $deviceFile = Join-Path $root 'server-device.json'
@@ -69,6 +69,23 @@ function Send-Report([string]$path, [hashtable]$identity) {
     foreach ($name in $identity.Keys) {
         $report | Add-Member -NotePropertyName $name -NotePropertyValue $identity[$name] -Force
     }
+    if(!$report.ApplicationErrors -and [string]$report.KindLabel -ne 'Постоянный мониторинг'){
+        $errorLog=Join-Path $root 'Logs\application-errors.jsonl'
+        $recentErrors=@()
+        if(Test-Path -LiteralPath $errorLog){
+            foreach($line in @(Get-Content -LiteralPath $errorLog -Encoding UTF8 -Tail 100)){
+                try {
+                    $entry=$line|ConvertFrom-Json
+                    $occurred=[DateTimeOffset]::MinValue
+                    if([DateTimeOffset]::TryParse([string]$entry.occurredAt,[ref]$occurred) -and $occurred -gt [DateTimeOffset]::UtcNow.AddDays(-1)){
+                        $recentErrors+=@{Id=$entry.id;OccurredAt=$entry.occurredAt;Component=$entry.component;Operation=$entry.operation;Summary=$entry.summary;ExceptionType=$entry.exceptionType}
+                    }
+                }catch{}
+            }
+        }
+        $report|Add-Member -NotePropertyName ApplicationErrors -NotePropertyValue @($recentErrors|Select-Object -Last 20) -Force
+        $report|Add-Member -NotePropertyName HasApplicationErrors -NotePropertyValue ($recentErrors.Count -gt 0) -Force
+    }
     $json = $report | ConvertTo-Json -Depth 30 -Compress
     $bytes = [Text.Encoding]::UTF8.GetBytes($json)
     if ($bytes.Length -gt 12MB) { throw 'Отчёт превышает лимит сервера 12 МБ.' }
@@ -92,7 +109,7 @@ function Send-Report([string]$path, [hashtable]$identity) {
 if ($VerifyOnly) { Get-Identity | ConvertTo-Json -Compress; exit 0 }
 try {
     $policyPath = Join-Path $root 'process-policy.json'
-    if (!(Test-Path -LiteralPath $policyPath) -or (Get-Item -LiteralPath $policyPath).LastWriteTimeUtc -lt [DateTime]::UtcNow.AddDays(-1)) {
+    if ($RefreshPolicyOnly -or !(Test-Path -LiteralPath $policyPath) -or (Get-Item -LiteralPath $policyPath).LastWriteTimeUtc -lt [DateTime]::UtcNow.AddDays(-1)) {
         $request = [Net.HttpWebRequest][Net.WebRequest]::Create((New-ServerUri '/api/v1/process-policy'))
         $request.AllowAutoRedirect = $false
         $request.Timeout = 5000
@@ -132,6 +149,7 @@ try {
         } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
     }
 } catch { Write-Verbose 'Список процессов не обновлён; используется сохранённая копия.' }
+if($RefreshPolicyOnly){exit 0}
 $identity = Get-Identity
 $pending = @()
 if (Test-Path -LiteralPath $queue -PathType Container) {

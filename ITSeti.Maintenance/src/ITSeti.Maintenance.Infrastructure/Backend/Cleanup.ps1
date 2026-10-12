@@ -1,5 +1,22 @@
 ﻿$script:UserCleanupNames = @('Recycle Bin','Temporary Files','Thumbnail Cache','Internet Cache Files','Internet Cache','D3D Shader Cache')
-$script:CleanupNames = @('Delivery Optimization Files','Update Cleanup','Device Driver Packages')
+# Keep this list aligned with the categories shown by cleanmgr.  Windows adds or
+# removes some of these keys by edition/build, so Invoke-Cleanup reports missing
+# categories instead of treating them as a failure.
+$script:CleanupNames = @(
+    'Downloaded Program Files',
+    'Temporary Setup Files',
+    'Setup Log Files',
+    'Old ChkDsk Files',
+    'Memory Dump Files',
+    'System error memory dump files',
+    'System error minidump files',
+    'Windows Upgrade Log Files',
+    'Previous Installations',
+    'Language Resource Files',
+    'Delivery Optimization Files',
+    'Update Cleanup',
+    'Device Driver Packages'
+)
 function New-CleanupProfile([string[]]$Names) {
     $keys=@(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches' -ErrorAction Stop)
     $selected=@($keys | Where-Object {$Names -contains $_.PSChildName})
@@ -52,7 +69,7 @@ function Invoke-Cleanup([switch]$Preview) {
     $unavailableNames = @($script:CleanupNames | Where-Object { $selectedNames -notcontains $_ } | Sort-Object)
     if(!$script:CompactOutput -or $Preview) {
         $selected | ForEach-Object { Write-Host "  $($_.PSChildName)" }
-        Write-Host 'Только согласованные категории. Загрузки и профили браузеров не очищаются.'
+        Write-Host 'Только согласованные системные категории. Личные загрузки, документы и профили браузеров не очищаются.'
     }
     if($Preview) { return }
     if(Get-Command Assert-DiskTestIdle -ErrorAction SilentlyContinue){Assert-DiskTestIdle}

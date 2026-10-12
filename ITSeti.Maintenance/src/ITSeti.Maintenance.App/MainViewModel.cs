@@ -15,7 +15,8 @@ using ITSeti.Maintenance.Infrastructure;
 namespace ITSeti.Maintenance.App;
 
 public sealed record CheckProgressEntry(string Time, string Source, string Message);
-public sealed record NetworkAdapterOverview(string Name, string Type, string Status, string LinkSpeed, string Addresses);
+public sealed record NetworkAdapterOverview(string Name, string Type, string Status, string LinkSpeed, string MacAddress, string Addresses);
+public sealed record HwInfoSensorOverview(string Name, string Value, string CapturedAt, string Category);
 public sealed record DiskOverviewGroup(string Model, string MediaType, string Health, string TransferMode,
     IReadOnlyList<DiskSnapshot> Partitions, long? PowerOnHours = null)
 {
@@ -29,6 +30,10 @@ public sealed record DiskOverviewGroup(string Model, string MediaType, string He
 
 public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore history, IFullDiagnosticsRunner? fullRunner = null, UserCleanupRunner? cleanupRunner = null) : INotifyPropertyChanged
 {
+    private const int HistoryPageSize = 25;
+    private int historyLoadedCount;
+    private bool historyHasMore;
+    private bool historyLoading;
     private static readonly Brush MetricGoodBrush = CreateBrush(24, 132, 91);
     private static readonly Brush MetricWarningBrush = CreateBrush(183, 121, 31);
     private static readonly Brush MetricCriticalBrush = CreateBrush(190, 56, 56);
@@ -48,6 +53,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public ObservableCollection<SmartDiskDetails> SmartDisks { get; } = [];
     public ObservableCollection<DiskOverviewGroup> DiskGroups { get; } = [];
     public ObservableCollection<NetworkAdapterOverview> NetworkAdapters { get; } = [];
+    public ObservableCollection<HwInfoSensorOverview> HwInfoSensors { get; } = [];
     public ObservableCollection<ProcessDetails> Processes { get; } = [];
     public ObservableCollection<EventDetails> Events { get; } = [];
     public ObservableCollection<DebugStep> DebugSteps { get; } = [];
@@ -124,7 +130,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private bool applicationUpdateCheckRunning;
     private bool applicationUpdateRunning;
     private string applicationUpdateStatus = ApplicationUpdateRunner.ReadLastStatus() ?? "Проверка обновлений ещё не выполнялась";
-    public bool HasBundledSetup => bundledSetupDirectory is not null && !ServerSoftwareCatalog.IsConnected;
+    public bool HasBundledSetup => false;
     public bool CanInstallSetup => !setupInstallRunning && (HasBundledSetup || SetupComponents.Any(component => component.Package == "На сервере" && component.CanInstall && component.InstallKey is not "WinRAR" and not "Yandex"));
     public bool CanManageSetup => !setupInstallRunning;
     public bool CanLaunchDiskTools => fullRunner is FullDiagnosticsRunner;
@@ -137,7 +143,9 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         : "Подключите компьютер к серверу, чтобы получить актуальный каталог и устанавливать ПО.";
     public void SetSetupStatus(string message) { softwareActionStatus = message; Notify(); }
     public void SetSoftwareActionStatus(string message) { softwareActionStatus = message; Notify(); }
-    public string SetupSummary => $"Требуют внимания: {SetupComponents.Count(c => c.NeedsAttention)} из {SetupComponents.Count}";
+    public string SetupSummary => ServerSoftwareCatalog.IsConnected
+        ? $"Требуют внимания: {SetupComponents.Count(c => c.NeedsAttention)} из {SetupComponents.Count}"
+        : "Каталог ПО недоступен: компьютер не подключён к серверу";
     public string SetupWarning
     {
         get
@@ -175,6 +183,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private readonly MachineIdentityStore identityStore = new();
     private MachineIdentity identity = new(null, null, null, []);
     private string adminInventoryInput = "";
+    private string processAllowStatus = "";
     private string adminAccountAuditStatus = "Проверка учётных записей администраторов ещё не выполнялась.";
     private IReadOnlyList<string> unexpectedAdminAccounts = [];
     private bool currentAccountUnexpectedAdministrator;
@@ -207,20 +216,33 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     {
         get
         {
-            try
-            {
-                if (!File.Exists(ServerDevicePath)) return false;
-                using var document = JsonDocument.Parse(File.ReadAllText(ServerDevicePath));
-                var root = document.RootElement;
-                return root.TryGetProperty("deviceId", out var deviceId) && !string.IsNullOrWhiteSpace(deviceId.GetString())
-                    && root.TryGetProperty("deviceKey", out var deviceKey) && !string.IsNullOrWhiteSpace(deviceKey.GetString())
-                    && root.TryGetProperty("companyId", out var companyId) && companyId.GetInt64() > 0
-                    && root.TryGetProperty("siteId", out var siteId) && siteId.GetInt64() > 0;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException) { return false; }
+            return TryReadServerAssignment(out var hasCompany, out _) && hasCompany;
         }
     }
-    public string ServerAssignmentLabel => IsServerAssignmentConfigured ? "Компания и объект: настроены" : "Компания и объект: не настроены";
+    private static bool TryReadServerAssignment(out bool hasCompany, out bool hasSite)
+    {
+        hasCompany = hasSite = false;
+        try
+        {
+            if (!File.Exists(ServerDevicePath)) return false;
+            using var document = JsonDocument.Parse(File.ReadAllText(ServerDevicePath));
+            var root = document.RootElement;
+            if (!root.TryGetProperty("deviceId", out var deviceId) || string.IsNullOrWhiteSpace(deviceId.GetString())
+                || !root.TryGetProperty("deviceKey", out var deviceKey) || string.IsNullOrWhiteSpace(deviceKey.GetString())) return false;
+            hasCompany = root.TryGetProperty("companyId", out var companyId) && companyId.ValueKind == JsonValueKind.Number && companyId.GetInt64() > 0;
+            hasSite = root.TryGetProperty("siteId", out var siteId) && siteId.ValueKind == JsonValueKind.Number && siteId.GetInt64() > 0;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException) { return false; }
+    }
+    public string ServerAssignmentLabel
+    {
+        get
+        {
+            if (!TryReadServerAssignment(out var hasCompany, out var hasSite) || !hasCompany) return "Компания: не настроена";
+            return hasSite ? "Компания и объект: настроены" : "Компания настроена · объект не выбран";
+        }
+    }
     public string ServerConnectionLabel => IsServerConnectionConfigured ? "Сервер: подключён" : "Сервер: не подключён";
     public bool HasInventoryNumber => identity.InventoryNumber is not null;
     public bool HasRmsId => identity.RmsId is not null;
@@ -265,6 +287,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             Replace(SmartDisks, value?.Full?.SmartDisks);
             Replace(DiskGroups, BuildDiskGroups(value));
             Replace(Processes, value?.Full?.Processes);
+            RefreshHwInfoSensors();
             Replace(Events, value?.Full?.Events.OrderBy(e => e.Level).ThenByDescending(e => e.Time));
             FilteredEvents.Filter = item => item is EventDetails detail && detail.Level <= eventFilterLevel;
             SelectedEvent = FilteredEvents.Cast<EventDetails>().FirstOrDefault();
@@ -354,16 +377,27 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     }
     private DiagnosticSnapshot? UserSnapshot => live ?? Selected;
     private DiagnosticSnapshot? UserDiagnosticSnapshot => Selected ?? live;
-    private DiskSnapshot? SystemDisk => UserSnapshot?.Disks.FirstOrDefault(d => d.Name.StartsWith(Environment.GetEnvironmentVariable("SystemDrive") ?? "C:", StringComparison.OrdinalIgnoreCase))
-        ?? UserSnapshot?.Disks.OrderByDescending(d => d.UsedPercent).FirstOrDefault();
-    private DiskSnapshot? LowSpaceDisk => UserSnapshot?.Disks.Where(d => d.TotalBytes >= 50L * 1073741824 && d.FreeBytes < 15L * 1073741824)
+    private HwInfoSnapshot? currentHwInfo;
+    private HwInfoSnapshot? CurrentHwInfo => currentHwInfo;
+    private double? CurrentCpuLoad => CurrentHwInfo?.CpuLoadPercent ?? (UserSnapshot is { CpuPercent: >= 0 } snapshot ? snapshot.CpuPercent : null);
+    private double? CurrentMemoryLoad => CurrentHwInfo?.MemoryLoadPercent ?? UserSnapshot?.MemoryUsedPercent;
+    private double? CurrentCpuTemperature => UserSnapshot?.CpuTemperatureC ?? UserSnapshot?.Full?.CpuTemperatureC ?? CurrentHwInfo?.CpuTemperatureC;
+    private string SystemDriveName => (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").TrimEnd('\\');
+    private DiskSnapshot? SystemDisk => UserSnapshot?.Disks.FirstOrDefault(d => string.Equals(d.Name.TrimEnd('\\'), SystemDriveName, StringComparison.OrdinalIgnoreCase));
+    private DiskSnapshot? LowSpaceDisk => UserSnapshot?.Disks.Where(d =>
+        string.Equals(d.Name.TrimEnd('\\'), SystemDriveName, StringComparison.OrdinalIgnoreCase) &&
+        d.TotalBytes >= 50L * 1073741824 && d.FreeBytes < 15L * 1073741824)
         .OrderBy(d => d.FreeBytes).FirstOrDefault();
     public bool HasLowDiskSpace => LowSpaceDisk is not null;
+    private DiskSnapshot? EngineerLowSpaceDisk => Selected?.Disks
+        .Where(d => d.TotalBytes >= 50L * 1073741824 && d.FreeBytes < 15L * 1073741824)
+        .OrderBy(d => d.FreeBytes).FirstOrDefault();
+    public bool HasEngineerLowDiskSpace => EngineerLowSpaceDisk is not null;
     public string LowSpaceActionLabel => LowSpaceDisk is { } disk ? $"Что занимает {disk.Name.TrimEnd('\\')}" : "Что занимает место";
-    public double UserCpuValue => Math.Clamp(UserSnapshot?.CpuPercent ?? 0, 0, 100);
-    public double UserMemoryValue => Math.Clamp(UserSnapshot?.MemoryUsedPercent ?? 0, 0, 100);
+    public double UserCpuValue => Math.Clamp(CurrentCpuLoad ?? 0, 0, 100);
+    public double UserMemoryValue => Math.Clamp(CurrentMemoryLoad ?? 0, 0, 100);
     public double UserDiskValue => Math.Clamp(SystemDisk?.UsedPercent ?? 0, 0, 100);
-    public string UserCpuLabel => UserSnapshot?.CpuLabel ?? "—";
+    public string UserCpuLabel => CurrentCpuLoad is { } load ? $"{load:N0}%" : "—";
     public string UserCpuDetail => UserDiagnosticSnapshot?.Full?.ResourceSampling is { Samples: >= 6, Error: "" } sample
         ? $"Средняя за 30 с: {sample.CpuAverage:N0}%"
         : busy && UserDiagnosticSnapshot?.Full?.ResourceSampling is { Samples: > 0, Error: "" } liveSample
@@ -375,8 +409,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         catch { return "Модель процессора не определена"; }
     }
     public string UserCpuName => UserDiagnosticSnapshot?.Full?.CpuName is { Length: > 0 } name ? name
-        : UserDiagnosticSnapshot?.HwInfo?.CpuName is { Length: > 0 } hwName ? hwName : LocalCpuName;
-    public string UserMemoryLabel => UserSnapshot?.MemoryLabel ?? "—";
+        : CurrentHwInfo?.CpuName is { Length: > 0 } hwName ? hwName : LocalCpuName;
+    public string UserMemoryLabel => CurrentMemoryLoad is { } load ? $"{load:N0}%" : "—";
     public string UserDiskLabel => SystemDisk?.Usage ?? "—";
     public string UserDiskDetail => SystemDisk is { } disk ? $"{disk.Name} · свободно {disk.FreeBytes / 1073741824.0:N1} ГБ" : "Нет данных о диске";
     public string UserDiskHealth
@@ -426,7 +460,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                     .Cast<System.Text.RegularExpressions.Match>().Any(m => string.Equals(m.Value, drive, StringComparison.OrdinalIgnoreCase)));
         }
     }
-    public string UserCpuNameAndTemperature => $"{UserCpuName} · {FormatCpuTemperature(UserSnapshot?.CpuTemperatureC ?? UserSnapshot?.Full?.CpuTemperatureC)}";
+    public string UserCpuNameAndTemperature => $"{UserCpuName} · {FormatCpuTemperature(CurrentCpuTemperature)}";
     public string UserMemoryDetail
     {
         get
@@ -470,7 +504,6 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             var lines = new List<string>();
             if (full.Benchmark.State == "Failed" || full.Benchmark.State == "Skipped" && !Selected.IsQuickFull) lines.Add("скорость диска");
             if (full.SmartDisks.Count == 0) lines.Add("подробное состояние диска");
-            if (!Selected.IsQuickFull && full.ResourceSampling is not { Samples: >= 6, Error: "" }) lines.Add("длительная нагрузка");
             return lines.Count == 0 ? "" : "Не удалось проверить: " + string.Join(", ", lines) + ". Подробности доступны инженеру.";
         }
     }
@@ -526,7 +559,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         setupInstallRunning = false;
         Notify();
     }
-    public string ScheduleStatus => FullDiagnosticsRunner.IsInstalled ? "Ночная диагностика: раз в 14 дней · полная с обслуживанием: раз в 60 дней" : "Не настроено";
+    public string ScheduleStatus => FullDiagnosticsRunner.IsInstalled ? "Мониторинг работает постоянно · полная проверка ночью по сроку (не чаще раза в 60 дней)" : "Не настроено";
     public string ApplicationUpdateStatus => applicationUpdateStatus;
     public bool CanCheckApplicationUpdates => !busy && !applicationUpdateCheckRunning && !applicationUpdateRunning;
     public bool CanInstallApplicationUpdate => !busy && !applicationUpdateRunning && !applicationUpdateCheckRunning;
@@ -612,19 +645,19 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public bool CanOpenRepairLog => SystemRepairRunner.LatestLogPath is not null;
     public string? RepairLogPath => SystemRepairRunner.LatestLogPath;
     public string Status => status;
-    public string Cpu => Selected?.CpuLabel ?? "—";
-    public Brush CpuStatusBrush => Selected is null ? MetricNeutralBrush :
-        (Selected.CpuTemperatureC ?? Selected.Full?.CpuTemperatureC) is >= HwInfoThresholds.CpuCriticalC ? MetricCriticalBrush :
-        (Selected.CpuTemperatureC ?? Selected.Full?.CpuTemperatureC) is >= HwInfoThresholds.CpuWarningC || Selected.Full?.ResourceSampling?.CpuHighSamples >= 5 ? MetricWarningBrush : MetricGoodBrush;
-    public string CpuDetail => $"{Selected?.Full?.CpuName ?? Selected?.HwInfo?.CpuName ?? LocalCpuName} · {FormatCpuTemperature(Selected?.CpuTemperatureC ?? Selected?.Full?.CpuTemperatureC)}";
-    public string Gpu => Selected?.Full?.GpuName ?? "Нет данных";
-    public string MemoryType => Selected?.Full?.MemoryType is { Length: > 0 } type ? type : "Тип DDR не определён";
-    public string Memory => Selected?.MemoryLabel ?? "—";
-    public Brush MemoryStatusBrush => Selected is null ? MetricNeutralBrush :
-        Selected.Full?.ResourceSampling is { LowAvailableSamples: >= 5, PagingHighSamples: >= 3 } ? MetricCriticalBrush :
-        Selected.Full?.ResourceSampling?.MemoryHighSamples >= 5 ? MetricWarningBrush : MetricGoodBrush;
-    public string MemoryDetail => Selected is null || Selected.TotalMemoryBytes == 0 ? "Замер не выполнен"
-        : $"Свободно {Selected.AvailableMemoryBytes / 1073741824.0:N1} из {Selected.TotalMemoryBytes / 1073741824.0:N1} ГБ";
+    public string Cpu => UserCpuLabel;
+    public Brush CpuStatusBrush => UserSnapshot is not { } cpuSnapshot ? MetricNeutralBrush :
+        CurrentCpuTemperature is >= HwInfoThresholds.CpuCriticalC ? MetricCriticalBrush :
+        CurrentCpuTemperature is >= HwInfoThresholds.CpuWarningC || cpuSnapshot.Full?.ResourceSampling?.CpuHighSamples >= 5 ? MetricWarningBrush : MetricGoodBrush;
+    public string CpuDetail => $"{UserSnapshot?.Full?.CpuName ?? CurrentHwInfo?.CpuName ?? LocalCpuName} · {FormatCpuTemperature(CurrentCpuTemperature)}";
+    public string Gpu => UserSnapshot?.Full?.GpuName ?? "Нет данных";
+    public string MemoryType => UserSnapshot?.Full?.MemoryType is { Length: > 0 } type ? type : "Тип DDR не определён";
+    public string Memory => UserMemoryLabel;
+    public Brush MemoryStatusBrush => UserSnapshot is not { } memorySnapshot ? MetricNeutralBrush :
+        memorySnapshot.Full?.ResourceSampling is { LowAvailableSamples: >= 5, PagingHighSamples: >= 3 } ? MetricCriticalBrush :
+        memorySnapshot.Full?.ResourceSampling?.MemoryHighSamples >= 5 ? MetricWarningBrush : MetricGoodBrush;
+    public string MemoryDetail => UserSnapshot is not { TotalMemoryBytes: > 0 } memorySnapshot ? "Замер не выполнен"
+        : $"Свободно {memorySnapshot.AvailableMemoryBytes / 1073741824.0:N1} из {memorySnapshot.TotalMemoryBytes / 1073741824.0:N1} ГБ";
     public string DiskCount => Selected?.Disks.FirstOrDefault(d => d.Name.StartsWith(Environment.GetEnvironmentVariable("SystemDrive") ?? "C:", StringComparison.OrdinalIgnoreCase))?.Usage ?? "—";
     public Brush DiskStatusBrush
     {
@@ -735,10 +768,72 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                     NetworkInterfaceType.Ppp => "PPP / VPN",
                     _ => adapter.NetworkInterfaceType.ToString()
                 };
-                NetworkAdapters.Add(new(adapter.Name, type, status, speed, addresses));
+                var mac = string.Join(":", adapter.GetPhysicalAddress().GetAddressBytes().Select(value => value.ToString("X2")));
+                NetworkAdapters.Add(new(adapter.Name, type, status, speed,
+                    string.IsNullOrWhiteSpace(mac) ? "—" : mac, addresses));
             }
         }
         catch (NetworkInformationException) { }
+        Notify();
+    }
+
+    private void RefreshHwInfoSensors()
+    {
+        HwInfoSensors.Clear();
+        currentHwInfo = new[] { live?.HwInfo, Selected?.HwInfo, HwInfoReader.ReadCached(TimeSpan.FromMinutes(10)) }
+            .Where(item => item is not null).OrderByDescending(item => item!.CapturedAtUtc).FirstOrDefault();
+        var hwInfo = currentHwInfo;
+        if (hwInfo is not null)
+        {
+            foreach (var sensor in hwInfo.Sensors.OrderBy(item => item.Category, StringComparer.CurrentCultureIgnoreCase)
+                         .ThenBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase).Take(100))
+            {
+                var value = double.IsFinite(sensor.Value) ? sensor.Value.ToString("N0") : "Нет данных";
+                HwInfoSensors.Add(new(sensor.Name, string.IsNullOrWhiteSpace(sensor.Unit) ? value : $"{value} {sensor.Unit}",
+                    hwInfo.CapturedAtUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss"), sensor.Category));
+            }
+        }
+    }
+
+    public string ProcessAllowStatus => processAllowStatus;
+    public async Task AllowProcessAsync(ProcessDetails process)
+    {
+        if (string.IsNullOrWhiteSpace(process.Name)) return;
+        processAllowStatus = "Добавляем правило на сервер…";
+        Notify();
+        try
+        {
+            using var enrollment = new ServerEnrollmentClient();
+            await enrollment.AllowProcessAsync(process.Name, process.Publisher, process.Signature);
+            processAllowStatus = string.Equals(process.Signature, "Valid", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(process.Publisher)
+                ? $"Разрешены {process.Name} и издатель {process.Publisher} на сервере."
+                : $"Процесс {process.Name} разрешён на сервере; издатель не подтверждён подписью.";
+        }
+        catch (Exception ex)
+        {
+            ApplicationErrorStore.Record("Список процессов", "Добавление разрешённого процесса", ex);
+            processAllowStatus = "Не удалось обновить список сервера: " + ex.Message;
+        }
+        Notify();
+    }
+
+    public async Task TrustProcessPublisherAsync(ProcessDetails process)
+    {
+        if (!process.CanTrustPublisher) return;
+        processAllowStatus = "Проверяем издателя и сохраняем правило на сервере…";
+        Notify();
+        try
+        {
+            using var enrollment = new ServerEnrollmentClient();
+            await enrollment.TrustPublisherAsync(process.Publisher, process.Signature);
+            processAllowStatus = $"Издатель {process.Publisher} разрешён на сервере.";
+        }
+        catch (Exception ex)
+        {
+            ApplicationErrorStore.Record("Список процессов", "Разрешение издателя", ex);
+            processAllowStatus = "Не удалось обновить список сервера: " + ex.Message;
+        }
         Notify();
     }
 
@@ -799,6 +894,11 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         {
             if (Selected is null) return [];
             var issues = DiagnosticRules.GetUserIssues(Selected).ToList();
+            issues.AddRange(Selected.Disks
+                .Where(d => !string.Equals(d.Name.TrimEnd('\\'), SystemDriveName, StringComparison.OrdinalIgnoreCase) &&
+                    d.TotalBytes >= 50L * 1073741824 && d.FreeBytes < 15L * 1073741824)
+                .Select(d => new UserIssue($"Мало места на диске {d.Name.TrimEnd('\\')}",
+                    $"Свободно {d.FreeBytes / 1073741824.0:N1} из {d.TotalBytes / 1073741824.0:N1} ГБ. Откройте TreeSize для анализа.", "Warning")));
             if (Selected.Full is { } full)
             {
                 issues.AddRange(DiagnosticRules.GetActionableEvents(full.Events)
@@ -828,7 +928,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         : OverviewIssues.Count == 0 ? "Отклонений не обнаружено" : $"Требуют внимания: {OverviewIssues.Count}";
     public string OverviewUptimeLabel => UserUptimeLabel.Length > 0 ? UserUptimeLabel : "Последний запуск Windows: нет данных";
     public string OverviewCoverage => UserCoverage;
-    public string HistoryCount => $"Сохранено проверок: {History.Count}";
+    public string HistoryCount => $"Загружено проверок: {History.Count}";
+    public bool CanLoadMoreHistory => historyHasMore && !historyLoading;
     public string SelectedHistorySummary => Selected?.HistoryDetailLabel ?? "Выберите проверку в списке.";
     public EventDetails? SelectedEvent
     {
@@ -896,6 +997,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         catch (Exception ex)
         {
             windowsDefenderState = null;
+            ApplicationErrorStore.Record("Защита Windows", "Чтение состояния Defender", ex);
             windowsDefenderStatus = "Не удалось прочитать состояние защиты: " + ex.Message;
         }
         finally { windowsDefenderStatusRunning = false; Notify(); }
@@ -914,6 +1016,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         }
         catch (Exception ex)
         {
+            ApplicationErrorStore.Record("Защита Windows", "Изменение состояния Defender", ex);
             windowsDefenderStatus = "Windows не изменила защиту: " + ex.Message;
             try
             {
@@ -932,7 +1035,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         windowsUpdateStatus = "Идёт поиск обновлений Windows…";
         Notify();
         try { windowsUpdateStatus = await new WindowsUpdateCheckRunner().CheckAsync(); }
-        catch (Exception ex) { windowsUpdateStatus = "Не удалось проверить обновления: " + ex.Message; }
+        catch (Exception ex) { ApplicationErrorStore.Record("Windows Update", "Поиск обновлений", ex); windowsUpdateStatus = "Не удалось проверить обновления: " + ex.Message; }
         finally { windowsUpdateActionRunning = false; Notify(); }
     }
 
@@ -954,6 +1057,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         }
         catch (Exception ex)
         {
+            ApplicationErrorStore.Record("Обновление", "Чтение каталога обновлений", ex);
             applicationUpdateStatus = automatic
                 ? "Сервер обновлений недоступен. Проверку можно повторить во вкладке ПО."
                 : "Не удалось проверить обновления: " + ex.Message;
@@ -991,6 +1095,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         }
         catch (Exception ex)
         {
+            ApplicationErrorStore.Record("Обновление", "Установка обновления приложения", ex);
             applicationUpdateStatus = "Не удалось запустить обновление: " + ex.Message;
             Notify();
             progress?.Report(applicationUpdateStatus);
@@ -1017,7 +1122,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             var runner = new WindowsUpdatePolicyRunner();
             windowsUpdatePolicyStatus = disable ? await runner.DisableAsync() : await runner.RestoreAsync();
         }
-        catch (Exception ex) { windowsUpdatePolicyStatus = "Не удалось изменить автообновления: " + ex.Message; }
+        catch (Exception ex) { ApplicationErrorStore.Record("Windows Update", "Изменение политики", ex); windowsUpdatePolicyStatus = "Не удалось изменить автообновления: " + ex.Message; }
         finally { windowsUpdateActionRunning = false; Notify(); }
     }
     public string ProcessStatus => Selected?.Full is { } f
@@ -1102,9 +1207,10 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     }
 
     public Task RunFullAsync() => RunFullCoreAsync(false);
-    public Task RunQuickFullAsync() => RunFullCoreAsync(false, true);
+    public Task RunQuickFullAsync() => RunFullCoreAsync(false);
     public Task RunUserFullAsync() => RunFullCoreAsync(true);
-    public Task RunScheduledUserQuickAsync() => RunFullCoreAsync(true, true);
+    public Task RunScheduledUserCheckAsync() => RunFullCoreAsync(true);
+    public Task RunScheduledUserQuickAsync() => RunScheduledUserCheckAsync();
 
     public void StopFullCheck()
     {
@@ -1115,9 +1221,9 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         Notify();
     }
 
-    public async Task OpenLowSpaceScanAsync()
+    public async Task OpenLowSpaceScanAsync(bool engineer = false)
     {
-        if (busy || LowSpaceDisk is not { } disk) return;
+        if (busy || (engineer ? EngineerLowSpaceDisk : LowSpaceDisk) is not { } disk) return;
         userStatusOverride = "Открываем TreeSize Free через службу…";
         Notify();
         var result = await MaintenanceServiceClient.LaunchUtilityAsync("TreeSize", disk.Name,
@@ -1127,7 +1233,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         Notify();
     }
 
-    private async Task RunFullCoreAsync(bool userMode, bool quickMode = false)
+    private async Task RunFullCoreAsync(bool userMode)
     {
         if (busy || fullRunner is null) return;
         using var cancellation = new CancellationTokenSource();
@@ -1140,17 +1246,17 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             checkProgressGeneration++;
             checkProgressActive = true;
             checkProgressPhase = "Диагностика";
-            RecordProgress("Проверка", quickMode ? "Подготовка быстрой полной проверки" : "Подготовка полной проверки");
+            RecordProgress("Проверка", "Подготовка полной проверки");
         }
         userStatusOverride = userMode ? "Подготовка проверки…" : null;
         lastFullError = null;
-        currentFullStage = quickMode ? "Подготовка быстрой полной проверки…" : "Подготовка полной проверки…";
+        currentFullStage = "Подготовка полной проверки…";
         debugPreferSelected = false;
         busy = true; status = currentFullStage; Notify();
         RefreshDebug();
         try
         {
-            if (!userMode && !quickMode)
+            if (!userMode)
             {
                 windowsUpdatePolicyStatus = "Настройка автообновлений выполняется параллельно с диагностикой";
                 RecordProgress("Обслуживание", "Проверка политики автообновлений запущена параллельно с диагностикой");
@@ -1189,12 +1295,12 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                 else RefreshDebug();
                 Notify();
             });
-            var snapshot = await Task.Run(() => quickMode
-                ? userMode ? fullRunner.RunUserQuickAsync(progress, cancellation.Token) : fullRunner.RunQuickAsync(progress, cancellation.Token)
-                : userMode ? fullRunner.RunUserAsync(progress, cancellation.Token) : fullRunner.RunAsync(progress, cancellation.Token));
+            var snapshot = await Task.Run(() => userMode
+                ? fullRunner.RunUserAsync(progress, cancellation.Token)
+                : fullRunner.RunAsync(progress, cancellation.Token));
             live = null;
             Selected = snapshot;
-            if (!userMode && !quickMode)
+            if (!userMode)
             {
                 var updateResult = snapshot.Notes.FirstOrDefault(note => note.Contains("автообновлен", StringComparison.OrdinalIgnoreCase));
                 windowsUpdatePolicyStatus = updateResult
@@ -1207,13 +1313,14 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             try { await ServerReportQueue.EnqueueAsync(snapshot); }
             catch (Exception ex)
             {
+                ApplicationErrorStore.Record("Отчёты", "Постановка отчёта в очередь", ex);
                 if (!userMode)
                     RecordProgress("Сервер", "Отчёт сохранён локально; отправка будет повторена: " + ex.Message);
             }
             await ReloadAsync();
             await TriggerApplicationUpdateAfterCheckAsync(userMode);
             LastFullSucceeded = true;
-            status = quickMode ? "Быстрая полная проверка завершена. Результат сохранён" : "Полная проверка завершена. Результат сохранён";
+            status = "Полная проверка завершена. Результат сохранён";
             if (!userMode)
             {
                 RecordProgress("Проверка", "Диагностика завершена; результат сохранён");
@@ -1236,9 +1343,10 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         }
         catch (Exception ex)
         {
+            var error = ApplicationErrorStore.Record("Диагностика", userMode ? "Проверка пользователя" : "Полная проверка", ex);
             if (!userMode) { RecordProgress("Ошибка", ex.Message); checkProgressPhase = "Ошибка проверки"; checkProgressActive = false; }
-            lastFullError = ex.Message;
-            status = $"Полная проверка: {ex.Message}";
+            lastFullError = error.Summary;
+            status = ApplicationErrorStore.UserMessage(error);
             if (userMode) userStatusOverride = "Проверку не удалось завершить. Подробности доступны инженеру.";
             RefreshDebug();
         }
@@ -1264,7 +1372,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             RecordProgress("Готово", hasErrors ? "Проверка завершена; очистка требует внимания" : "Проверка и очистка завершены", generation);
             if (generation == checkProgressGeneration) checkProgressPhase = hasErrors ? "Завершено с замечаниями" : "Завершено";
         }
-        catch (Exception ex) { RecordProgress("Ошибка", ex.Message, generation); if (generation == checkProgressGeneration) checkProgressPhase = "Завершено с ошибкой"; }
+        catch (Exception ex) { var error = ApplicationErrorStore.Record("Обслуживание", "Очистка после плановой проверки", ex); RecordProgress("Ошибка", error.Summary, generation); if (generation == checkProgressGeneration) checkProgressPhase = "Завершено с ошибкой"; }
         finally { if (generation == checkProgressGeneration) { checkProgressActive = false; Notify(); } }
     }
 
@@ -1280,13 +1388,23 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         }
         catch (Exception ex)
         {
+            ApplicationErrorStore.Record("Обновление", "Проверка обновления после диагностики", ex);
             if (!userMode) RecordProgress("Обновление", "Не удалось запустить проверку обновлений: " + ex.Message);
         }
     }
 
     private async Task RunCleanupCoreAsync(bool background, int? generation = null)
     {
-        if (cleanupRunning || (busy && !background)) return;
+        if (cleanupRunning || (busy && !background))
+        {
+            if (!background)
+            {
+                cleanupResult = cleanupRunning ? "Очистка уже выполняется." : "Очистка будет доступна после завершения текущей проверки.";
+                status = cleanupResult;
+                Notify();
+            }
+            return;
+        }
         if (!background) userStatusOverride = null;
         cleanupRunning = true;
         if (generation == checkProgressGeneration) { checkProgressPhase = "Очистка"; RecordProgress("Очистка", "Запуск очистки Windows", generation); }
@@ -1301,7 +1419,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             if (generation.HasValue) RecordProgress("Очистка", result.Summary, generation);
             status = background ? "Отчёт готов. Очистка завершена." : result.Summary;
         }
-        catch (Exception ex) { cleanupResult = "Ошибка очистки: " + ex.Message; status = cleanupResult; if (generation.HasValue) RecordProgress("Ошибка", cleanupResult, generation); }
+        catch (Exception ex) { var error = ApplicationErrorStore.Record("Очистка", "Очистка Windows", ex); cleanupResult = "Ошибка очистки: " + error.Summary; status = ApplicationErrorStore.UserMessage(error); if (generation.HasValue) RecordProgress("Ошибка", cleanupResult, generation); }
         finally { cleanupRunning = false; Notify(); }
     }
 
@@ -1318,7 +1436,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             repairResult = await new SystemRepairRunner().RunAsync(progress);
             status = repairResult;
         }
-        catch (Exception ex) { repairResult = "Ошибка восстановления: " + ex.Message; status = repairResult; }
+        catch (Exception ex) { var error = ApplicationErrorStore.Record("Восстановление", "DISM и SFC", ex); repairResult = "Ошибка восстановления: " + error.Summary; status = ApplicationErrorStore.UserMessage(error); }
         finally { repairRunning = false; Notify(); }
     }
 
@@ -1341,53 +1459,75 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             status = History.Count > 0 ? "Последняя проверка загружена" : "Готово к первой проверке";
             _ = ImportInstalledReportsAsync();
         }
-        catch (Exception ex) { status = $"Не удалось прочитать историю: {ex.Message}"; }
+        catch (Exception ex) { var error = ApplicationErrorStore.Record("История", "Загрузка истории проверок", ex); status = ApplicationErrorStore.UserMessage(error); }
         finally { busy = false; Notify(); }
     }
 
+    private readonly HashSet<Guid> importedInstalledReports = [];
     private async Task ImportInstalledReportsAsync()
     {
         try
         {
             var reports = await FullDiagnosticsRunner.ReadInstalledReportsAsync();
-            if (reports.Count == 0) return;
-            await history.SaveManyAsync(reports);
-            if (!busy) await ReloadAsync();
+            var newReports = reports.Where(report => !importedInstalledReports.Contains(report.Id)).ToArray();
+            if (newReports.Length == 0) return;
+            await history.SaveManyAsync(newReports);
+            foreach (var report in newReports) importedInstalledReports.Add(report.Id);
+            if (!busy)
+            {
+                var selectedId = Selected?.Id;
+                await ReloadAsync();
+                if (selectedId is { } id && History.FirstOrDefault(report => report.Id == id) is { } selected)
+                    Selected = selected;
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or Microsoft.Data.Sqlite.SqliteException)
         {
-            status = "История системных проверок недоступна: " + ex.Message;
+            var error = ApplicationErrorStore.Record("История", "Импорт системных проверок", ex);
+            status = "История системных проверок недоступна: " + error.Summary;
             Notify();
         }
     }
 
+    private DateTimeOffset nextInstalledReportImport = DateTimeOffset.MinValue;
+
     public async Task RefreshLiveStatusAsync()
     {
-        if (busy || cleanupRunning || repairRunning || windowsUpdateActionRunning
-            || Interlocked.Exchange(ref liveRefreshRunning, 1) != 0) return;
+        if (Interlocked.Exchange(ref liveRefreshRunning, 1) != 0) return;
         try
         {
-            if (DateTimeOffset.UtcNow >= nextTemperatureProbeUtc)
+            var operationActive = busy || cleanupRunning || repairRunning || windowsUpdateActionRunning;
+            if (!operationActive && DateTimeOffset.UtcNow >= nextInstalledReportImport)
+            {
+                nextInstalledReportImport = DateTimeOffset.UtcNow.AddSeconds(30);
+                await ImportInstalledReportsAsync();
+            }
+            if (!operationActive && DateTimeOffset.UtcNow >= nextTemperatureProbeUtc)
             {
                 nextTemperatureProbeUtc = DateTimeOffset.UtcNow.AddSeconds(30);
                 _ = RequestTemperatureProbeAsync();
             }
 
-            var snapshot = MaintenanceServiceStatusReader.ReadSnapshot(TimeSpan.FromMinutes(3));
+            var snapshot = MaintenanceServiceStatusReader.ReadSnapshot(TimeSpan.FromSeconds(20));
             if (snapshot is null)
+            {
+                if (operationActive) return;
                 snapshot = runner is WindowsDiagnosticsRunner windowsRunner
                     ? await windowsRunner.RunLiveAsync()
                     : await runner.RunAsync();
+            }
             var temperature = CpuTemperatureCache.ReadFresh(maxAge: TimeSpan.FromSeconds(45));
             live = snapshot with
             {
-                CpuTemperatureC = temperature?.TemperatureC,
+                CpuTemperatureC = temperature?.TemperatureC ?? snapshot.CpuTemperatureC ?? snapshot.HwInfo?.CpuTemperatureC,
                 CpuTemperatureStatus = temperature?.Status ?? temperatureProbeError ?? snapshot.CpuTemperatureStatus
             };
+            RefreshHwInfoSensors();
             Notify();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
+            ApplicationErrorStore.Record("Мониторинг", "Чтение текущих показателей", ex);
             if (live is null && Selected is null) status = "Не удалось получить текущие показатели: " + ex.Message;
             Notify();
         }
@@ -1404,33 +1544,37 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         if (!started) Notify();
     }
 
-    public async Task RunQuickAsync()
-    {
-        if (busy) return;
-        userStatusOverride = null;
-        busy = true; status = "Проверяем загрузку процессора, память и свободное место…"; Notify();
-        try
-        {
-            var snapshot = await runner.RunAsync();
-            Selected = snapshot;
-            status = "Сохранение результата…"; Notify();
-            await history.SaveAsync(snapshot);
-            try { await ServerReportQueue.EnqueueAsync(snapshot); }
-            catch (Exception ex) { RecordProgress("Сервер", "Отчёт сохранён локально; отправка будет повторена: " + ex.Message); }
-            await ReloadAsync();
-            await TriggerApplicationUpdateAfterCheckAsync(userMode: true);
-            status = "Быстрая проверка завершена. Результат сохранён";
-        }
-        catch (Exception ex) { status = $"Ошибка проверки или сохранения: {ex.Message}"; }
-        finally { busy = false; Notify(); }
-    }
+    public Task RunQuickAsync() => RunUserFullAsync();
 
     private async Task ReloadAsync()
     {
-        var rows = await history.GetRecentAsync();
+        var rows = await history.GetRecentAsync(HistoryPageSize);
         History.Clear();
         foreach (var row in rows) History.Add(row);
+        historyLoadedCount = rows.Count;
+        historyHasMore = rows.Count == HistoryPageSize;
         Selected = History.FirstOrDefault();
+        Notify();
+    }
+
+    public async Task LoadMoreHistoryAsync()
+    {
+        if (!CanLoadMoreHistory) return;
+        historyLoading = true;
+        Notify();
+        try
+        {
+            var rows = await history.GetRecentAsync(HistoryPageSize, historyLoadedCount);
+            foreach (var row in rows) History.Add(row);
+            historyLoadedCount += rows.Count;
+            historyHasMore = rows.Count == HistoryPageSize;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
+        {
+            ApplicationErrorStore.Record("История", "Загрузка предыдущих проверок", ex);
+            status = "Не удалось загрузить предыдущие проверки: " + ex.Message;
+        }
+        finally { historyLoading = false; Notify(); }
     }
 
     private void Notify() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));

@@ -12,9 +12,14 @@ public static class HwInfoReader
     private static readonly Regex NumberPattern = new(@"[-+]?\d+(?:[\.,]\d+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly object SessionGate = new();
     private static DateTimeOffset sessionStartedUtc;
+    private static Process? sensorProcess;
+    private static DateTimeOffset nextStartAttemptUtc;
+    private static string SessionMarker => Path.ChangeExtension(CachePath,"session.txt");
     public static TimeSpan SessionLifetime { get; } = TimeSpan.FromHours(10);
     public static string CachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
         "ITSeti", "Maintenance", "hwinfo.json");
+    public static string ErrorPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "ITSeti", "Maintenance", "hwinfo-error.txt");
 
     public static bool SessionRestartDue
     {
@@ -27,10 +32,32 @@ public static class HwInfoReader
 
     public static void ResetSession()
     {
-        lock (SessionGate) sessionStartedUtc = DateTimeOffset.UtcNow;
+        lock (SessionGate)
+        {
+            if (sensorProcess is not null)
+            {
+                try { if (!sensorProcess.HasExited) sensorProcess.Kill(entireProcessTree: true); }
+                catch (Exception ex) when (ex is Win32Exception or InvalidOperationException) { }
+                sensorProcess.Dispose(); sensorProcess = null;
+            }
+            sessionStartedUtc = DateTimeOffset.UtcNow;
+            SaveSessionMarker();
+            nextStartAttemptUtc = default;
+        }
         try { File.Delete(CachePath); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
+    }
+
+    public static void StopSession()
+    {
+        lock(SessionGate)
+        {
+            if(sensorProcess is null)return;
+            try {if(!sensorProcess.HasExited)sensorProcess.Kill(entireProcessTree:true);}
+            catch(Exception ex) when(ex is Win32Exception or InvalidOperationException){}
+            sensorProcess.Dispose();sensorProcess=null;
+        }
     }
 
     public static async Task<HwInfoSnapshot?> ReadAsync(CancellationToken cancellationToken = default)
@@ -38,37 +65,54 @@ public static class HwInfoReader
         if (!OperatingSystem.IsWindows()) return null;
         lock (SessionGate)
         {
-            if (sessionStartedUtc == default) sessionStartedUtc = DateTimeOffset.UtcNow;
+            if (sessionStartedUtc == default)
+            {
+                try { if (File.Exists(SessionMarker)) DateTimeOffset.TryParse(File.ReadAllText(SessionMarker), out sessionStartedUtc); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                if(sessionStartedUtc == default || sessionStartedUtc > DateTimeOffset.UtcNow) {sessionStartedUtc=DateTimeOffset.UtcNow;SaveSessionMarker();}
+            }
         }
+        if(SessionRestartDue) ResetSession();
         var executable = FindExecutable();
-        if (executable is null) return null;
-        var temporary = Path.Combine(Path.GetTempPath(), "ITSeti-HWiNFO-" + Guid.NewGuid().ToString("N") + ".json");
+        if (executable is null) { WriteFailure("HWiNFO не найден в комплекте приложения."); return null; }
         try
         {
-            using var process = new Process { StartInfo = new ProcessStartInfo(executable)
+            lock (SessionGate)
             {
-                UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardError = true, RedirectStandardOutput = true
-            } };
-            process.StartInfo.ArgumentList.Add("-j" + temporary);
-            if (!process.Start()) return null;
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(20));
-            try { await process.WaitForExitAsync(timeout.Token); }
-            catch (OperationCanceledException)
-            {
-                try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-                if (cancellationToken.IsCancellationRequested) throw;
-                return null;
+                if ((sensorProcess is null || sensorProcess.HasExited) && DateTimeOffset.UtcNow >= nextStartAttemptUtc)
+                {
+                    nextStartAttemptUtc = DateTimeOffset.UtcNow.AddMinutes(5);
+                    sensorProcess?.Dispose();
+                    sensorProcess = Process.Start(new ProcessStartInfo(executable)
+                    {
+                        UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden,
+                        WorkingDirectory = Path.GetDirectoryName(executable)!
+                    });
+                }
             }
-            if (!File.Exists(temporary) || new FileInfo(temporary).Length is <= 0 or > 8 * 1024 * 1024) return null;
-            var snapshot = Parse(await File.ReadAllTextAsync(temporary, cancellationToken), executable);
-            if (snapshot is not null) await WriteCacheAsync(snapshot, cancellationToken);
+            ITSeti.HwInfoBridge.SensorValue[]? values = null;
+            for (var attempt = 0; attempt < 10; attempt++)
+            {
+                if(sensorProcess is not null && !sensorProcess.HasExited) ITSeti.HwInfoBridge.SensorReader.StartSensors(sensorProcess.Id);
+                try { values = ITSeti.HwInfoBridge.SensorReader.Read(); break; }
+                catch (FileNotFoundException) when (attempt < 9) { await Task.Delay(1000, cancellationToken); }
+            }
+            var readings = (values ?? []).Select(value => new { value, category = Classify(value.Name, value.Unit) })
+                .Where(item => item.category is not null)
+                .Select(item => new HwInfoSensorReading(item.value.Name, item.value.Value, item.value.Unit, item.category!,
+                    IsCritical:item.category=="HardwareAlarm" && item.value.Value>0 && !item.value.Unit.Contains("C",StringComparison.OrdinalIgnoreCase))).ToArray();
+            var snapshot = readings.Length == 0 ? null : new HwInfoSnapshot("HWiNFO Shared Memory", FileVersionInfo.GetVersionInfo(executable).FileVersion ?? "",
+                DateTimeOffset.UtcNow, null, null, null, null, readings);
+            if (snapshot is not null)
+            {
+                await WriteCacheAsync(snapshot, cancellationToken);
+                try { File.Delete(ErrorPath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
+            else WriteFailure("HWiNFO не передал датчики. Проверьте режим Sensors-only и Shared Memory Support.");
             return snapshot;
         }
         catch (Exception ex) when (ex is Win32Exception or IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
-        { return null; }
-        finally { try { File.Delete(temporary); } catch (IOException) { } }
+        { WriteFailure(ex.GetType().Name + ": " + ex.Message); return null; }
     }
 
     public static HwInfoSnapshot? ReadCached(TimeSpan maximumAge)
@@ -76,7 +120,10 @@ public static class HwInfoReader
         try
         {
             if (!File.Exists(CachePath) || DateTime.UtcNow - File.GetLastWriteTimeUtc(CachePath) > maximumAge) return null;
-            return Parse(File.ReadAllText(CachePath), "cached");
+            var snapshot=JsonSerializer.Deserialize<HwInfoSnapshot>(File.ReadAllText(CachePath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if(snapshot?.Sensors is null || snapshot.Sensors.Any(sensor=>sensor is null || !double.IsFinite(sensor.Value)))return null;
+            var age=DateTimeOffset.UtcNow-snapshot.CapturedAtUtc;
+            return age>=TimeSpan.FromSeconds(-60)&&age<=maximumAge?snapshot:null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return null; }
     }
@@ -93,13 +140,102 @@ public static class HwInfoReader
             FindText(document.RootElement, "bios"), FindText(document.RootElement, "memory type", "memorytype", "memory"), readings);
     }
 
+    internal static HwInfoSnapshot? ParseSensorCsv(string csv, string source)
+    {
+        var lines = csv.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length < 2) return null;
+        var separator = DetectSeparator(lines[0]);
+        var headers = SplitCsvLine(lines[0], separator);
+        var readings = new List<HwInfoSensorReading>();
+        foreach (var line in lines.Skip(1))
+        {
+            var values = SplitCsvLine(line, separator);
+            if (values.Count < Math.Min(headers.Count, 2)) continue;
+            for (var index = 0; index < Math.Min(headers.Count, values.Count); index++)
+            {
+                var name = headers[index].Trim();
+                if (name.Length == 0 || name.Equals("Date", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("Time", StringComparison.OrdinalIgnoreCase) || name.Contains("Timestamp", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!TryParseNumber(values[index], out var value)) continue;
+                var unitMatch = Regex.Match(name, @"\[(?<unit>[^\]]+)\]\s*$", RegexOptions.CultureInvariant);
+                var unit = unitMatch.Success ? unitMatch.Groups["unit"].Value : "";
+                var category = Classify(name, unit);
+                if (category is not null) readings.Add(new(name, value, unit, category));
+            }
+        }
+        if (readings.Count == 0) return null;
+        string version;
+        try { version = FileVersionInfo.GetVersionInfo(source).FileVersion ?? ""; }
+        catch (Exception ex) when (ex is Win32Exception or IOException or ArgumentException) { version = ""; }
+        return new(source, version, DateTimeOffset.UtcNow, null, null, null, null, readings);
+    }
+
+    private static char DetectSeparator(string header)
+    {
+        var candidates = new[] { ',', ';', '\t' };
+        return candidates.OrderByDescending(candidate => SplitCsvLine(header, candidate).Count).First();
+    }
+
+    private static List<string> SplitCsvLine(string line, char separator)
+    {
+        var fields = new List<string>();
+        var value = new System.Text.StringBuilder();
+        var quoted = false;
+        for (var index = 0; index < line.Length; index++)
+        {
+            var character = line[index];
+            if (character == '"')
+            {
+                if (quoted && index + 1 < line.Length && line[index + 1] == '"') { value.Append('"'); index++; }
+                else quoted = !quoted;
+            }
+            else if (character == separator && !quoted) { fields.Add(value.ToString()); value.Clear(); }
+            else value.Append(character);
+        }
+        fields.Add(value.ToString());
+        return fields;
+    }
+
+    private static string ShortMessage(params string[] values) =>
+        string.Join(" ", values.Where(value => !string.IsNullOrWhiteSpace(value))).ReplaceLineEndings(" ").Trim() is { Length: > 300 } text
+            ? text[..300] : string.Join(" ", values.Where(value => !string.IsNullOrWhiteSpace(value))).ReplaceLineEndings(" ").Trim();
+
+    private static void WriteFailure(string message)
+    {
+        ApplicationErrorStore.Record("HWiNFO", "Чтение датчиков", new InvalidOperationException(message));
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(ErrorPath)!);
+            File.WriteAllText(ErrorPath, DateTimeOffset.Now.ToString("O") + Environment.NewLine + message);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
     private static async Task WriteCacheAsync(HwInfoSnapshot snapshot, CancellationToken cancellationToken)
     {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(CachePath)!);
             var temporary = CachePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(snapshot), cancellationToken);
+            await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(new
+            {
+                snapshot.Source,
+                snapshot.ToolVersion,
+                snapshot.CapturedAtUtc,
+                snapshot.CpuName,
+                snapshot.Motherboard,
+                snapshot.BiosVersion,
+                snapshot.MemoryType,
+                snapshot.Sensors,
+                snapshot.CpuTemperatureC,
+                snapshot.VrmTemperatureC,
+                snapshot.PchTemperatureC,
+                snapshot.Rail12V,
+                snapshot.Rail5V,
+                snapshot.Rail3V,
+                snapshot.CpuVoltageV,
+                snapshot.CpuLoadPercent
+            }), cancellationToken);
             File.Move(temporary, CachePath, true);
         }
         catch (IOException) { }
@@ -159,20 +295,25 @@ public static class HwInfoReader
     private static string? Classify(string name, string unit)
     {
         var lower = name.ToLowerInvariant();
-        if (unit.Contains("%", StringComparison.Ordinal) && (lower.Contains("cpu") || lower.Contains("processor")) &&
-            (lower.Contains("load") || lower.Contains("usage") || lower.Contains("util"))) return "CpuLoad";
-        if (unit.Contains("c", StringComparison.OrdinalIgnoreCase) || lower.Contains("temperature") || lower.Contains("temp"))
+        if(lower.Contains("distance to") || lower.Contains("tjmax") || lower.Contains("thermal limit"))return null;
+        if(unit.Contains('%') && lower.Contains("physical memory load")) return "MemoryLoad";
+        if(lower.Contains("thermal throttling") || lower.Contains("critical temperature") || lower.Contains("thermal trip")) return "HardwareAlarm";
+        if (unit.Contains("%", StringComparison.Ordinal) && (lower.Contains("cpu") || lower.Contains("processor") || lower.Contains("процессор")) &&
+            (lower.Contains("load") || lower.Contains("usage") || lower.Contains("util") || lower.Contains("загруз") || lower.Contains("использ"))) return "CpuLoad";
+        if (unit.Contains("c", StringComparison.OrdinalIgnoreCase) || lower.Contains("temperature") || lower.Contains("temp") || lower.Contains("температур"))
         {
             if (lower.Contains("vrm") || lower.Contains("mos") || lower.Contains("vr loop")) return "VrmTemperature";
-            if (lower.Contains("pch") || lower.Contains("chipset") || lower.Contains("southbridge") || lower.Contains("platform controller")) return "PchTemperature";
-            if (lower.Contains("cpu") || lower.Contains("processor") || lower.Contains("package") || lower.Contains("tctl") || lower.Contains("tdie")) return "CpuTemperature";
+            if (lower.Contains("pch") || lower.Contains("chipset") || lower.Contains("southbridge") || lower.Contains("platform controller") || lower.Contains("чипсет")) return "PchTemperature";
+            if (lower.Contains("cpu") || lower.Contains("processor") || lower.Contains("package") || lower.Contains("tctl") || lower.Contains("tdie") || lower.Contains("процессор")) return "CpuTemperature";
             return null;
         }
         if (unit.Trim().Equals("V", StringComparison.OrdinalIgnoreCase) || lower.Contains("voltage") || lower.Contains(" vcore"))
         {
+            if (lower.Contains("3.3") || lower.Contains("3,3")) return "Rail3V";
             if (lower.Contains("12v") || lower.Contains("+12")) return "Rail12V";
             if (lower.Contains("5v") || lower.Contains("+5")) return "Rail5V";
-            if (lower.Contains("vcore") || lower.Contains("vcc") || lower.Contains("vsoc") || lower.Contains("vsc") || lower.Contains("cpu core")) return "CpuVoltage";
+            if (lower.Contains("vcore") || lower.Contains("vsoc") || lower.Contains("vsc") || lower.Contains("cpu core")) return "CpuVoltage";
+            return "Voltage";
         }
         return null;
     }
@@ -183,6 +324,12 @@ public static class HwInfoReader
             if (names.Any(name => property.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) &&
                 property.Value.ValueKind == JsonValueKind.String) return property.Value.GetString();
         return null;
+    }
+
+    private static void SaveSessionMarker()
+    {
+        try {Directory.CreateDirectory(Path.GetDirectoryName(SessionMarker)!);File.WriteAllText(SessionMarker,sessionStartedUtc.ToString("O"));}
+        catch(Exception ex) when(ex is IOException or UnauthorizedAccessException){ApplicationErrorStore.Record("HWiNFO","Сохранение цикла датчиков",ex);}
     }
 
     private static string? ReadSensorStatus(JsonElement element) =>

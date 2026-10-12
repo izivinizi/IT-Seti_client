@@ -24,7 +24,12 @@ namespace ITSeti.Maintenance.Win7
         private const string CacheRoot = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches";
         private static readonly string ResultsRoot = ScheduledCheckRunner.ResultsRoot;
         private static readonly string ResultPath = Path.Combine(ResultsRoot, "system-cleanup.json");
-        private static readonly string[] SystemCategories = { "Delivery Optimization Files", "Update Cleanup", "Device Driver Packages" };
+        private static readonly string[] SystemCategories = {
+            "Downloaded Program Files", "Temporary Setup Files", "Setup Log Files", "Old ChkDsk Files",
+            "Memory Dump Files", "System error memory dump files",
+            "System error minidump files", "Windows Upgrade Log Files", "Previous Installations",
+            "Language Resource Files", "Delivery Optimization Files", "Update Cleanup", "Device Driver Packages"
+        };
 
         private sealed class SavedValue
         {
@@ -149,7 +154,7 @@ namespace ITSeti.Maintenance.Win7
                     }
                 }
                 if (saved.Count == 0)
-                    return "В этой версии Windows не обнаружены категории очистки доставки, обновлений или пакетов драйверов.";
+                    return "В этой версии Windows не обнаружены согласованные категории системной очистки.";
                 ThrowIfCancelled(null);
                 using (var process = Process.Start(new ProcessStartInfo(cleanmgr, "/sagerun:" + number + " /d " + systemRoot.TrimEnd('\\'))
                 {

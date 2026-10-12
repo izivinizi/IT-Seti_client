@@ -34,6 +34,8 @@ public static class CriticalMonitoringEvaluator
         if (snapshot.CpuPercent is >= 98)
             issues.Add(new("cpu:load", "Критическая загрузка CPU",
                 $"Загрузка процессора достигла {snapshot.CpuPercent:N0}%."));
+        if (snapshot.HwInfo?.Rail3V is { } rail3 && (rail3 < 2.97 || rail3 > 3.63))
+            issues.Add(new("hwinfo:rail-3v", "Критическое отклонение шины 3,3 В", $"Напряжение шины 3,3 В: {rail3:N2} В."));
         if (snapshot.MemoryUsedPercent >= 98)
             issues.Add(new("memory:load", "Критическая загрузка памяти",
                 $"Используется {snapshot.MemoryUsedPercent:N0}% оперативной памяти."));

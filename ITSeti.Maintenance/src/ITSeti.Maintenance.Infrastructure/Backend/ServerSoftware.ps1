@@ -1,4 +1,4 @@
-param([string]$Component, [switch]$AutoUpdate, [switch]$CatalogOnly)
+﻿param([string]$Component, [switch]$AutoUpdate, [switch]$CatalogOnly)
 $ErrorActionPreference = 'Stop'
 $requestedComponent = $Component
 function Normalize-ComponentKey([string]$Value) {
@@ -63,8 +63,14 @@ function Assert-ServerPackage($Package) {
         ($key -eq 'rms' -and $extension -ne '.msi') -or ($key -ne 'rms' -and $extension -ne '.exe')) { throw 'Invalid package metadata or installer type.' }
 }
 try {
-    try { $locked = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked = $true }
-    if (!$locked) { throw 'Another server software operation is running.' }
+    try {
+        if ($CatalogOnly) { $locked = $mutex.WaitOne(0) }
+        else { $locked = $mutex.WaitOne([TimeSpan]::FromMinutes(20)) }
+    } catch [Threading.AbandonedMutexException] { $locked = $true }
+    if (!$locked) {
+        if ($CatalogOnly) { exit 0 }
+        throw 'Другая операция с ПО не завершилась за 20 минут. Запрос можно повторить позже.'
+    }
     $request = New-DownloadRequest '/api/v1/updates'
     $response = $request.GetResponse()
     try {
