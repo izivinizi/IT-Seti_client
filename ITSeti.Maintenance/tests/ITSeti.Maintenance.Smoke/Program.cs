@@ -26,15 +26,16 @@ internal static class Program
     {
         Environment.SetEnvironmentVariable("ITSETI_ERROR_LOG_ROOT",Path.Combine(Path.GetTempPath(),"ITSeti-error-test-"+Guid.NewGuid().ToString("N")));
         Environment.SetEnvironmentVariable("ITSETI_DISABLE_REPORT_UPLOAD", "1");
+        if (args.Contains("--installed-report-reader-contract")) return CheckInstalledReportReaderContract();
         if (args.Contains("--live-update-contract"))
         {
             var updateClient = new ServerApplicationUpdateClient();
-            var release = updateClient.GetUpdateAsync(new Version(2, 3, 5)).GetAwaiter().GetResult();
-            if (release?.Version != new Version(2, 3, 6) || !release.DownloadUrl.StartsWith("https://it-seti.nylenz.ru/api/v1/packages/", StringComparison.Ordinal))
-                throw new Exception("Live server did not offer 2.3.6 for 2.3.5");
-            if (updateClient.GetUpdateAsync(new Version(2, 3, 6)).GetAwaiter().GetResult() is not null)
+            var release = updateClient.GetUpdateAsync(new Version(2, 3, 6)).GetAwaiter().GetResult();
+            if (release?.Version != new Version(2, 3, 7) || !release.DownloadUrl.StartsWith("https://it-seti.nylenz.ru/api/v1/packages/", StringComparison.Ordinal))
+                throw new Exception("Live server did not offer 2.3.7 for 2.3.6");
+            if (updateClient.GetUpdateAsync(new Version(2, 3, 7)).GetAwaiter().GetResult() is not null)
                 throw new Exception("Live server offers reinstall of already-current version");
-            Console.WriteLine("PASS live server: 2.3.5 receives 2.3.6, 2.3.6 is current, authenticated package URL validated");
+            Console.WriteLine("PASS live server: 2.3.6 receives 2.3.7, 2.3.7 is current, authenticated package URL validated");
             return 0;
         }
         if (args.Contains("--service-concurrency-contract"))
@@ -1495,6 +1496,82 @@ internal static class Program
         for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
             count += CountButtons(VisualTreeHelper.GetChild(parent, i));
         return count;
+    }
+
+    private static int CheckInstalledReportReaderContract()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ITSeti-report-reader-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var firstTimestamp = DateTime.UtcNow.AddHours(-4);
+            var ids = new List<Guid>();
+            for (var index = 0; index < 105; index++)
+            {
+                var directory = Path.Combine(root, $"run-{index:D3}");
+                Directory.CreateDirectory(directory);
+                var id = Guid.NewGuid();
+                ids.Add(id);
+                var snapshot = new DiagnosticSnapshot(id, firstTimestamp.AddMinutes(index), "REPORT-TEST", 0,
+                    0, 0, [], []);
+                var path = Path.Combine(directory, "result.json");
+                File.WriteAllText(path, JsonSerializer.Serialize(snapshot));
+                File.SetLastWriteTimeUtc(path, firstTimestamp.AddMinutes(index));
+            }
+
+            var reader = new InstalledReportReader(root);
+            var imported = new HashSet<Guid>();
+            var total = 0;
+            while (true)
+            {
+                var batch = reader.ReadBatchAsync().GetAwaiter().GetResult();
+                if (batch.Count == 0) break;
+                if (batch.Count > 20) throw new Exception("Installed reports exceeded the bounded batch size");
+                foreach (var report in batch)
+                {
+                    if (!imported.Add(report.Snapshot.Id)) throw new Exception("Installed report was imported twice");
+                }
+                total += batch.Count;
+                reader.MarkImported(batch);
+            }
+            if (total != 100 || imported.Contains(ids[0]) || !imported.Contains(ids[^1]))
+                throw new Exception("Initial import must retain only the 100 most recent reports");
+            if (reader.ReadBatchAsync().GetAwaiter().GetResult().Count != 0)
+                throw new Exception("Previously imported reports were read again");
+
+            var newDirectory = Path.Combine(root, "run-new");
+            Directory.CreateDirectory(newDirectory);
+            var newSnapshot = new DiagnosticSnapshot(Guid.NewGuid(), DateTimeOffset.UtcNow, "REPORT-TEST", 0,
+                0, 0, [], []);
+            var newPath = Path.Combine(newDirectory, "result.json");
+            File.WriteAllText(newPath, JsonSerializer.Serialize(newSnapshot));
+            File.SetLastWriteTimeUtc(newPath, DateTime.UtcNow.AddMinutes(1));
+            var added = reader.ReadBatchAsync().GetAwaiter().GetResult();
+            if (added.Count != 1 || added[0].Snapshot.Id != newSnapshot.Id)
+                throw new Exception("Newly completed report was not discovered");
+            reader.MarkImported(added);
+            if (reader.ReadBatchAsync().GetAwaiter().GetResult().Count != 0)
+                throw new Exception("Newly imported report was returned again");
+
+            var corruptDirectory = Path.Combine(root, "run-corrupt");
+            Directory.CreateDirectory(corruptDirectory);
+            var corruptPath = Path.Combine(corruptDirectory, "result.json");
+            File.WriteAllText(corruptPath, "{");
+            File.SetLastWriteTimeUtc(corruptPath, DateTime.UtcNow.AddMinutes(2));
+            if (reader.ReadBatchAsync().GetAwaiter().GetResult().Count != 0 ||
+                reader.ReadBatchAsync().GetAwaiter().GetResult().Count != 0)
+                throw new Exception("A corrupt report was returned or retried indefinitely");
+            if (!ApplicationErrorStore.ReadRecent().Any(entry => entry.Component == "История" &&
+                    entry.Operation == "Чтение системного отчёта"))
+                throw new Exception("A corrupt report was skipped without a useful debug entry");
+
+            Console.WriteLine("PASS installed reports: latest-100 backfill, batches of 20, no duplicate reads, new report discovery and corrupt-file diagnostics");
+            return 0;
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
     }
 
     private static T? Find<T>(DependencyObject parent) where T : DependencyObject

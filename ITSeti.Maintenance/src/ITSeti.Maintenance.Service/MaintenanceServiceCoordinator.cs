@@ -105,7 +105,11 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             await writer.WriteLineAsync(JsonSerializer.Serialize(response, JsonOptions).AsMemory(), requestTimeout.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { }
-        catch (InvalidDataException) { }
+        catch (InvalidDataException ex)
+        {
+            ApplicationErrorStore.Record("Системная служба", "Отклонение запроса IPC", ex,
+                "Служба отклонила некорректный или слишком большой локальный запрос.");
+        }
         catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException or UnauthorizedAccessException)
         {
             await WriteServiceErrorAsync(ex);
@@ -645,7 +649,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     }
 
     private static string GetVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.3.6";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.3.7";
 
     private void StopChildren()
     {

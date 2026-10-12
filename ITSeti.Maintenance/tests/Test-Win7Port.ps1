@@ -32,7 +32,7 @@ foreach($method in @('AllowProcessAsync','TrustPublisherAsync')) {
 }
 $historyType = $assembly.GetType('ITSeti.Maintenance.Win7.LegacyHistoryStore', $true)
 $historyFlags = [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::Public -bor [Reflection.BindingFlags]::NonPublic
-if(!$historyType.GetMethod('Load',$historyFlags,[type[]]@([string],[int]))){throw 'Win7 history pagination is missing.'}
+if(!$historyType.GetMethod('Load',$historyFlags,$null,[type[]]@([string],[int]),$null)){throw 'Win7 history pagination is missing.'}
 $adminAudit = $assembly.GetType('ITSeti.Maintenance.App.LegacyAdminAccountAudit',$true)
 $allowedAdmin = $adminAudit.GetMethod('IsAllowedLocalAccount',[Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic)
 foreach($name in @('Admin','it-seti','Administrator',([string][char]0x410+[char]0x434+[char]0x43C+[char]0x438+[char]0x43D+[char]0x438+[char]0x441+[char]0x442+[char]0x440+[char]0x430+[char]0x442+[char]0x43E+[char]0x440))){
@@ -86,7 +86,7 @@ $updater = $assembly.GetType('ITSeti.Maintenance.App.Win7ServerUpdater', $true)
 $flags = [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic
 $parse = $updater.GetMethod('ParseServerPackage', $flags)
 if (!$parse) { throw 'Win7 server package parser is missing.' }
-$version = '2.3.6'
+$version = '2.3.7'
 $manifest = [string]([ordered]@{
     id = '11111111-1111-1111-1111-111111111111'; key = 'application'; platform = 'win7'; version = $version
     fileName = 'ITSeti-Maintenance-Win7-Setup.exe'; sizeBytes = 12345; sha256 = ('a' * 64)

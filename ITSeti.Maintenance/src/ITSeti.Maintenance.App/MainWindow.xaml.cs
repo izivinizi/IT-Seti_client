@@ -43,9 +43,16 @@ public partial class MainWindow : Window
         CheckProgressList.IsVisibleChanged += (_, _) => QueueProgressScroll();
         liveMetricsTimer.Tick += async (_, _) =>
         {
-            await ViewModel.RefreshLiveStatusAsync();
-            var changed = File.GetLastWriteTimeUtc(ServerSoftwareCatalog.CachePath);
-            if (changed != catalogWriteTime) { catalogWriteTime = changed; ViewModel.RefreshSetupAudit(); }
+            try
+            {
+                await ViewModel.RefreshLiveStatusAsync();
+                var changed = File.GetLastWriteTimeUtc(ServerSoftwareCatalog.CachePath);
+                if (changed != catalogWriteTime) { catalogWriteTime = changed; ViewModel.RefreshSetupAudit(); }
+            }
+            catch (Exception ex)
+            {
+                ApplicationErrorStore.Record("Интерфейс", "Обновление состояния главного окна", ex);
+            }
         };
         Closed += (_, _) => { closed = true; liveMetricsTimer.Stop(); progressScroll?.Abort(); };
         Loaded += async (_, _) =>
@@ -74,7 +81,10 @@ public partial class MainWindow : Window
             using var enrollment = new ServerEnrollmentClient();
             if (await enrollment.TryAutomaticEnrollmentAsync()) ViewModel.RefreshIdentity();
         }
-        catch (Exception ex) { Debug.WriteLine("Automatic server enrollment deferred: " + ex.Message); }
+        catch (Exception ex)
+        {
+            ApplicationErrorStore.Record("Регистрация сервера", "Автоматическая привязка компьютера", ex);
+        }
     }
 
     public async Task RunScheduledQuickCheckAsync()

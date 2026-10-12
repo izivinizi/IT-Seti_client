@@ -100,7 +100,7 @@ if(!$summary.Contains('Get-HwInfoCpuTemperatureC') -or $summary.Contains('LibreH
 $viewModel=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainViewModel.cs'),[Text.Encoding]::UTF8)
 $window=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml.cs'),[Text.Encoding]::UTF8)
 $liveRefreshStart=$viewModel.IndexOf('public async Task RefreshLiveStatusAsync',[StringComparison]::Ordinal)
-$liveRefreshEnd=$viewModel.IndexOf('private async Task RequestTemperatureProbeAsync',[StringComparison]::Ordinal)
+$liveRefreshEnd=$viewModel.IndexOf('private async Task ReloadAsync',[StringComparison]::Ordinal)
 $liveRefresh=if($liveRefreshStart -ge 0 -and $liveRefreshEnd -gt $liveRefreshStart){$viewModel.Substring($liveRefreshStart,$liveRefreshEnd-$liveRefreshStart)}else{''}
 if(!$liveRefresh.Contains('RunLiveAsync') -or !$window.Contains('TimeSpan.FromSeconds(5)') -or !$liveRefresh.Contains('CpuTemperatureCache.ReadFresh(maxAge: TimeSpan.FromSeconds(45))') -or !$liveRefresh.Contains('CpuTemperatureC = temperature?.TemperatureC') -or $liveRefresh.Contains('Selected?.CpuTemperatureC')) {throw 'Live resource refresh must be periodic, fresh and must not reuse stale temperature values.'}
 $treeSize=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\TreeSizeLauncher.cs'),[Text.Encoding]::UTF8)
@@ -295,6 +295,12 @@ if($accountErrors -or (Get-Content -LiteralPath $accountScript -Raw) -notmatch '
 $accountRunner=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\LocalAdminAccountRunner.cs'))
 if($accountRunner -notmatch 'ArgumentList\.Add\("-ExecutionPolicy"\)' -or $accountRunner -notmatch 'ArgumentList\.Add\("Bypass"\)' -or
    $accountRunner -notmatch 'StandardErrorEncoding') {throw 'Local admin creation must use a process-scoped execution-policy override and readable UTF-8 errors.'}
+$reportReader=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\InstalledReportReader.cs') -Raw
+$reportImporter=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.App\MainViewModel.cs') -Raw
+if($reportReader -notmatch 'InitialBackfillLimit = 100' -or $reportReader -notmatch 'DefaultBatchSize = 20' -or
+   !$reportReader.Contains('FullDiagnosticsRunner.ReadSnapshot(file.Path, cancellationToken)') -or
+   !$reportImporter.Contains('InstalledReportReader installedReportReader') -or
+   $reportImporter.Contains('ReadInstalledReportsAsync')) {throw 'History importer must use bounded batches and incremental report reads.'}
 if($install -notmatch 'ITSeti-Maintenance-Repair' -or $install -notmatch 'InstalledRepair.ps1') {throw 'Independent repair task is missing.'}
 if($install -notmatch 'ITSeti-Maintenance-Cleanup' -or $install -notmatch 'InstalledCleanup.ps1' -or $install -notmatch 'CleanupRuns') {throw 'Installed cleanup task or protected results directory is missing.'}
 $cleanupEntry=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCleanup.ps1'

@@ -4,8 +4,8 @@ $service = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win
 $app = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7.Port\App.xaml.cs') -Raw
 $project = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7.Port\ITSeti.Maintenance.Win7.Port.csproj') -Raw
 $installer = Get-Content -LiteralPath (Join-Path $Root 'Installer-Win7.iss') -Raw
-if ($project -notmatch '<Version>2\.3\.6-beta</Version>' -or
-    $installer -notmatch 'AppVersion=2\.3\.6' -or
+if ($project -notmatch '<Version>2\.3\.7-beta</Version>' -or
+    $installer -notmatch 'AppVersion=2\.3\.7' -or
     !$service.Contains('ServiceBase.Run') -or !$service.Contains('ITSetiMaintenanceWin7') -or
     !$service.Contains('ITSeti.Maintenance.Win7.v1') -or !$service.Contains('LocalSystemSid') -or
     !$service.Contains('AuthenticatedUserSid') -or !$service.Contains('CollectWithCleanup') -or

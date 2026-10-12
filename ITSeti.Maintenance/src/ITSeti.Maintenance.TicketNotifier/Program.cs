@@ -3,6 +3,7 @@ using System.Drawing;
 using System.IO;
 using System.Text.Json;
 using System.Windows.Forms;
+using ITSeti.Maintenance.Infrastructure;
 
 namespace ITSeti.Maintenance.TicketNotifier;
 
@@ -15,6 +16,14 @@ internal static class Program
         if (!created) return;
 
         ApplicationConfiguration.Initialize();
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, args) =>
+            ApplicationErrorStore.Record("Уведомления", "Необработанная ошибка интерфейса", args.Exception);
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            if (args.ExceptionObject is Exception exception)
+                ApplicationErrorStore.Record("Уведомления", "Критическая ошибка процесса", exception);
+        };
         try { Application.Run(new TicketNotificationContext()); }
         finally
         {
@@ -70,7 +79,10 @@ internal sealed class TicketNotificationContext : ApplicationContext
                 seen.UnionWith(state.Seen.TakeLast(1000));
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException)
+        {
+            ApplicationErrorStore.Record("Уведомления", "Чтение состояния уведомлений", ex);
+        }
     }
 
     private void ReadUpdates()
@@ -90,14 +102,21 @@ internal sealed class TicketNotificationContext : ApplicationContext
             if (incoming.Length == 0) return;
             foreach (var item in incoming) seen.Add(item.Id);
             if (seen.Count > 1000) seen = seen.TakeLast(1000).ToHashSet();
-            SaveSeenState();
 
             var lastTitle = incoming[^1].Title;
             var title = incoming.Length == 1 ? "Новый ответ по заявке" : $"Новых ответов по заявкам: {incoming.Length}";
             var message = incoming.Length == 1 ? lastTitle : $"Последний ответ: {lastTitle}";
             icon.ShowBalloonTip(10000, title, message, ToolTipIcon.Info);
+            try { SaveSeenState(); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException)
+            {
+                ApplicationErrorStore.Record("Уведомления", "Сохранение просмотренных сообщений", ex);
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException)
+        {
+            ApplicationErrorStore.Record("Уведомления", "Получение новых сообщений", ex);
+        }
     }
 
     private void SaveSeenState()
@@ -120,7 +139,10 @@ internal sealed class TicketNotificationContext : ApplicationContext
         {
             Process.Start(new ProcessStartInfo(appPath) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(appPath)! });
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            ApplicationErrorStore.Record("Уведомления", "Открытие главного окна", ex);
+        }
     }
 
     protected override void Dispose(bool disposing)

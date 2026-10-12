@@ -5,9 +5,12 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>ITSeti.Maintenance.TicketNotifier</AssemblyName>
     <RootNamespace>ITSeti.Maintenance.TicketNotifier</RootNamespace>
-    <Version>2.3.6</Version>
-    <AssemblyVersion>2.3.6.0</AssemblyVersion>
-    <FileVersion>2.3.6.0</FileVersion>
+    <Version>2.3.7</Version>
+    <AssemblyVersion>2.3.7.0</AssemblyVersion>
+    <FileVersion>2.3.7.0</FileVersion>
     <ApplicationIcon>..\ITSeti.Maintenance.App\Assets\favicon.ico</ApplicationIcon>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\ITSeti.Maintenance.Infrastructure\ApplicationErrorStore.cs" Link="Shared\ApplicationErrorStore.cs" />
+  </ItemGroup>
 </Project>

@@ -183,8 +183,18 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         }
     }
 
-    private static async Task<DiagnosticSnapshot> ReadSnapshot(string path) =>
-        JsonSerializer.Deserialize<DiagnosticSnapshot>(await File.ReadAllTextAsync(path)) ?? throw new InvalidDataException("Пустой результат проверки");
+    internal static async Task<DiagnosticSnapshot> ReadSnapshot(string path, CancellationToken cancellationToken = default)
+    {
+        var file = new FileInfo(path);
+        if (file.Length > 16 * 1024 * 1024)
+            throw new InvalidDataException("Файл результата проверки превышает допустимый размер.");
+
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete, 64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return await JsonSerializer.DeserializeAsync<DiagnosticSnapshot>(stream, cancellationToken: cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidDataException("Пустой результат проверки");
+    }
 
     private static async Task<DiagnosticSnapshot> AddCpuTemperatureAsync(DiagnosticSnapshot snapshot)
     {
@@ -418,23 +428,6 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         var installedScript = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
             "ITSeti Maintenance", "Backend", "InstalledCheck.ps1");
         return File.Exists(installedScript) ? installedScript : Path.Combine(AppContext.BaseDirectory, "Backend", "InstalledCheck.ps1");
-    }
-
-    public static async Task<IReadOnlyList<DiagnosticSnapshot>> ReadInstalledReportsAsync()
-    {
-        if (!IsInstalled) return [];
-        var runs = Path.Combine(InstalledRoot, "Runs");
-        if (!Directory.Exists(runs)) return [];
-        var reports = new List<DiagnosticSnapshot>();
-        foreach (var directory in Directory.EnumerateDirectories(runs)
-                     .OrderByDescending(Directory.GetLastWriteTimeUtc).Take(100))
-        {
-            var file = Path.Combine(directory, "result.json");
-            if (!File.Exists(file)) continue;
-            try { reports.Add(await ReadSnapshot(file)); }
-            catch (Exception ex) when (ex is IOException or JsonException) { }
-        }
-        return reports;
     }
 
     private static string FindTools(bool headless)

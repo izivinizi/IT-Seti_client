@@ -60,8 +60,11 @@ public static class ServerReportQueue
         }
         catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
         {
+            var error = ApplicationErrorStore.Record("Отчёты", "Отправка на сервер", ex,
+                "Отчёт сохранён в очереди и ожидает отправки на сервер.");
             var errorPath = Path.Combine(QueueDirectory, "server-upload-error.txt");
-            try { await File.WriteAllTextAsync(errorPath, ex.Message); } catch (IOException) { }
+            try { await File.WriteAllTextAsync(errorPath, error.Summary + Environment.NewLine + error.TechnicalDetails); }
+            catch (Exception writeException) when (writeException is IOException or UnauthorizedAccessException) { }
         }
     }
 }

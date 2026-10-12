@@ -2,7 +2,6 @@ using System.Windows;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using System.Text.Json;
 using ITSeti.Maintenance.Core;
 using ITSeti.Maintenance.Infrastructure;
 
@@ -34,40 +33,6 @@ public partial class App : Application
 
     protected override async void OnStartup(StartupEventArgs e)
     {
-        if (e.Args.Contains("--cpu-temperature-probe", StringComparer.OrdinalIgnoreCase))
-        {
-            ShutdownMode = ShutdownMode.OnExplicitShutdown;
-            base.OnStartup(e);
-            var outputIndex = Array.FindIndex(e.Args, argument => string.Equals(argument, "--cpu-temperature-probe", StringComparison.OrdinalIgnoreCase)) + 1;
-            if (outputIndex >= e.Args.Length) { Shutdown(2); return; }
-            string? output = null;
-            try
-            {
-                output = Path.GetFullPath(e.Args[outputIndex]);
-                var hwInfo = await HwInfoReader.ReadAsync();
-                var reading = hwInfo?.CpuTemperatureC is { } temperature
-                    ? new CpuTemperatureReading(temperature, $"HWiNFO · {hwInfo.Source}", hwInfo.CapturedAtUtc)
-                    : new CpuTemperatureReading(null, "HWiNFO не вернул допустимый датчик CPU.", DateTimeOffset.UtcNow);
-                await WriteTemperatureResultAsync(output, reading);
-                Shutdown();
-            }
-            catch (Exception ex)
-            {
-                if (!string.IsNullOrWhiteSpace(output))
-                {
-                    try
-                    {
-                        var failure = new CpuTemperatureReading(null,
-                            $"Ошибка опроса датчика: {ex.GetType().Name}: {ex.Message.ReplaceLineEndings(" ")}", DateTimeOffset.UtcNow);
-                        await WriteTemperatureResultAsync(output, failure);
-                    }
-                    catch { }
-                }
-                Shutdown(1);
-            }
-            return;
-        }
-
         base.OnStartup(e);
         if (e.Args.Contains("--engineer-bootstrap", StringComparer.OrdinalIgnoreCase))
         {
@@ -83,6 +48,7 @@ public partial class App : Application
             }
             catch (Exception ex)
             {
+                ApplicationErrorStore.Record("Режим инженера", "Запуск инженерского окна", ex);
                 MessageBox.Show("Не удалось открыть инженерское окно: " + ex.Message,
                     "Режим инженера", MessageBoxButton.OK, MessageBoxImage.Error);
                 Shutdown(1);
@@ -164,7 +130,13 @@ public partial class App : Application
             catch (Exception ex)
             {
                 var data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ITSeti", "Maintenance");
-                try { Directory.CreateDirectory(data); File.WriteAllText(Path.Combine(data, "startup-error.txt"), ex.ToString()); } catch (IOException) { }
+                var error = ApplicationErrorStore.Record("Приложение", "Запуск главного окна", ex);
+                try
+                {
+                    Directory.CreateDirectory(data);
+                    File.WriteAllText(Path.Combine(data, "startup-error.txt"), error.Summary + Environment.NewLine + error.TechnicalDetails);
+                }
+                catch (Exception logException) when (logException is IOException or UnauthorizedAccessException or System.Security.SecurityException) { }
                 MessageBox.Show($"Не удалось открыть приложение: {ex.Message}", "ИТ-Сети", MessageBoxButton.OK, MessageBoxImage.Error);
                 Shutdown();
             }
@@ -188,35 +160,6 @@ public partial class App : Application
         catch (Exception ex) when (ex is Win32Exception or IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             ApplicationErrorStore.Record("Заявки", "Запуск фоновых уведомлений", ex);
-        }
-    }
-
-    private static async Task WriteTemperatureResultAsync(string output, CpuTemperatureReading reading)
-    {
-        var directory = Path.GetDirectoryName(output);
-        if (string.IsNullOrWhiteSpace(directory)) throw new ArgumentException("Не задана папка результата датчика", nameof(output));
-        Directory.CreateDirectory(directory);
-        var temporary = output + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(reading));
-            for (var attempt = 0; ; attempt++)
-            {
-                try
-                {
-                    File.Move(temporary, output, true);
-                    break;
-                }
-                catch (Exception ex) when (attempt < 3 && ex is IOException or UnauthorizedAccessException)
-                {
-                    await Task.Delay(100 * (attempt + 1));
-                }
-            }
-        }
-        finally
-        {
-            try { File.Delete(temporary); }
-            catch { }
         }
     }
 

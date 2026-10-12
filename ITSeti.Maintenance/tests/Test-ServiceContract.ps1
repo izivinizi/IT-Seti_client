@@ -15,7 +15,7 @@ $notifier=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Tick
 $appStartup=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.App\App.xaml.cs') -Raw
 $mainWindow=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml.cs') -Raw
 $server=Get-Content -LiteralPath (Join-Path (Split-Path $Root -Parent) 'ITSeti.Server\Program.cs') -Raw
-if($serviceProject -notmatch '<Version>2\.3\.6</Version>' -or
+if($serviceProject -notmatch '<Version>2\.3\.7</Version>' -or
    !$protocol.Contains('ITSetiMaintenanceService') -or !$protocol.Contains('ITSeti.Maintenance.Service.v1') -or
    !$coordinator.Contains('BuiltinUsersSid') -or !$coordinator.Contains('PipeAccessRights.ReadWrite') -or
    !$coordinator.Contains('ResolveOperation') -or $coordinator.Contains('ProcessStartInfo(request') -or

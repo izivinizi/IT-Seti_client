@@ -30,7 +30,7 @@ public sealed record DiskOverviewGroup(string Model, string MediaType, string He
 
 public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore history, IFullDiagnosticsRunner? fullRunner = null, UserCleanupRunner? cleanupRunner = null) : INotifyPropertyChanged
 {
-    private const int HistoryPageSize = 25;
+    private const int HistoryPageSize = 10;
     private int historyLoadedCount;
     private bool historyHasMore;
     private bool historyLoading;
@@ -164,8 +164,6 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private bool busy;
     private CancellationTokenSource? fullCheckCancellation;
     private int liveRefreshRunning;
-    private DateTimeOffset nextTemperatureProbeUtc;
-    private string? temperatureProbeError;
     private bool cleanupRunning;
     private bool repairRunning;
     private bool windowsUpdateActionRunning;
@@ -779,20 +777,37 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
 
     private void RefreshHwInfoSensors()
     {
-        HwInfoSensors.Clear();
-        currentHwInfo = new[] { live?.HwInfo, Selected?.HwInfo, HwInfoReader.ReadCached(TimeSpan.FromMinutes(10)) }
-            .Where(item => item is not null).OrderByDescending(item => item!.CapturedAtUtc).FirstOrDefault();
-        var hwInfo = currentHwInfo;
-        if (hwInfo is not null)
+        currentHwInfo = live?.HwInfo;
+        if (Selected?.HwInfo is { } selectedHwInfo &&
+            (currentHwInfo is null || selectedHwInfo.CapturedAtUtc > currentHwInfo.CapturedAtUtc))
+            currentHwInfo = selectedHwInfo;
+        if (currentHwInfo is null || DateTimeOffset.UtcNow - currentHwInfo.CapturedAtUtc > TimeSpan.FromMinutes(10))
         {
-            foreach (var sensor in hwInfo.Sensors.OrderBy(item => item.Category, StringComparer.CurrentCultureIgnoreCase)
-                         .ThenBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase).Take(100))
+            var cachedHwInfo = HwInfoReader.ReadCached(TimeSpan.FromMinutes(10));
+            if (cachedHwInfo is not null &&
+                (currentHwInfo is null || cachedHwInfo.CapturedAtUtc > currentHwInfo.CapturedAtUtc))
+                currentHwInfo = cachedHwInfo;
+        }
+        var hwInfo = currentHwInfo;
+        var rows = Array.Empty<HwInfoSensorOverview>();
+        if (hwInfo?.Sensors is { } sensors)
+        {
+            var capturedAt = hwInfo.CapturedAtUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss");
+            rows = sensors.OrderBy(item => item.Category, StringComparer.CurrentCultureIgnoreCase)
+                .ThenBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase).Take(100)
+                .Select(sensor =>
             {
                 var value = double.IsFinite(sensor.Value) ? sensor.Value.ToString("N0") : "Нет данных";
-                HwInfoSensors.Add(new(sensor.Name, string.IsNullOrWhiteSpace(sensor.Unit) ? value : $"{value} {sensor.Unit}",
-                    hwInfo.CapturedAtUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss"), sensor.Category));
-            }
+                return new HwInfoSensorOverview(sensor.Name,
+                    string.IsNullOrWhiteSpace(sensor.Unit) ? value : $"{value} {sensor.Unit}", capturedAt, sensor.Category);
+            }).ToArray();
         }
+
+        var sharedCount = Math.Min(HwInfoSensors.Count, rows.Length);
+        for (var index = 0; index < sharedCount; index++)
+            if (HwInfoSensors[index] != rows[index]) HwInfoSensors[index] = rows[index];
+        while (HwInfoSensors.Count > rows.Length) HwInfoSensors.RemoveAt(HwInfoSensors.Count - 1);
+        for (var index = sharedCount; index < rows.Length; index++) HwInfoSensors.Add(rows[index]);
     }
 
     public string ProcessAllowStatus => processAllowStatus;
@@ -1463,16 +1478,23 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         finally { busy = false; Notify(); }
     }
 
-    private readonly HashSet<Guid> importedInstalledReports = [];
+    private readonly SemaphoreSlim installedReportImportGate = new(1, 1);
+    private readonly InstalledReportReader installedReportReader = new();
     private async Task ImportInstalledReportsAsync()
     {
+        await installedReportImportGate.WaitAsync();
         try
         {
-            var reports = await FullDiagnosticsRunner.ReadInstalledReportsAsync();
-            var newReports = reports.Where(report => !importedInstalledReports.Contains(report.Id)).ToArray();
-            if (newReports.Length == 0) return;
-            await history.SaveManyAsync(newReports);
-            foreach (var report in newReports) importedInstalledReports.Add(report.Id);
+            var importedCount = 0;
+            for (var batchNumber = 0; batchNumber < 5; batchNumber++)
+            {
+                var reports = await installedReportReader.ReadBatchAsync();
+                if (reports.Count == 0) break;
+                await history.SaveManyAsync(reports.Select(report => report.Snapshot).ToArray());
+                installedReportReader.MarkImported(reports);
+                importedCount += reports.Count;
+            }
+            if (importedCount == 0) return;
             if (!busy)
             {
                 var selectedId = Selected?.Id;
@@ -1481,12 +1503,13 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                     Selected = selected;
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or Microsoft.Data.Sqlite.SqliteException)
+        catch (Exception ex)
         {
             var error = ApplicationErrorStore.Record("История", "Импорт системных проверок", ex);
             status = "История системных проверок недоступна: " + error.Summary;
             Notify();
         }
+        finally { installedReportImportGate.Release(); }
     }
 
     private DateTimeOffset nextInstalledReportImport = DateTimeOffset.MinValue;
@@ -1500,14 +1523,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             if (!operationActive && DateTimeOffset.UtcNow >= nextInstalledReportImport)
             {
                 nextInstalledReportImport = DateTimeOffset.UtcNow.AddSeconds(30);
-                await ImportInstalledReportsAsync();
+                _ = ImportInstalledReportsAsync();
             }
-            if (!operationActive && DateTimeOffset.UtcNow >= nextTemperatureProbeUtc)
-            {
-                nextTemperatureProbeUtc = DateTimeOffset.UtcNow.AddSeconds(30);
-                _ = RequestTemperatureProbeAsync();
-            }
-
             var snapshot = MaintenanceServiceStatusReader.ReadSnapshot(TimeSpan.FromSeconds(20));
             if (snapshot is null)
             {
@@ -1520,7 +1537,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             live = snapshot with
             {
                 CpuTemperatureC = temperature?.TemperatureC ?? snapshot.CpuTemperatureC ?? snapshot.HwInfo?.CpuTemperatureC,
-                CpuTemperatureStatus = temperature?.Status ?? temperatureProbeError ?? snapshot.CpuTemperatureStatus
+                CpuTemperatureStatus = temperature?.Status ?? snapshot.CpuTemperatureStatus
             };
             RefreshHwInfoSensors();
             Notify();
@@ -1535,13 +1552,6 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         {
             Interlocked.Exchange(ref liveRefreshRunning, 0);
         }
-    }
-
-    private async Task RequestTemperatureProbeAsync()
-    {
-        var started = await CpuTemperatureCache.RequestProbeAsync();
-        temperatureProbeError = started ? null : "Не удалось запустить системный опрос температуры";
-        if (!started) Notify();
     }
 
     public Task RunQuickAsync() => RunUserFullAsync();
