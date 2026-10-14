@@ -16,8 +16,11 @@ public enum MaintenanceServiceOperation
     RestoreWindowsUpdates,
     DisableWindowsDefender,
     EnableWindowsDefender,
+    MinimizeWindowsDiagnosticData,
+    RestoreWindowsDiagnosticData,
     OpenSystemTool,
-    OpenUtility
+    OpenUtility,
+    OpenServerPackage
 }
 
 public sealed record MaintenanceServiceRequest(
@@ -25,9 +28,16 @@ public sealed record MaintenanceServiceRequest(
     MaintenanceServiceOperation? Operation = null,
     string? Target = null,
     string? Argument = null,
-    int? SessionId = null, string? EngineerPassword = null);
+    int? SessionId = null,
+    string? Password = null,
+    string? AuthorizationToken = null,
+    DeviceEnrollmentData? Enrollment = null);
 
-public sealed record MaintenanceServiceResponse(bool Success, string Message, string? Version = null);
+public sealed record DeviceEnrollmentData(string ServerUrl, string DeviceId, string DeviceKey,
+    string? SupportKey, long? CompanyId, long? SiteId);
+
+public sealed record MaintenanceServiceResponse(bool Success, string Message, string? Version = null,
+    string? AuthorizationToken = null);
 
 public static class MaintenanceServiceProtocol
 {

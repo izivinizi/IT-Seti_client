@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using ITSeti.Maintenance.Infrastructure;
 
 namespace ITSeti.Maintenance.App;
 
@@ -32,7 +33,6 @@ internal sealed class ServerEnrollmentClient : IDisposable
         device = ReadDevice();
         if (device is not null)
         {
-            SaveSupportKey(device);
             using var resolve = await SendAsync(HttpMethod.Post, "api/v1/assignment/resolve",
                 new { inventoryNumber = ReadInventory() }, cancellationToken);
             var result = await resolve.Content.ReadFromJsonAsync<ResolveAssignmentResponse>(JsonOptions, cancellationToken);
@@ -75,7 +75,7 @@ internal sealed class ServerEnrollmentClient : IDisposable
         }
         using var response = await SendAsync(HttpMethod.Put, "api/v1/assignment",
             new { companyId, siteId, inventoryNumber = inventoryNumber ?? ReadInventory() }, cancellationToken);
-        SaveDevice(device with { CompanyId = companyId, SiteId = siteId });
+        await SaveDeviceAsync(device with { CompanyId = companyId, SiteId = siteId }, cancellationToken);
     }
 
     public async Task AllowProcessAsync(string name, string? publisher, string signature, CancellationToken cancellationToken = default)
@@ -127,8 +127,7 @@ internal sealed class ServerEnrollmentClient : IDisposable
         if (!Guid.TryParse(result.DeviceId, out _) || string.IsNullOrWhiteSpace(result.DeviceKey))
             throw new InvalidDataException("Сервер вернул неполные данные подключения.");
         device = new DeviceRecord(ServerUrl, result.DeviceId, result.DeviceKey, result.SupportKey, result.CompanyId, result.SiteId);
-        SaveDevice(device);
-        SaveSupportKey(device);
+        await SaveDeviceAsync(device, cancellationToken);
     }
 
     private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body, CancellationToken cancellationToken)
@@ -161,19 +160,13 @@ internal sealed class ServerEnrollmentClient : IDisposable
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return null; }
     }
 
-    private static void SaveDevice(DeviceRecord value)
+    private static async Task SaveDeviceAsync(DeviceRecord value, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(Root);
-        var temporary = DevicePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(value, JsonOptions), new UTF8Encoding(false));
-        File.Move(temporary, DevicePath, true);
-    }
-
-    private static void SaveSupportKey(DeviceRecord value)
-    {
-        if (string.IsNullOrWhiteSpace(value.SupportKey)) return;
-        var path = Path.Combine(Root, "server-support.json");
-        File.WriteAllText(path, JsonSerializer.Serialize(new { serverUrl = value.ServerUrl, deviceId = value.DeviceId, supportKey = value.SupportKey }, JsonOptions), new UTF8Encoding(false));
+        var result = await MaintenanceServiceClient.SaveEnrollmentAsync(new DeviceEnrollmentData(
+            value.ServerUrl, value.DeviceId, value.DeviceKey, value.SupportKey,
+            value.CompanyId, value.SiteId), cancellationToken);
+        if (!result.Accepted)
+            throw new IOException("Не удалось сохранить привязку ПК через службу: " + result.Message);
     }
 
     private static string? ReadInventory()

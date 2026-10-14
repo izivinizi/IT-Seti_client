@@ -31,7 +31,8 @@ if ($serverProgram -notmatch 'MapGet\("/api/v1/catalog"' -or
     $serverProgram -notmatch 'MapPost\("/api/v1/enroll"' -or
     $serverProgram -notmatch 'MapPost\("/api/v1/auto-enroll"' -or
     $serverProgram -notmatch 'AutomaticIpEnrollment\.ResolveUnique' -or
-    $serverProgram -notmatch 'AutomaticIpEnrollment\.CanReuseExisting\(previousIp, clientIp\)') {
+    $serverProgram -notmatch 'clientIp is null' -or
+    $serverProgram -notmatch 'AutomaticIpEnrollment\.CanReuseExisting\(null, clientIp\)') {
     throw 'Server passwordless catalog/enrollment/IP reuse routes are incomplete.'
 }
 if ($serverHtml -notmatch 'id="device-company"' -or $serverHtml -notmatch 'id="device-site"' -or

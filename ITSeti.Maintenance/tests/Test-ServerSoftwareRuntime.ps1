@@ -17,6 +17,7 @@ New-Item -ItemType Directory -Path $fixture -Force | Out-Null
 $root=$fixture
 $CatalogOnly=$false; $AutoUpdate=$false; $Component=' RMS Host '; $locked=$false
 $script:installCalls=0; $script:installed=$false
+$script:installerExitCode=0; $script:writeMsiLog=$false
 $script:packageBytes=[Text.Encoding]::UTF8.GetBytes('unsigned fixture never executed')
 $sha=[Security.Cryptography.SHA256]::Create()
 try{$hash=[BitConverter]::ToString($sha.ComputeHash($script:packageBytes)).Replace('-','')}finally{$sha.Dispose()}
@@ -34,9 +35,13 @@ function Find-InstalledFile([string]$Key){if($script:installed){return (Join-Pat
 function Start-Process {
     param($FilePath,$ArgumentList,$WorkingDirectory,$WindowStyle,[switch]$PassThru)
     if($WindowStyle -ne 'Hidden' -or $ArgumentList -notmatch '(/qn.*REBOOT=ReallySuppress)|(/S)'){throw 'Installer was not silent.'}
-    $script:installCalls++; $script:installed=$true
-    [IO.File]::WriteAllText((Join-Path $fixture 'installed.marker'),'fixture')
-    $process=New-Object PSObject -Property @{ExitCode=0;Id=0}
+    $script:installCalls++
+    if($script:writeMsiLog){[IO.File]::WriteAllText((Join-Path $fixture 'server-rms-install.log'),"Fixture MSI diagnostic: InstallFinalize returned 1603`r`n")}
+    if($script:installerExitCode -in @(0,3010)){
+        $script:installed=$true
+        [IO.File]::WriteAllText((Join-Path $fixture 'installed.marker'),'fixture')
+    }
+    $process=New-Object PSObject -Property @{ExitCode=$script:installerExitCode;Id=0}
     $process | Add-Member ScriptMethod WaitForExit {param($timeout) return $true}
     $process | Add-Member ScriptMethod Dispose {}
     return $process
@@ -78,7 +83,18 @@ try {
     $script:package=$package; $mutex=New-FixtureMutex
     & $worker
     if($script:installCalls -ne 1 -or !(Test-Path -LiteralPath (Join-Path $fixture 'installed.marker'))){throw 'OCS completion marker did not finish a silent install.'}
+    $script:installed=$false; $script:installCalls=0; $script:installerExitCode=1603; $script:writeMsiLog=$true
     $Component=' RMS Host '; $componentKey=$null
+    $package.key='rms'; $package.fileName='rms.msi'; $package.version='7.7.3'; $package.sha256=$hash
+    $script:package=$package; $mutex=New-FixtureMutex
+    $msiFailureMessage=''
+    try{& $worker}catch{$msiFailureMessage=$_.Exception.Message}
+    if($msiFailureMessage -notmatch 'code 1603' -or
+       $msiFailureMessage -notmatch 'Fixture MSI diagnostic: InstallFinalize returned 1603'){
+        throw 'RMS MSI failure omitted its exit code or diagnostic log tail.'
+    }
+    $Component=' RMS Host '; $componentKey=$null
+    $script:installerExitCode=0; $script:writeMsiLog=$false
     $package.key='rms'; $package.fileName='rms.msi'; $package.version='7.7.3'; $package.sha256=$hash
     $script:package=$package
     $script:installed=$false; $script:installCalls=0

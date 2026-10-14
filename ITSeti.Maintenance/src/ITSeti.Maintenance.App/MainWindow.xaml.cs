@@ -12,7 +12,6 @@ namespace ITSeti.Maintenance.App;
 
 public partial class MainWindow : Window
 {
-    private const string EngineerPassword = "itseti";
     public MainViewModel ViewModel { get; }
     private readonly FullDiagnosticsRunner fullRunner = new();
     private readonly TaskCompletionSource initializationCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -36,7 +35,7 @@ public partial class MainWindow : Window
         if (!engineerOnly) ConfigureUserShellSize();
         ViewModel = new MainViewModel(new WindowsDiagnosticsRunner(), new SqliteHistoryStore(historyDatabasePath),
             fullRunner, engineerOnly ? new UserCleanupRunner(cleanupUserSid, cleanupUserLocalData) : null);
-        ViewModel.SetWindowsDefenderAccess(EngineerWindowLauncher.IsAdministrator());
+        ViewModel.SetWindowsDefenderAccess(false);
         DataContext = ViewModel;
         if (engineerOnly) ConfigureEngineerShell();
         ViewModel.CheckProgressEntries.CollectionChanged += (_, _) => QueueProgressScroll();
@@ -46,6 +45,7 @@ public partial class MainWindow : Window
             try
             {
                 await ViewModel.RefreshLiveStatusAsync();
+                ViewModel.RefreshMaintenanceStatus();
                 var changed = File.GetLastWriteTimeUtc(ServerSoftwareCatalog.CachePath);
                 if (changed != catalogWriteTime) { catalogWriteTime = changed; ViewModel.RefreshSetupAudit(); }
             }
@@ -54,7 +54,7 @@ public partial class MainWindow : Window
                 ApplicationErrorStore.Record("Интерфейс", "Обновление состояния главного окна", ex);
             }
         };
-        Closed += (_, _) => { closed = true; liveMetricsTimer.Stop(); progressScroll?.Abort(); };
+        Closed += (_, _) => { closed = true; liveMetricsTimer.Stop(); progressScroll?.Abort(); MaintenanceServiceClient.ClearEngineerAuthorization(); };
         Loaded += async (_, _) =>
         {
             await ViewModel.InitializeAsync();
@@ -147,6 +147,14 @@ public partial class MainWindow : Window
         if (MessageBox.Show(this, "Вернуть сохранённую до отключения настройку автообновлений?", "Восстановление настройки", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
             await ViewModel.RestoreWindowsAutomaticUpdatesAsync();
     }
+    private async void MinimizeDiagnosticData_Click(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show(this, "Установить минимальный доступный для этой редакции Windows уровень диагностических данных? На Pro обязательные данные останутся включены.",
+                "Диагностические данные Windows", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+            await ViewModel.MinimizeWindowsDiagnosticDataAsync();
+    }
+    private async void RestoreDiagnosticData_Click(object sender, RoutedEventArgs e) =>
+        await ViewModel.RestoreWindowsDiagnosticDataAsync();
     private void ShowCleanupDetails_Click(object sender, RoutedEventArgs e) =>
         MessageBox.Show(this, ViewModel.CleanupStatusDetails, "Результат очистки", MessageBoxButton.OK, MessageBoxImage.Information);
     private void ShowRepairDetails_Click(object sender, RoutedEventArgs e) =>
@@ -305,27 +313,34 @@ public partial class MainWindow : Window
     }
     private async void UnlockAdmin_Click(object sender, RoutedEventArgs e) => await UnlockAdminAsync();
 
-    private Task UnlockAdminAsync()
+    private async Task UnlockAdminAsync()
     {
         var password = AdminVisiblePassword.Visibility == Visibility.Visible
             ? AdminVisiblePassword.Text
             : AdminPassword.Password;
         ClearAdminPassword();
-        if (!string.Equals(password, EngineerPassword, StringComparison.Ordinal))
+        var result = await MaintenanceServiceClient.AuthenticateEngineerAsync(password);
+        if (!result.Connected && EngineerOfflineAuthentication.Verify(password))
         {
-            AdminError.Text = "Неверный пароль инженера.";
+            ShowEngineerShell();
+            MessageBox.Show("Служба обслуживания не отвечает. Инженерное меню открыто; для системных действий восстановите службу.",
+                "Инженерное меню", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (!result.Accepted)
+        {
+            AdminError.Text = result.Message;
             AdminError.Visibility = Visibility.Visible;
             AdminPassword.Focus();
-            return Task.CompletedTask;
+            return;
         }
         ShowEngineerShell();
-        return Task.CompletedTask;
     }
 
     private void ShowEngineerShell()
     {
         ConfigureEngineerShell();
-        ViewModel.SetWindowsDefenderAccess(EngineerWindowLauncher.IsAdministrator());
+        ViewModel.SetWindowsDefenderAccess(true);
         ViewModel.RefreshSetupAudit();
         ViewModel.RefreshIdentity();
         _ = ViewModel.RefreshAdminAccountAuditAsync();
@@ -393,8 +408,11 @@ public partial class MainWindow : Window
                 if (!closed) ViewModel.SetSetupStatus("Список ПО обновлён с сервера.");
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
-        { if (!closed) ViewModel.SetSetupStatus(ex.Message); }
+        catch (Exception ex)
+        {
+            var error = ApplicationErrorStore.Record("ПО", "Обновление каталога с сервера", ex);
+            if (!closed) ViewModel.SetSetupStatus("Не удалось обновить каталог ПО: " + error.Summary);
+        }
         finally { refreshingSoftware = false; if (!closed) ViewModel.RefreshSetupAudit(); }
     }
     private async void CheckAppUpdates_Click(object sender, RoutedEventArgs e) => await ViewModel.CheckApplicationUpdatesAsync();
@@ -586,38 +604,94 @@ public partial class MainWindow : Window
         if (!ViewModel.BeginSetupInstall()) return;
         try
         {
-            var problems = (await OrganizationSetupRunner.CheckAsync(component)).ToList();
+            var selected = component is null
+                ? ViewModel.SetupComponents.Where(row => row.IsSelected && row.CanSelectInstall).Select(row => row.InstallKey).ToArray()
+                : [component];
+            if (selected.Length == 0)
+            {
+                ViewModel.SetSetupStatus("Отметьте компоненты, которые нужно установить или обновить.");
+                return;
+            }
+
+            var problems = new List<string>();
+            foreach (var key in selected)
+                problems.AddRange(await OrganizationSetupRunner.CheckAsync(key));
             if (problems.Count > 0)
             {
                 MessageBox.Show(this, string.Join(Environment.NewLine, problems), "Установка остановлена проверкой комплекта", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            var selectedNames = ViewModel.SetupComponents.Where(row => row.CanInstall && row.InstallKey is "AnyDesk" or "RMS" or "OCS" or "Panel").Select(row => row.Name);
-            var confirmation = component is null ? $"Установить: {string.Join(", ", selectedNames)}?" : $"Установить компонент {component}?";
+
+            var names = selected.Select(key => ViewModel.SetupComponents.FirstOrDefault(row => row.InstallKey == key)?.Name ?? key);
+            var confirmation = $"Установить последовательно: {string.Join(", ", names)}?";
             if (MessageBox.Show(this, confirmation, "Установка ПО", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
 
-            ViewModel.SetSetupStatus(component is null ? "Установка комплекта выполняется…" : $"Установка {component} выполняется…");
-            var progress = new Progress<string>(message =>
+            var results = new List<string>();
+            var componentResults = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var key in selected)
             {
-                ViewModel.SetSetupStatus(message);
-                if (component is not null) ViewModel.SetSetupComponentStatus(component, message);
-            });
-            if (component is not null) ViewModel.SetSetupComponentStatus(component, "Установка…");
-            var exitCode = component is null ? await OrganizationSetupRunner.RunBaseAsync(progress)
-                : await OrganizationSetupRunner.RunComponentAsync(component, progress);
-            ViewModel.RefreshSetupAudit();
-            if (component is not null) ViewModel.SetSetupComponentStatus(component, "Установлено");
-            if (component is null)
-            {
-                foreach (var key in new[] { "AnyDesk", "RMS", "OCS", "Panel" }) ViewModel.SetSetupComponentStatus(key, "Установлено");
+                var name = ViewModel.SetupComponents.FirstOrDefault(row => row.InstallKey == key)?.Name ?? key;
+                ViewModel.SetSetupStatus($"Устанавливаем {name}…");
+                ViewModel.SetSetupComponentStatus(key, "Установка…");
+                try
+                {
+                    var progress = new Progress<string>(message =>
+                    {
+                        ViewModel.SetSetupStatus(message);
+                        ViewModel.SetSetupComponentStatus(key, message);
+                    });
+                    var exitCode = await OrganizationSetupRunner.RunComponentAsync(key, progress);
+                    var result = exitCode == OrganizationSetupRunner.InteractiveInstallerLaunched
+                        ? "Открыт обычный установщик. Завершите его и нажмите «Проверить ПО»."
+                        : exitCode == 0 ? "Установлено" : $"Ошибка: код {exitCode}";
+                    componentResults[key] = result;
+                    results.Add($"{name}: {result}.");
+                }
+                catch (Exception ex)
+                {
+                    if (ex is not EngineerAuthorizationRequiredException)
+                        ApplicationErrorStore.Record("ПО", "Установка компонента " + key, ex);
+                    var failureMessage = ex.Message;
+                    if (ex.Message.Contains("Silent installer exited with code", StringComparison.OrdinalIgnoreCase) &&
+                        ServerSoftwareCatalog.Read().Any(package => package.Key.Equals(key, StringComparison.OrdinalIgnoreCase)) &&
+                        MessageBox.Show(this,
+                            $"Тихая установка {name} завершилась ошибкой. Открыть обычный проверенный установщик в этом сеансе с системными правами?",
+                            "Тихая установка не выполнена", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes)
+                    {
+                        try
+                        {
+                            await OrganizationSetupRunner.LaunchServerPackageForKeyAsync(key,
+                                new Progress<string>(ViewModel.SetSetupStatus));
+                            const string launched = "Открыт обычный установщик. Завершите его и нажмите «Проверить ПО».";
+                            componentResults[key] = launched;
+                            results.Add($"{name}: {launched}");
+                            continue;
+                        }
+                        catch (Exception fallbackError)
+                        {
+                            if (fallbackError is not EngineerAuthorizationRequiredException)
+                                ApplicationErrorStore.Record("ПО", "Обычный установщик компонента " + key, fallbackError);
+                            failureMessage = fallbackError.Message;
+                        }
+                    }
+                    var result = "Ошибка: " + failureMessage;
+                    componentResults[key] = result;
+                    results.Add($"{name}: {result}");
+                }
             }
-            var message = exitCode == 0 ? "Установка завершена. Проверьте состояние компонентов." : $"Установщик вернул код {exitCode}. Проверьте C:\\ProgramData\\ITSETI\\install.log.";
-            ViewModel.SetSetupStatus(message);
-            MessageBox.Show(this, message, "Установка ПО", MessageBoxButton.OK, exitCode == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            ViewModel.RefreshSetupAudit();
+            foreach (var result in componentResults) ViewModel.SetSetupComponentStatus(result.Key, result.Value);
+            var failed = results.Any(result => result.Contains("Ошибка:", StringComparison.Ordinal));
+            var waitingForManualInstall = results.Any(result => result.Contains("Открыт обычный установщик", StringComparison.Ordinal));
+            var message = string.Join(Environment.NewLine, results);
+            ViewModel.SetSetupStatus(failed ? "Установка завершена с ошибками. См. результат каждого компонента." :
+                waitingForManualInstall ? "Обычный установщик открыт. После завершения нажмите «Проверить ПО»." :
+                "Выбранные компоненты установлены. Проверьте состояние ПО.");
+            MessageBox.Show(this, message, "Установка ПО", MessageBoxButton.OK, failed ? MessageBoxImage.Warning : MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
-            ApplicationErrorStore.Record("ПО","Установка компонента "+component,ex);
+            ApplicationErrorStore.Record("ПО", "Установка выбранных компонентов", ex);
             ViewModel.SetSetupStatus("Установка не выполнена: " + ex.Message);
             if (component is not null) ViewModel.SetSetupComponentStatus(component, "Ошибка: " + ex.Message);
             MessageBox.Show(this, ex.Message, "Установка не выполнена", MessageBoxButton.OK, MessageBoxImage.Warning);

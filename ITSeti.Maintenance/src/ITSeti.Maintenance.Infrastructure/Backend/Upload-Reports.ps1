@@ -35,17 +35,25 @@ function Get-Identity {
         if (!$ocsPresent) { $ocsPresent = Test-Path -LiteralPath (Join-Path ${env:ProgramFiles} 'OCS Inventory Agent\OcsService.exe') }
         if (!$ocsPresent -and ${env:ProgramFiles(x86)}) { $ocsPresent = Test-Path -LiteralPath (Join-Path ${env:ProgramFiles(x86)} 'OCS Inventory Agent\OcsService.exe') }
     } catch {}
-    foreach ($path in @('SOFTWARE\TektonIT\RMS Host\Host\Parameters','SOFTWARE\WOW6432Node\TektonIT\RMS Host\Host\Parameters')) {
-        try {
-            $value = (Get-ItemProperty -LiteralPath ('Registry::HKEY_LOCAL_MACHINE\' + $path) -ErrorAction Stop).InternetId
-            if ($value -is [byte[]]) { $value = [Text.Encoding]::UTF8.GetString($value).Trim([char]0) }
-            if ($value) {
-                [xml]$xml = ([string]$value).TrimStart([char]0xFEFF)
-                $id = [string]$xml.SelectSingleNode('//*[local-name()="internet_id"]').InnerText
-                if ($id) { $rms = $id; break }
+    try {
+        $rmsServiceInstalled = Test-Path -LiteralPath 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\RManService'
+        $rmsExecutable = @(${env:ProgramFiles},${env:ProgramFiles(x86)} | Where-Object { $_ } |
+            ForEach-Object { Join-Path $_ 'Remote Manipulator System - Host\rutserv.exe' } |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1)
+        if ($rmsServiceInstalled -or $rmsExecutable.Count -gt 0) {
+            foreach ($path in @('SOFTWARE\TektonIT\RMS Host\Host\Parameters','SOFTWARE\WOW6432Node\TektonIT\RMS Host\Host\Parameters')) {
+                try {
+                    $value = (Get-ItemProperty -LiteralPath ('Registry::HKEY_LOCAL_MACHINE\' + $path) -ErrorAction Stop).InternetId
+                    if ($value -is [byte[]]) { $value = [Text.Encoding]::UTF8.GetString($value).Trim([char]0) }
+                    if ($value) {
+                        [xml]$xml = ([string]$value).TrimStart([char]0xFEFF)
+                        $id = [string]$xml.SelectSingleNode('//*[local-name()="internet_id"]').InnerText
+                        if ($id) { $rms = $id; break }
+                    }
+                } catch {}
             }
-        } catch {}
-    }
+        }
+    } catch {}
     try {
         foreach ($directory in @(Get-ChildItem -LiteralPath $env:ProgramData -Directory -Filter 'AnyDesk*' -ErrorAction Stop)) {
             $config = Join-Path $directory.FullName 'system.conf'
@@ -106,6 +114,43 @@ function Send-Report([string]$path, [hashtable]$identity) {
     } finally { $response.Dispose() }
 }
 
+function Send-ApplicationErrors($device) {
+    $outbox = Join-Path $root 'Logs\server-outbox'
+    if (!(Test-Path -LiteralPath $outbox -PathType Container)) { return }
+    for ($batch = 0; $batch -lt 5; $batch++) {
+        $files = @(Get-ChildItem -LiteralPath $outbox -File -Filter '*.json' -ErrorAction Stop |
+            Sort-Object LastWriteTimeUtc | Select-Object -First 100)
+        if (!$files.Count) { return }
+        $entries = @()
+        foreach ($file in $files) {
+            $entry = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            if (!$entry.id -or !$entry.occurredAt -or !$entry.component -or !$entry.operation -or !$entry.summary) {
+                throw "Повреждена запись журнала приложения: $($file.Name)"
+            }
+            $entries += $entry
+        }
+        $json = @{ errors = [object[]]$entries } | ConvertTo-Json -Depth 8 -Compress
+        $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+        if ($bytes.Length -gt 2MB) { throw 'Пакет ошибок приложения превышает 2 МБ.' }
+        $request = [Net.HttpWebRequest][Net.WebRequest]::Create((New-ServerUri '/api/v1/application-errors'))
+        $request.Method = 'POST'
+        $request.AllowAutoRedirect = $false
+        $request.Timeout = 30000
+        $request.ReadWriteTimeout = 30000
+        $request.ContentType = 'application/json; charset=utf-8'
+        $request.Headers.Add('X-Device-Id', [string]$device.deviceId)
+        $request.Headers.Add('X-Device-Key', [string]$device.deviceKey)
+        $request.ContentLength = $bytes.Length
+        $stream = $request.GetRequestStream()
+        try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+        $response = [Net.HttpWebResponse]$request.GetResponse()
+        try {
+            if ($response.StatusCode -ne [Net.HttpStatusCode]::OK) { throw "Сервер не принял журнал ошибок (HTTP $([int]$response.StatusCode))." }
+        } finally { $response.Dispose() }
+        foreach ($file in $files) { Remove-Item -LiteralPath $file.FullName -Force }
+    }
+}
+
 if ($VerifyOnly) { Get-Identity | ConvertTo-Json -Compress; exit 0 }
 try {
     $policyPath = Join-Path $root 'process-policy.json'
@@ -151,6 +196,9 @@ try {
 } catch { Write-Verbose 'Список процессов не обновлён; используется сохранённая копия.' }
 if($RefreshPolicyOnly){exit 0}
 $identity = Get-Identity
+$failures = @()
+try { Send-ApplicationErrors $device }
+catch { $failures += ('Журнал ошибок приложения: ' + $_.Exception.GetType().Name + ': ' + $_.Exception.Message) }
 $pending = @()
 if (Test-Path -LiteralPath $queue -PathType Container) {
     $pending += @(Get-ChildItem -LiteralPath $queue -File -Filter '*.json' | Sort-Object LastWriteTimeUtc)
@@ -163,7 +211,6 @@ if (Test-Path -LiteralPath $runs -PathType Container) {
         Where-Object { !(Test-Path -LiteralPath (Join-Path $_.DirectoryName 'server-uploaded.txt')) } |
         Sort-Object LastWriteTimeUtc)
 }
-$failures = @()
 foreach ($file in $pending | Select-Object -First 200) {
     try {
         Send-Report $file.FullName $identity

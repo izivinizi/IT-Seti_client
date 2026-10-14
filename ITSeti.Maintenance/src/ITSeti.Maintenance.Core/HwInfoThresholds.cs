@@ -2,8 +2,11 @@ namespace ITSeti.Maintenance.Core;
 
 public static class HwInfoThresholds
 {
-    public const double CpuWarningC = 75;
-    public const double CpuCriticalC = 85;
+    public const double CpuLoadCriticalPercent = 98;
+    public const double MemoryUsedCriticalPercent = 98;
+
+    public const double CpuWarningC = 85;
+    public const double CpuCriticalC = 90;
     public const double VrmWarningC = 80;
     public const double VrmCriticalC = 95;
     public const double PchWarningC = 70;

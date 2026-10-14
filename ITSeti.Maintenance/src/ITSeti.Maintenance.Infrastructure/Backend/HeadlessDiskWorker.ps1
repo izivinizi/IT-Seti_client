@@ -4,6 +4,11 @@ $BenchmarkReadyFile=Join-Path $ScriptRoot 'benchmark-ready.signal'
 $script:Snapshot=@{Smart=@();Notes=@()}
 $script:DiskResult=$null
 $script:DiskFailure=''
+$script:DiskReadLatencyWeighted=0.0
+$script:DiskWriteLatencyWeighted=0.0
+$script:DiskReadOperations=[long]0
+$script:DiskWriteOperations=[long]0
+$script:DiskLatencyIssues=@()
 $target=Join-Path $ScriptRoot 'diskspd-test.dat'
 function Write-DiskProgress([string]$Message) {
     $path=Join-Path $ScriptRoot 'disk-progress.log'
@@ -18,12 +23,6 @@ function Assert-DiskCheckNotCancelled {
     if(!(Test-Path -LiteralPath $request -PathType Leaf)){return}
     $value=[IO.File]::ReadAllText($request).Trim()
     if($value -eq 'cancel'){throw 'Проверка остановлена пользователем.'}
-    if($value -match '^owner:(\d+):(\d+)$'){
-        $owner=Get-Process -Id ([int]$Matches[1]) -ErrorAction SilentlyContinue
-        if(!$owner -or $owner.StartTime.ToUniversalTime().Ticks -ne [long]$Matches[2]){
-            throw 'Проверка остановлена пользователем.'
-        }
-    }
 }
 function Read-Speed([string]$Path,[string]$Metric) {
     $output=[IO.File]::ReadAllText($Path,[Text.Encoding]::UTF8)
@@ -42,6 +41,35 @@ function Read-Speed([string]$Path,[string]$Metric) {
     if($bytes -le 0){throw "DiskSpd returned no $Metric."}
     return [math]::Round($bytes/$seconds/1000000,1)
 }
+function Get-SystemDrivePerfCounter {
+    $drive=[string]$env:SystemDrive
+    if($drive -notmatch '^[A-Za-z]:$'){return $null}
+    $filter="Name LIKE '% $drive'"
+    $pattern='(^|\s)'+[regex]::Escape($drive)+'$'
+    $matches=@(Get-WmiObject -Class Win32_PerfRawData_PerfDisk_PhysicalDisk -Filter $filter -ErrorAction Stop |
+        Where-Object {$_.Name -match $pattern})
+    if($matches.Count -ne 1){return $null}
+    return $matches[0]
+}
+function Get-UnsignedCounterDelta32([long]$Start,[long]$End) {
+    if($Start -lt 0 -or $Start -gt 4294967295 -or $End -lt 0 -or $End -gt 4294967295){return $null}
+    if($End -ge $Start){return ($End-$Start)}
+    return ((4294967296-$Start)+$End)
+}
+function Measure-DiskLatencyDelta($Before,$After,[ValidateSet('Read','Write')][string]$Mode) {
+    if(!$Before -or !$After){return $null}
+    $frequencyBefore=[long]$Before.Frequency_Sys100NS
+    $frequencyAfter=[long]$After.Frequency_Sys100NS
+    if($frequencyBefore -le 0 -or $frequencyBefore -ne $frequencyAfter){return $null}
+    $numeratorName='AvgDisksecPer'+$Mode
+    $baseName=$numeratorName+'_Base'
+    $timeTicks=Get-UnsignedCounterDelta32 ([long]$Before.$numeratorName) ([long]$After.$numeratorName)
+    $operations=Get-UnsignedCounterDelta32 ([long]$Before.$baseName) ([long]$After.$baseName)
+    if($null -eq $timeTicks -or $null -eq $operations -or $operations -le 0){return $null}
+    $latencyMs=($timeTicks/$frequencyBefore)*1000.0/$operations
+    if([double]::IsNaN($latencyMs) -or [double]::IsInfinity($latencyMs) -or $latencyMs -lt 0 -or $latencyMs -gt 60000){return $null}
+    return [pscustomobject]@{LatencyMs=$latencyMs;Operations=[long]$operations}
+}
 function Test-PrivilegeWarningOnly([string]$Message) {
     $lines=@($Message -split "`r?`n" | Where-Object {$_.Trim()})
     return $lines.Count -eq 2 -and
@@ -59,6 +87,12 @@ function Invoke-DiskSpd([string]$Exe,[string]$Mode,[int]$Pass) {
     $err=Join-Path $ScriptRoot ("diskspd-$Mode-$Pass.err.txt")
     $write=if($Mode -eq 'write'){'-w100'}else{'-w0'}
     $args="-c1G -b1M -t1 -o1 -s $write -Sh -W1 -d8 -C0 -Rxml `"$target`""
+    $counterBefore=$null
+    $collectLatency=$Mode -eq 'write' -or $Pass -gt 1
+    if($collectLatency) {
+        try {$counterBefore=Get-SystemDrivePerfCounter;if(!$counterBefore){$script:DiskLatencyIssues+=@('Счётчик системного диска не найден перед проходом '+$Mode+'.')}}
+        catch {$script:DiskLatencyIssues+=@('Счётчик диска недоступен перед проходом '+$Mode+': '+$_.Exception.Message)}
+    }
     try {$process=Start-Process -FilePath $Exe -WorkingDirectory (Split-Path $Exe) -ArgumentList $args -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -ErrorAction Stop}
     catch {throw "Не удалось запустить DiskSpd ($Exe): $($_.Exception.Message). Проверьте права файла и журнал антивируса."}
     # Retain the native handle before waiting: Windows PowerShell's Start-Process
@@ -83,6 +117,16 @@ function Invoke-DiskSpd([string]$Exe,[string]$Mode,[int]$Pass) {
         throw "DiskSpd $Mode pass $Pass failed (code $exitCode): $errorText"
     }
     $speed=Read-Speed $out $(if($Mode -eq 'write'){'WriteBytes'}else{'ReadBytes'})
+    if($collectLatency -and $counterBefore) {
+        try {
+            $counterAfter=Get-SystemDrivePerfCounter
+            $measurement=Measure-DiskLatencyDelta $counterBefore $counterAfter $Mode
+            if($measurement) {
+                if($Mode -eq 'read') {$script:DiskReadLatencyWeighted+=$measurement.LatencyMs*$measurement.Operations;$script:DiskReadOperations+=$measurement.Operations}
+                else {$script:DiskWriteLatencyWeighted+=$measurement.LatencyMs*$measurement.Operations;$script:DiskWriteOperations+=$measurement.Operations}
+            } else {$script:DiskLatencyIssues+=@('Системный счётчик не получил операций для расчёта задержки '+$Mode+'.')}
+        } catch {$script:DiskLatencyIssues+=@('Счётчик диска недоступен после прохода '+$Mode+': '+$_.Exception.Message)}
+    }
     Write-DiskProgress "DiskSpd: $Mode, pass $Pass/2 - $speed MB/s"
     return $speed
 }
@@ -143,12 +187,15 @@ try {
     }
     $systemSmart=@($script:Snapshot.Smart | Where-Object {($_.Letters -split '[, ]+') -contains $env:SystemDrive})
     $isNvme=$media -eq 'SSD' -and (($systemSmart | Where-Object {$_.TransferMode -match 'PCIe|NVMe|NVM Express'}).Count -gt 0)
-    $script:DiskResult=@{Read=[math]::Round(($read | Measure-Object -Average).Average,1);Write=[math]::Round(($write | Measure-Object -Average).Average,1);MediaType=$media;IsNvme=$isNvme;Passes=2;Drive=$env:SystemDrive}
+    $readLatency=if($script:DiskReadOperations -gt 0){[math]::Round($script:DiskReadLatencyWeighted/$script:DiskReadOperations,3)}else{$null}
+    $writeLatency=if($script:DiskWriteOperations -gt 0){[math]::Round($script:DiskWriteLatencyWeighted/$script:DiskWriteOperations,3)}else{$null}
+    $script:DiskResult=@{Read=[math]::Round(($read | Measure-Object -Average).Average,1);Write=[math]::Round(($write | Measure-Object -Average).Average,1);MediaType=$media;IsNvme=$isNvme;Passes=2;Drive=$env:SystemDrive;DiskReadLatencyMs=$readLatency;DiskWriteLatencyMs=$writeLatency;DiskReadOperations=$script:DiskReadOperations;DiskWriteOperations=$script:DiskWriteOperations}
     Write-DiskProgress "DiskSpd: finished - read $($script:DiskResult.Read) MB/s, write $($script:DiskResult.Write) MB/s"
 } catch {$script:DiskFailure=$_.Exception.Message;Write-DiskProgress ('DiskSpd: '+$_.Exception.Message)}
 finally {
     if(Test-Path -LiteralPath $target -PathType Leaf){Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue}
-    $result=@{Result=$script:DiskResult;Failure=$script:DiskFailure;Smart=$script:Snapshot.Smart;Notes=$script:Snapshot.Notes;Owned=@()}
+    $latencyError=($script:DiskLatencyIssues -join '; ')
+    $result=@{Result=$script:DiskResult;Failure=$script:DiskFailure;LatencyError=$latencyError;Smart=$script:Snapshot.Smart;Notes=$script:Snapshot.Notes;Owned=@()}
     $pending=Join-Path $ScriptRoot 'disk-result.pending.xml'
     $result | Export-Clixml -LiteralPath $pending
     Move-Item -LiteralPath $pending -Destination (Join-Path $ScriptRoot 'disk-result.xml') -Force

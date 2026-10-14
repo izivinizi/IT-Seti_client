@@ -41,6 +41,7 @@ public sealed class MachineIdentityStore(string? inventoryPath = null)
 
     private static string? ReadRmsId()
     {
+        if (!IsRmsHostInstalled()) return null;
         foreach (var path in new[]
         {
             @"SOFTWARE\TektonIT\RMS Host\Host\Parameters",
@@ -65,6 +66,25 @@ public sealed class MachineIdentityStore(string? inventoryPath = null)
             catch (Exception ex) when (ex is ArgumentException or System.Xml.XmlException or IOException or UnauthorizedAccessException) { }
         }
         return null;
+    }
+
+    private static bool IsRmsHostInstalled()
+    {
+        var roots = new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86)
+        }.Where(path => !string.IsNullOrWhiteSpace(path));
+        if (roots.Any(root => File.Exists(Path.Combine(root, "Remote Manipulator System - Host", "rutserv.exe"))))
+            return true;
+        // Custom RMS installation paths still register the Windows host service.
+        try
+        {
+            using var service = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\RManService");
+            return service is not null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        { return false; }
     }
 
     public static string? ParseRmsInternetId(string? xml)

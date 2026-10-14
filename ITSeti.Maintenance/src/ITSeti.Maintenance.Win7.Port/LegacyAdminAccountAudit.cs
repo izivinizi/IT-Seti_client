@@ -40,9 +40,12 @@ namespace ITSeti.Maintenance.App
                     finally { if (buffer != IntPtr.Zero) NetApiBufferFree(buffer); }
                 } while (status == 234);
                 var unexpected = names.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToArray();
-                return unexpected.Length == 0
-                    ? "Локальные администраторы: без замечаний."
-                    : "Посторонние администраторы: " + string.Join(", ", unexpected);
+                var domain = unexpected.Where(IsDomainMember).ToArray();
+                var local = unexpected.Where(name => !IsDomainMember(name)).ToArray();
+                var domainStatus = domain.Length == 0 ? "" : " Доменные участники группы: " + string.Join(", ", domain) + ".";
+                return local.Length == 0
+                    ? "Локальные администраторы: без замечаний." + domainStatus
+                    : "Посторонние локальные администраторы: " + string.Join(", ", local) + "." + domainStatus;
             }
             catch (Exception ex) when (ex is SystemException || ex is ExternalException)
             {
@@ -65,6 +68,16 @@ namespace ITSeti.Maintenance.App
             if (!account.Substring(0, slash).Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase)) return false;
             return name.Equals("Admin", StringComparison.OrdinalIgnoreCase)
                 || name.Equals("it-seti", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsDomainMember(string account)
+        {
+            var slash = account.LastIndexOf('\\');
+            if (slash < 0) return false;
+            var authority = account.Substring(0, slash);
+            return !authority.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase)
+                && !authority.Equals("BUILTIN", StringComparison.OrdinalIgnoreCase)
+                && !authority.Equals("NT AUTHORITY", StringComparison.OrdinalIgnoreCase);
         }
 
         // Kept as a small compatibility seam for the Win7 reflection contract and old reports.

@@ -40,7 +40,7 @@ function Initialize-ScheduledFullBaseline([string]$Base, [DateTimeOffset]$Now = 
 
 function Test-ScheduledFullDue([string]$Base, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow) {
     $last=Initialize-ScheduledFullBaseline $Base $Now
-    return ($Now.ToUniversalTime()-$last) -ge [TimeSpan]::FromDays(60)
+    return ($Now.ToUniversalTime()-$last) -ge [TimeSpan]::FromDays(10)
 }
 
 function Complete-ScheduledFullCheck([string]$Base,[string]$Run,[string]$RepairScript) {

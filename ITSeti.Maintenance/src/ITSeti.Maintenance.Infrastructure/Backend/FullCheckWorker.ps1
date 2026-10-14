@@ -1,4 +1,4 @@
-﻿param([string]$RunRoot,[string]$ToolsRoot,[switch]$SkipDiskTests,[switch]$LimitedMode,[switch]$HeadlessDiskSpd,[switch]$InteractiveDiskMark,[switch]$UserMode,[switch]$TrustedTools,[switch]$SkipResourceSampling,[switch]$SkipDiskBenchmark,[switch]$StartRepair)
+﻿param([string]$RunRoot,[string]$ToolsRoot,[switch]$SkipDiskTests,[switch]$LimitedMode,[switch]$HeadlessDiskSpd,[switch]$InteractiveDiskMark,[switch]$UserMode,[switch]$TrustedTools,[switch]$SkipResourceSampling,[switch]$SkipDiskBenchmark,[switch]$StartRepair,[switch]$Scheduled)
 $ErrorActionPreference='Stop'
 $CpuTemperatureFile=$env:ITSETI_CPU_TEMPERATURE_FILE
 $RunRoot=(Resolve-Path -LiteralPath $RunRoot).Path
@@ -11,12 +11,9 @@ $script:DiskTestPasses=2
 $script:QuietDiskTools=$true
 $script:InteractiveDiskMark=[bool]$InteractiveDiskMark
 $script:ForbidInteractiveDiskTools=!$InteractiveDiskMark
-$script:SkipWindowsUpdateChange=[bool]($SkipDiskTests -or $SkipDiskBenchmark -or $UserMode)
 $started=[DateTimeOffset]::Now.ToString('o')
 $id=[guid]::NewGuid().ToString()
 $logging=$false
-$script:WindowsUpdateProcess=$null
-$script:WindowsUpdateStartedAt=$null
 $script:DiskBenchmarkReadyFile=Join-Path $RunRoot 'benchmark-ready.signal'
 function Write-Stage([string]$Text){[IO.File]::WriteAllText((Join-Path $RunRoot 'stage.txt'),$Text,[Text.Encoding]::UTF8)}
 function Assert-CheckNotCancelled {
@@ -24,46 +21,21 @@ function Assert-CheckNotCancelled {
     if(!(Test-Path -LiteralPath $request -PathType Leaf)){return}
     $value=[IO.File]::ReadAllText($request).Trim()
     if($value -eq 'cancel'){throw 'Проверка остановлена пользователем.'}
-    if($value -match '^owner:(\d+):(\d+)$'){
-        $owner=Get-Process -Id ([int]$Matches[1]) -ErrorAction SilentlyContinue
-        if(!$owner -or $owner.StartTime.ToUniversalTime().Ticks -ne [long]$Matches[2]){
-            throw 'Проверка остановлена пользователем.'
-        }
-    }
-}
-function Start-WindowsUpdatePolicyChange {
-    if($script:SkipWindowsUpdateChange -or !$script:Admin){return}
-    $path=Join-Path $RunRoot 'Set-WindowsAutomaticUpdates.ps1'
-    if(!(Test-Path -LiteralPath $path -PathType Leaf)){$script:Snapshot.Notes+=@('Настройка автообновлений пропущена: системный скрипт не найден.');return}
-    try {
-        $script:WindowsUpdateStartedAt=Get-Date
-        $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$path+'" -Action Disable'
-        $script:WindowsUpdateProcess=Start-Process -FilePath (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $arguments -WorkingDirectory $RunRoot -WindowStyle Hidden -PassThru -ErrorAction Stop
-    } catch {$script:Snapshot.Notes+=@('Не удалось запустить изменение политики автообновлений: '+$_.Exception.Message)}
-}
-function Complete-WindowsUpdatePolicyChange {
-    if(!$script:WindowsUpdateProcess){return}
-    try {
-        if(!$script:WindowsUpdateProcess.WaitForExit(30000)){
-            try {$script:WindowsUpdateProcess.Kill()} catch {}
-            $script:Snapshot.Notes+=@('Отключение автообновлений не завершилось за 30 секунд; проверьте права и состояние Windows Update.')
-            return
-        }
-        $statusPath=Join-Path $env:ProgramData 'ITSeti\Maintenance\WindowsUpdate\policy-status.json'
-        if(Test-Path -LiteralPath $statusPath -PathType Leaf){
-            $state=Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $updated=[DateTimeOffset]::MinValue
-            $fresh=[DateTimeOffset]::TryParse([string]$state.UpdatedAt,[ref]$updated) -and $updated.LocalDateTime -ge $script:WindowsUpdateStartedAt.AddSeconds(-2)
-            if($fresh -and $state.Action -eq 'Disable'){$script:Snapshot.Notes+=@([string]$state.Message);return}
-        }
-        $script:Snapshot.Notes+=@('Не получен свежий результат отключения автообновлений (код '+$script:WindowsUpdateProcess.ExitCode+').')
-    } catch {$script:Snapshot.Notes+=@('Не удалось прочитать результат настройки автообновлений: '+$_.Exception.Message)}
 }
 function Section([string]$Text){Write-Stage $Text}
 function Parse-Speed($Value) {
     $number=0.0
     if([double]::TryParse(([string]$Value).Replace(',','.'),[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -and $number -gt 0){return $number}
     return $null
+}
+function Get-ActiveUptimeHoursFallback($OperatingSystem) {
+    try {
+        if(!$OperatingSystem -or !$OperatingSystem.LastBootUpTime){return $null}
+        $lastBoot=[Management.ManagementDateTimeConverter]::ToDateTime([string]$OperatingSystem.LastBootUpTime)
+        $hours=([DateTime]::Now-$lastBoot).TotalHours
+        if([double]::IsNaN($hours) -or [double]::IsInfinity($hours) -or $hours -lt 0 -or $hours -gt 87600){return $null}
+        return [math]::Round($hours,1)
+    } catch {return $null}
 }
 function Get-TopMemoryProcesses {
     $known=@{chrome='Google Chrome';msedge='Microsoft Edge';firefox='Mozilla Firefox';'1cv8'='1С';'1cv8c'='1С';MsMpEng='Защита Windows';explorer='Проводник Windows';svchost='Службы Windows';Teams='Microsoft Teams';OUTLOOK='Microsoft Outlook';WINWORD='Microsoft Word';EXCEL='Microsoft Excel'}
@@ -102,7 +74,7 @@ function Save-Result([string]$Name,[switch]$Pending) {
     $notes=@($s.Notes | Where-Object {$_})
     if($s.EventUnavailable){$notes+=('Недоступно выборок журналов: '+$s.EventUnavailable)}
     $data=@{
-        Id=$id;StartedAt=$started;ComputerName=$env:COMPUTERNAME;LastBootAt=$s.LastBootAt;ActiveUptimeHours=$s.ActiveUptimeHours;WindowsEdition=$s.WindowsEdition;WindowsRelease=$s.WindowsRelease;WindowsBuild=$s.WindowsBuild;CpuTemperatureC=$(if($null -ne $s.CpuTemperatureC){[double]$s.CpuTemperatureC}else{$null});CpuTemperatureStatus=[string]$s.CpuTemperatureStatus
+        Id=$id;KindLabel=$(if($Scheduled){'Плановая проверка'}else{'Проверка'});Trigger=[string]$env:ITSETI_CHECK_TRIGGER;WindowsSessionId=[Diagnostics.Process]::GetCurrentProcess().SessionId;RequestedByWindowsSessionId=$(if($env:ITSETI_REQUESTED_SESSION_ID -match '^\d+$'){[int]$env:ITSETI_REQUESTED_SESSION_ID}else{$null});StartedAt=$started;ComputerName=$env:COMPUTERNAME;LastBootAt=$s.LastBootAt;ActiveUptimeHours=$s.ActiveUptimeHours;WindowsEdition=$s.WindowsEdition;WindowsRelease=$s.WindowsRelease;WindowsBuild=$s.WindowsBuild;CpuTemperatureC=$(if($null -ne $s.CpuTemperatureC){[double]$s.CpuTemperatureC}else{$null});CpuTemperatureStatus=[string]$s.CpuTemperatureStatus
         CpuPercent=$(if($null -ne $s.Load){[double]$s.Load}else{-1})
         TotalMemoryBytes=[uint64]([double]$s.TotalRAM*1GB);AvailableMemoryBytes=[uint64]([double]$s.FreeRAM*1GB)
         NetworkAdapters=@(foreach($adapter in @($s.NetworkAdapters)){@{Name=[string]$adapter.Name;Type=[string]$adapter.Type;Status=[string]$adapter.Status;LinkSpeed=[string]$adapter.LinkSpeed;MacAddress=[string]$adapter.MacAddress;Addresses=[string]$adapter.Addresses}})
@@ -152,7 +124,7 @@ try {
     }
     if($HeadlessDiskSpd -and !$SkipResourceSampling) {
         $sampler=Join-Path $RunRoot 'ResourceSampler.ps1'
-        try {$script:Sampler=Start-Process powershell.exe -WindowStyle Hidden -WorkingDirectory $RunRoot -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$sampler`" -RunRoot `"$RunRoot`"" -RedirectStandardError (Join-Path $RunRoot 'resource-sampler.err.txt') -PassThru -ErrorAction Stop}
+        try {$script:Sampler=Start-Process (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -WindowStyle Hidden -WorkingDirectory (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0') -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$sampler`" -RunRoot `"$RunRoot`"" -RedirectStandardError (Join-Path $RunRoot 'resource-sampler.err.txt') -PassThru -ErrorAction Stop}
         catch {$script:SamplerFailure=$_.Exception.Message}
     }
     if($HeadlessDiskSpd -and !$SkipDiskTests -and !$script:DiskFailure) {
@@ -161,7 +133,7 @@ try {
             $diskArguments='-NoProfile -ExecutionPolicy Bypass -File "'+$diskWorker+'" -ScriptRoot "'+$RunRoot+'" -ToolsRoot "'+$ToolsRoot+'"'
             if($SkipDiskBenchmark){$diskArguments+=' -SkipBenchmark'}
             if($UserMode){$diskArguments+=' -UserMode'}
-            $script:DiskWorker=Start-Process powershell.exe -WindowStyle Hidden -WorkingDirectory $RunRoot -ArgumentList $diskArguments -PassThru -ErrorAction Stop
+            $script:DiskWorker=Start-Process (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -WindowStyle Hidden -WorkingDirectory (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0') -ArgumentList $diskArguments -PassThru -ErrorAction Stop
             $script:DiskWorkerStarted=Get-Date
         } catch {$script:DiskFailure='Запуск SMART/DiskSpd: '+$_.Exception.Message}
     }
@@ -191,7 +163,7 @@ try {
     try {$script:TopMemoryProcesses=@(Get-TopMemoryProcesses)} catch {$script:Snapshot.Notes+=@('Топ процессов по ОЗУ: '+$_.Exception.Message)}
     Save-Result 'partial.json' -Pending
     if($script:Sampler) {
-        Write-Stage 'Подтверждение нагрузки CPU/ОЗУ и задержки диска за 30 секунд'
+        Write-Stage 'Подтверждение нагрузки CPU/ОЗУ за 30 секунд; DiskSpd измерит задержку отдельно'
         $samplerDeadline=[DateTime]::UtcNow.AddSeconds(45)
         while(!$script:Sampler.WaitForExit(500) -and [DateTime]::UtcNow -lt $samplerDeadline){Assert-CheckNotCancelled}
         if(!$script:Sampler.HasExited){
@@ -215,7 +187,6 @@ try {
     if($script:DiskWorker){
         try {Complete-DiskToolsBackground} catch {$script:DiskFailure=$_.Exception.Message}
     }
-    Complete-WindowsUpdatePolicyChange
     Assert-CheckNotCancelled
     Save-Result 'result.json'
     Write-Stage 'Полная диагностика завершена'

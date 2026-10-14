@@ -74,7 +74,7 @@ public sealed class ServerApplicationUpdateClient
     private static HttpClient CreateClient()
     {
         var result = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        result.DefaultRequestHeaders.UserAgent.ParseAdd("ITSeti-Maintenance/2.3.9");
+        result.DefaultRequestHeaders.UserAgent.ParseAdd("ITSeti-Maintenance/2.4.6");
         result.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         return result;
     }
@@ -97,7 +97,8 @@ public sealed class ServerApplicationUpdateClient
     }
 
     private static string NormalizeBase(string value) => value.EndsWith("/", StringComparison.Ordinal) ? value : value + "/";
-    private static Version Normalize(Version value) => new(value.Major, value.Minor, Math.Max(value.Build, 0));
+    private static Version Normalize(Version value) => new(value.Major, value.Minor,
+        Math.Max(value.Build, 0), Math.Max(value.Revision, 0));
 
     private sealed record ServerPackage(string Id, string Key, string Version, string Platform, string Sha256,
         long SizeBytes, string FileName);

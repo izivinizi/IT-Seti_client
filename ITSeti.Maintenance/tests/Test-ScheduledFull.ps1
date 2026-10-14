@@ -10,8 +10,8 @@ try {
     $now=[DateTimeOffset]::UtcNow
     $baseline=Initialize-ScheduledFullBaseline $testRoot $now
     if(($baseline-$now).Duration() -gt [TimeSpan]::FromSeconds(1)){throw 'New installation baseline is wrong.'}
-    if(Test-ScheduledFullDue $testRoot $now.AddDays(59)){throw 'First scheduled check started before 60 days.'}
-    if(!(Test-ScheduledFullDue $testRoot $now.AddDays(60))){throw 'Scheduled check did not start at 60 days.'}
+    if(Test-ScheduledFullDue $testRoot $now.AddDays(9)){throw 'First scheduled check started before 10 days.'}
+    if(!(Test-ScheduledFullDue $testRoot $now.AddDays(10))){throw 'Scheduled check did not start at 10 days.'}
 
     $run=Join-Path $runs ([guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $run | Out-Null
@@ -19,7 +19,7 @@ try {
     $success=Join-Path $testRoot 'success.ps1'
     [IO.File]::WriteAllText($success,'param([string]$ResultFile); [IO.File]::WriteAllText($ResultFile,''{"Success":true,"Status":"completed"}'')')
     Complete-ScheduledFullCheck $testRoot $run $success
-    if(Test-ScheduledFullDue $testRoot ([DateTimeOffset]::UtcNow.AddDays(59))){throw 'Successful repair did not reset the 60-day timer.'}
+    if(Test-ScheduledFullDue $testRoot ([DateTimeOffset]::UtcNow.AddDays(9))){throw 'Successful repair did not reset the 10-day timer.'}
 
     Set-ScheduledFullBaseline $testRoot $now.AddDays(-61)
     $failure=Join-Path $testRoot 'failure.ps1'
@@ -36,7 +36,7 @@ try {
     [IO.File]::SetLastWriteTimeUtc($legacyResult,$now.AddDays(-7).UtcDateTime)
     [IO.File]::WriteAllText((Join-Path $testRoot 'latest-full.txt'),$legacy)
     if(Test-ScheduledFullDue $testRoot $now){throw 'A recent pre-upgrade full check was ignored.'}
-    Write-Output 'PASS: 60-day gate, successful SYSTEM repair, failure retry and legacy full-check migration.'
+    Write-Output 'PASS: 10-day gate, successful SYSTEM repair, failure retry and legacy full-check migration.'
 } finally {
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

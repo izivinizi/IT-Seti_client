@@ -89,30 +89,24 @@ function Update-MaintenanceHistory {
     } catch {Write-Host ('История не сохранена: '+$_.Exception.Message) -ForegroundColor Yellow}
 }
 function Set-DesignatedAdminPasswordPolicy($Snapshot) {
-    if(!$script:Admin -or $script:SkipWindowsUpdateChange){return}
-    foreach($name in @('Admin','it-seti')) {
-        try {
-            $user=[ADSI]('WinNT://'+$env:COMPUTERNAME+'/'+$name+',user')
-            $null=$user.Name.Value
-            $flags=[int]$user.UserFlags.Value
-            $neverExpires=65536
-            if(($flags -band $neverExpires) -eq 0) {
-                $user.Put('UserFlags',($flags -bor $neverExpires))
-                $user.SetInfo()
-                $user=[ADSI]('WinNT://'+$env:COMPUTERNAME+'/'+$name+',user')
-                if(([int]$user.UserFlags.Value -band $neverExpires) -eq 0){throw 'Windows не подтвердила настройку бессрочного пароля.'}
-                $Snapshot.Notes+=('Для локальной учётной записи '+$name+' включён бессрочный пароль.')
-            } else {
-                $Snapshot.Notes+=('Пароль локальной учётной записи '+$name+' уже бессрочный.')
-            }
-        } catch {
-            if($_.Exception.Message -match 'specified account does not exist|учётная запись не найдена|не удается найти') {
-                $Snapshot.Notes+=('Локальная учётная запись '+$name+' отсутствует; политика пароля не менялась.')
-            } else {
-                $Snapshot.Notes+=('Не удалось проверить срок пароля '+$name+': '+$_.Exception.Message)
+    if(!$script:Admin){return}
+    $path=Join-Path $ScriptRoot 'Set-LocalPasswordsNeverExpire.ps1'
+    if(!(Test-Path -LiteralPath $path -PathType Leaf)){
+        $Snapshot.Notes+='Политика срока пароля не проверена: системный скрипт недоступен.'
+        return
+    }
+    try {
+        $log=Join-Path $env:ProgramData 'ITSeti\Maintenance\local-password-policy.log'
+        foreach($result in @(& $path -LogPath $log)) {
+            if(!$result){continue}
+            switch([string]$result.Action) {
+                'Updated' {$Snapshot.Notes+=('Для управляемой локальной учётной записи '+$result.Account+' включён бессрочный пароль.')}
+                'AlreadyCompliant' {$Snapshot.Notes+=('Пароль управляемой локальной учётной записи '+$result.Account+' уже бессрочный.')}
+                'Missing' {$Snapshot.Notes+=('Управляемая локальная учётная запись '+$result.Account+' отсутствует; политика пароля не менялась.')}
+                default {$Snapshot.Notes+=('Не удалось проверить срок пароля управляемой учётной записи '+$result.Account+' ('+$result.Action+').')}
             }
         }
-    }
+    } catch {$Snapshot.Notes+=('Не удалось выполнить проверку срока пароля управляемых учётных записей: '+$_.Exception.GetType().Name)}
 }
 function Get-NetworkSnapshot {
     try {
@@ -134,6 +128,50 @@ function Get-NetworkSnapshot {
         $script:Snapshot.Notes+=('Сеть: '+$_.Exception.Message)
     }
 }
+function ConvertTo-MemoryTypeLabel([int]$Value) {
+    switch($Value){
+        0 {'неизвестный тип (код 0)'} 1 {'другой тип памяти'}
+        2 {'DRAM'} 3 {'Synchronous DRAM'} 4 {'Cache DRAM'} 5 {'EDO'} 6 {'EDRAM'}
+        7 {'VRAM'} 8 {'SRAM'} 9 {'RAM'} 10 {'ROM'} 11 {'Flash'} 12 {'EEPROM'}
+        13 {'FEPROM'} 14 {'EPROM'} 15 {'CDRAM'} 16 {'3DRAM'} 17 {'SDRAM'} 18 {'SGRAM'} 19 {'RDRAM'}
+        20 {'DDR'} 21 {'DDR2'} 22 {'BRAM'} 23 {'FB-DIMM'} 24 {'DDR3'} 25 {'FBD2'} 26 {'DDR4'}
+        27 {'LPDDR'} 28 {'LPDDR2'} 29 {'LPDDR3'} 30 {'LPDDR4'}
+        31 {'энергонезависимая память'} 32 {'HBM'} 33 {'HBM2'} 34 {'DDR5'} 35 {'LPDDR5'} 36 {'HBM3'}
+        default {"тип памяти SMBIOS $Value"}
+    }
+}
+function Get-GpuCandidates($Adapters) {
+    foreach($adapter in $Adapters) {
+        $name=[string]$adapter.Name
+        if([string]::IsNullOrWhiteSpace($name) -or $name -match '(?i)^Microsoft Basic Display Adapter$') {
+            $name=[string]$adapter.VideoProcessor
+            if([string]::IsNullOrWhiteSpace($name)){$name=[string]$adapter.AdapterCompatibility}
+            if([string]::IsNullOrWhiteSpace($name)){$name=[string]$adapter.Name}
+        }
+        $name=$name.Trim()
+        if(!$name){continue}
+        $deviceId=[string]$adapter.PNPDeviceID
+        $pci=$deviceId -match '(?i)^PCI\\'
+        $virtual=($name -match '(?i)Virtual|Remote|Parsec|Mirror|Indirect Display') -or
+            (!$pci -and $name -match '(?i)Basic Display')
+        [pscustomobject]@{Name=$name;Pci=[bool]$pci;Virtual=[bool]$virtual}
+    }
+}
+function ConvertTo-DiskMediaLabel($MediaType,[string]$Model,$SpindleSpeed) {
+    $text=[string]$MediaType
+    if($text -match '(?i)^(SSD|Solid State)$'){return 'SSD'}
+    if($text -match '(?i)^(HDD|Hard Disk)$'){return 'HDD'}
+    if($text -match '(?i)^SCM$'){return 'SCM'}
+    if($text -match '^4$'){return 'SSD'}
+    if($text -match '^3$'){return 'HDD'}
+    if($Model -match '(?i)\bSSD\b|Solid.?State|\bNVMe\b'){return 'SSD'}
+    $speed=0L
+    if([long]::TryParse([string]$SpindleSpeed,[ref]$speed)){
+        if($speed -eq 0){return 'SSD'}
+        if($speed -gt 0){return 'HDD'}
+    }
+    return 'Неизвестно'
+}
 function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
     $scanTimer=[Diagnostics.Stopwatch]::StartNew()
     Write-Host 'Проверка: оборудование, нагрузка, процессы и журналы...' -ForegroundColor Cyan
@@ -144,23 +182,38 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
     $s=$script:Snapshot
     $s.HwInfo=Read-HwInfoCache
     $s.NetworkAdapters=@(Get-NetworkSnapshot)
-    if(Get-Command Start-WindowsUpdatePolicyChange -ErrorAction SilentlyContinue){Start-WindowsUpdatePolicyChange}
     Set-DesignatedAdminPasswordPolicy $s
-    $script:WindowsUpdateStatus=$null
     if($script:PendingDiskTest){$s.Notes += 'Нагрузка CPU/ОЗУ измерена во время дискового теста, не в простое.'}
     $s.PublisherSkipped=0
     try {
-        $s.CPU=((Get-WmiObject Win32_Processor -ErrorAction Stop | ForEach-Object {$_.Name.Trim()}) -join ', ')
-        $s.GPU=((Get-WmiObject Win32_VideoController -ErrorAction Stop | Where-Object {$_.Name -notmatch 'Virtual|Parsec|USB Mobile'} | ForEach-Object {$_.Name}) -join ', ')
-        $s.CpuTemperatureC=Get-HwInfoCpuTemperatureC
+        try {$s.CPU=((Get-WmiObject Win32_Processor -ErrorAction Stop | ForEach-Object {$_.Name.Trim()}) -join ', ')}
+        catch {$s.Notes+=('Модель CPU: '+$_.Exception.GetType().Name)}
+        try {
+            $adapters=@(Get-WmiObject Win32_VideoController -ErrorAction Stop)
+            $gpuCandidates=@(Get-GpuCandidates $adapters)
+            $gpuNames=@($gpuCandidates | Where-Object {!$_.Virtual} | Sort-Object @{Expression={if($_.Pci){0}else{1}}},Name -Unique | ForEach-Object {$_.Name})
+            if(!$gpuNames) {
+                $displayAdapters=@(Get-WmiObject Win32_PnPEntity -Filter "PNPClass='Display'" -ErrorAction Stop)
+                $gpuCandidates=@(Get-GpuCandidates $displayAdapters)
+                $gpuNames=@($gpuCandidates | Where-Object {!$_.Virtual} | Sort-Object @{Expression={if($_.Pci){0}else{1}}},Name -Unique | ForEach-Object {$_.Name})
+                if(!$gpuNames){$gpuNames=@($gpuCandidates | Sort-Object Name -Unique | ForEach-Object {$_.Name})}
+            }
+            $s.GPU=if($gpuNames.Count){$gpuNames -join ', '}else{'нет данных'}
+            if(!$gpuNames.Count){$s.Notes+='Видеокарта: WMI не вернул имя адаптера, видео-процессор или изготовителя.'}
+        } catch {$s.Notes+=('Видеокарта: '+$_.Exception.GetType().Name)}
+        try {$s.CpuTemperatureC=Get-HwInfoCpuTemperatureC}
+        catch {$s.Notes+=('Датчик CPU: '+$_.Exception.GetType().Name)}
         if($null -eq $s.CpuTemperatureC){$s.CpuTemperatureStatus='HWiNFO не вернул допустимый датчик CPU.'}
-        if(!$s.GPU) {$s.GPU='только виртуальные адаптеры / нет данных'}
         try {
             $types=@(Get-WmiObject Win32_PhysicalMemory -ErrorAction Stop | ForEach-Object {
-                switch ([int]$_.SMBIOSMemoryType) { 26 {'DDR4'} 34 {'DDR5'} 24 {'DDR3'} 21 {'DDR2'} default {switch ([int]$_.MemoryType) { 26 {'DDR4'} 24 {'DDR3'} 21 {'DDR2'} default {$null} }} }
+                $smbios=[int]$_.SMBIOSMemoryType
+                $legacy=[int]$_.MemoryType
+                $label=ConvertTo-MemoryTypeLabel $(if($smbios){$smbios}else{$legacy})
+                if($label){$label}
             } | Where-Object {$_} | Select-Object -Unique)
             if($types.Count){$s.MemoryType=$types -join ', '}
-        } catch {}
+            else {$s.Notes+='Тип памяти: WMI не вернул физические модули памяти.'}
+        } catch {$s.Notes+=('Тип памяти: '+$_.Exception.GetType().Name)}
         $os=Get-WmiObject Win32_OperatingSystem -ErrorAction Stop
         $windowsKey=Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue
         $windows=Get-WindowsVersionDetails $os $windowsKey
@@ -168,7 +221,17 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
         $s.WindowsRelease=$windows.Release
         $s.WindowsBuild=$windows.Build
         try {$s.LastBootAt=([DateTimeOffset]([Management.ManagementDateTimeConverter]::ToDateTime($os.LastBootUpTime))).ToString('o')} catch {$s.Notes+=('Время последней загрузки: '+$_.Exception.Message)}
-        $s.ActiveUptimeHours=Get-ActiveUptimeHours $os
+        try {
+            $uptimeCommand=Get-Command Get-ActiveUptimeHours -ErrorAction SilentlyContinue
+            if($uptimeCommand){$s.ActiveUptimeHours=Get-ActiveUptimeHours $os}
+            elseif(Get-Command Get-ActiveUptimeHoursFallback -ErrorAction SilentlyContinue){
+                $s.ActiveUptimeHours=Get-ActiveUptimeHoursFallback $os
+                $s.Notes+='Время работы рассчитано резервным способом: в копии диагностического сценария отсутствовал основной обработчик.'
+            }
+        } catch {
+            $s.ActiveUptimeHours=Get-ActiveUptimeHoursFallback $os
+            if($null -eq $s.ActiveUptimeHours){$s.Notes+=('Время работы: '+$_.Exception.GetType().Name)}
+        }
         $s.TotalRAM=[double]$os.TotalVisibleMemorySize/1MB
         $loads=@(); $free=@()
         for($i=0;$i -lt $Samples;$i++) {
@@ -202,10 +265,23 @@ function Get-ServiceSnapshot([switch]$Live,[switch]$StartDiskTest) {
                         if($null -ne $counter.PowerOnHours -and [long]$counter.PowerOnHours -gt 0){$hours=[long]$counter.PowerOnHours}
                     } catch {}
                 }
-                New-Object PSObject -Property @{FriendlyName=[string]$disk.FriendlyName;MediaType=[string]$disk.MediaType;HealthStatus=[string]$disk.HealthStatus;PowerOnHours=$hours}
+                $media=ConvertTo-DiskMediaLabel $disk.MediaType ([string]$disk.FriendlyName) $null
+                if($media -eq 'Неизвестно'){
+                    try {
+                        $physical=Get-WmiObject -Namespace 'root\Microsoft\Windows\Storage' -Class MSFT_PhysicalDisk -ErrorAction Stop |
+                            Where-Object {[string]$_.FriendlyName -eq [string]$disk.FriendlyName} | Select-Object -First 1
+                        if($physical){$media=ConvertTo-DiskMediaLabel $physical.MediaType ([string]$physical.FriendlyName) $physical.SpindleSpeed}
+                    } catch {}
+                }
+                New-Object PSObject -Property @{FriendlyName=[string]$disk.FriendlyName;MediaType=$media;HealthStatus=[string]$disk.HealthStatus;PowerOnHours=$hours}
             })
         } else {
-            $s.Disks=@(Get-WmiObject Win32_DiskDrive -ErrorAction Stop | Select-Object @{n='FriendlyName';e={$_.Model}},@{n='MediaType';e={'тип см. CDI'}},@{n='HealthStatus';e={$_.Status}})
+            $s.Disks=@(Get-WmiObject Win32_DiskDrive -ErrorAction Stop | ForEach-Object {
+                $disk=$_;$physical=$null
+                try {$physical=Get-WmiObject -Namespace 'root\Microsoft\Windows\Storage' -Class MSFT_PhysicalDisk -ErrorAction Stop | Where-Object {[string]$_.FriendlyName -eq [string]$disk.Model} | Select-Object -First 1} catch {}
+                $media=if($physical){ConvertTo-DiskMediaLabel $physical.MediaType ([string]$disk.Model) $physical.SpindleSpeed}else{ConvertTo-DiskMediaLabel $null ([string]$disk.Model) $null}
+                New-Object PSObject -Property @{FriendlyName=[string]$disk.Model;MediaType=$media;HealthStatus=[string]$disk.Status}
+            })
         }
     } catch {$s.Notes += ('Диски: '+$_.Exception.Message)}
     if($Live -and (Get-Command Save-Result -ErrorAction SilentlyContinue)){Save-Result 'partial.json' -Pending}
@@ -307,7 +383,6 @@ function Get-SummaryLines {
     "ПК: $env:COMPUTERNAME | $(Get-Date -Format 'dd.MM.yyyy HH:mm')"
     '01 | РЕСУРСЫ СИСТЕМЫ'
     if($s.WindowsEdition){'Windows: {0}, версия {1}, сборка {2}' -f $s.WindowsEdition,$s.WindowsRelease,$s.WindowsBuild}
-    if($script:WindowsUpdateStatus){'Автообновления: '+$script:WindowsUpdateStatus}
     'CPU: '+$s.CPU+$(if($null -ne $s.Load){' | {0:N0}%' -f $s.Load})+$(if($null -ne $s.CpuTemperatureC){' | {0:N0} °C' -f $s.CpuTemperatureC}else{' | температура недоступна'})
     if($null -ne $s.FreeRAM -and $s.TotalRAM -gt 0) {'ОЗУ: {0:N1} ГБ | свободно {1:N1} ГБ | занято {2:N0}%' -f $s.TotalRAM,$s.FreeRAM,(100*(1-$s.FreeRAM/$s.TotalRAM))}
     else {'ОЗУ: замер недоступен'}

@@ -3,17 +3,19 @@ using System.Diagnostics;
 
 namespace ITSeti.Maintenance.Infrastructure;
 
-public sealed record ServerSoftwarePackage(Guid Id, string Key, string Version, string Platform, string Sha256, long SizeBytes, string FileName);
+public sealed record ServerSoftwarePackage(Guid Id, string Key, string Version, string Platform, string Sha256, long SizeBytes, string FileName, string? Name = null);
 
 public static class ServerSoftwareCatalog
 {
     private static readonly JsonSerializerOptions Options = new() { PropertyNameCaseInsensitive = true };
     public static string CachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"ITSeti","Maintenance","software-catalog.json");
+    private static string ErrorPath => Path.Combine(Path.GetDirectoryName(CachePath)!, "server-software-error.txt");
     public static bool IsConnected => File.Exists(Path.Combine(Path.GetDirectoryName(CachePath)!, "server-device.json"));
     public static async Task RefreshAsync()
     {
         if (!IsConnected) return;
         var before = File.GetLastWriteTimeUtc(CachePath);
+        var previousError = File.GetLastWriteTimeUtc(ErrorPath);
         var service = await MaintenanceServiceClient.StartAsync(MaintenanceServiceOperation.RefreshSoftwareCatalog);
         if (service.Connected)
         {
@@ -34,8 +36,14 @@ public static class ServerSoftwareCatalog
         {
             await Task.Delay(500);
             if (File.GetLastWriteTimeUtc(CachePath) != before) return;
+            if (File.GetLastWriteTimeUtc(ErrorPath) != previousError && File.Exists(ErrorPath))
+            {
+                var detail = (await File.ReadAllTextAsync(ErrorPath)).Trim();
+                throw new IOException(string.IsNullOrWhiteSpace(detail)
+                    ? "Не удалось обновить каталог ПО. Смотрите журнал службы." : detail);
+            }
         }
-        throw new IOException("Список ПО не обновлён. Проверьте подключение к серверу; сохранённый список остаётся доступен.");
+        throw new IOException("Получение каталога ПО не завершилось за 35 секунд. Проверьте состояние службы и подключение к серверу; сохранённый список доступен.");
     }
     public static IReadOnlyList<ServerSoftwarePackage> Read(string? cacheFile = null)
     {

@@ -8,24 +8,32 @@ public sealed record MonitorIssue(string Category, string Identity, string Title
 
 public static class Monitoring
 {
+    private static readonly JsonSerializerOptions SnapshotJsonOptions = new() { PropertyNameCaseInsensitive = true };
+
     public static IReadOnlyList<MonitorIssue> CurrentIssues(JsonElement report) => Extract(report);
     private static readonly Regex SpaceNote = new(@"^([A-Z]:\\?)\s+свободно\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
     private static readonly Regex SpaceAmount = new(@"\bсвободно\s+([0-9]+(?:[.,][0-9]+)?)\s*ГБ", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
     private static readonly Regex BugcheckCode = new(@"\bBugcheckCode\s*[:=]\s*(\d+)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
     private static readonly Regex FindingBugcheck = new(@"\bКод\s+(\d+)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
 
-    public static IReadOnlyList<MonitorIssue> NewIssues(JsonElement current, JsonElement? previous, JsonElement? previousEvents = null, bool includeWarnings = false)
+    // The ingestion path already needs current issues for the report summary.
+    // Keep that evaluation for alert comparison instead of parsing the report twice.
+    public static IReadOnlyList<MonitorIssue> NewIssues(JsonElement current, JsonElement? previous,
+        JsonElement? previousEvents = null, bool includeWarnings = false, IReadOnlyList<MonitorIssue>? currentIssues = null)
     {
+        currentIssues ??= Extract(current);
         if (previous is null)
         {
             var isConfirmedServiceAlert = JsonRead.String(current, "KindLabel", "Kind", "kind") == "Постоянный мониторинг" &&
                 JsonRead.Property(current, "DiagnosticIssues") is { ValueKind: JsonValueKind.Array };
-            return Extract(current).Where(issue => issue.Category == "identity" || isConfirmedServiceAlert && issue.Severity == 1).ToArray();
+            return currentIssues.Where(issue => issue.Category == "identity" || isConfirmedServiceAlert && issue.Severity == 1).ToArray();
         }
-        var currentIssues = Extract(current);
         var eventBaseline = previousEvents ?? previous;
-        var oldIssues = Extract(previous.Value).Where(i => i.Category != "event")
-            .Concat(eventBaseline is null ? [] : Extract(eventBaseline.Value).Where(i => i.Category == "event"));
+        var previousIssues = Extract(previous.Value);
+        var previousEventIssues = previousEvents is null || previousEvents.Value.Equals(previous.Value)
+            ? previousIssues : Extract(previousEvents.Value);
+        var oldIssues = previousIssues.Where(i => i.Category != "event")
+            .Concat(previousEventIssues.Where(i => i.Category == "event"));
         var oldKeys = oldIssues.Select(i => i.Category + "|" + i.Identity + "|" + i.Severity).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var hadEventBaseline = eventBaseline is not null && EventArray(eventBaseline.Value) is { ValueKind: JsonValueKind.Array };
         return currentIssues.Where(i => (i.Category == "identity" || i.Severity == 1 || includeWarnings) && (i.Category != "event" || hadEventBaseline) &&
@@ -62,6 +70,25 @@ public static class Monitoring
                     Clip(JsonRead.String(item, "Detail") ?? "", 700), 2);
                 issues.TryAdd(issue.Category + "|" + issue.Identity, issue);
             }
+        // New reports carry raw inputs plus a versioned result. Always evaluate inputs using the same Core as the client.
+        if (JsonRead.Property(report, "DiagnosticResult") is { ValueKind: JsonValueKind.Object })
+        {
+            var raw = JsonRead.Property(report, "DiagnosticSnapshot") ?? report;
+            try
+            {
+                var snapshot = raw.Deserialize<DiagnosticSnapshot>(SnapshotJsonOptions);
+                if (snapshot is not null && snapshot.Disks is not null && snapshot.Notes is not null)
+                {
+                    foreach (var item in DiagnosticEngine.Evaluate(snapshot).Issues)
+                    {
+                        var issue = ClientIssue(item.Title, item.Detail, item.Severity == "Critical" ? (short)1 : (short)2);
+                        issues.TryAdd(issue.Category + "|" + issue.Identity, issue);
+                    }
+                    return issues.Values.ToArray();
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or ArgumentException or NullReferenceException) { }
+        }
         var clientIssues = JsonRead.Property(report, "DiagnosticIssues");
         if (clientIssues is { ValueKind: JsonValueKind.Array })
         {
@@ -76,7 +103,7 @@ public static class Monitoring
         {
             try
             {
-                var snapshot = report.Deserialize<DiagnosticSnapshot>(new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                var snapshot = report.Deserialize<DiagnosticSnapshot>(SnapshotJsonOptions);
                 if (snapshot is not null)
                     return DiagnosticRules.GetUserIssues(snapshot).Select(i => ClientIssue(i.Title, i.Detail,
                         i.Severity == "Critical" ? (short)1 : (short)2)).ToArray();

@@ -4,9 +4,9 @@
     <TargetFramework>net48</TargetFramework>
     <UseWPF>true</UseWPF>
     <AssemblyName>ITSeti.Maintenance.Win7.Port</AssemblyName>
-    <Version>2.3.9-beta</Version>
-    <AssemblyVersion>2.3.9.0</AssemblyVersion>
-    <FileVersion>2.3.9.0</FileVersion>
+    <Version>2.4.6-beta</Version>
+    <AssemblyVersion>2.4.6.0</AssemblyVersion>
+    <FileVersion>2.4.6.0</FileVersion>
     <RootNamespace>ITSeti.Maintenance.App</RootNamespace>
     <ApplicationIcon>../ITSeti.Maintenance.App/Assets/favicon.ico</ApplicationIcon>
     <LangVersion>latest</LangVersion>
@@ -24,6 +24,8 @@
     <Reference Include="System.Web.Extensions" />
     <Reference Include="System.ServiceProcess" />
     <Reference Include="Microsoft.CSharp" />
+    <Compile Include="../ITSeti.Maintenance.Win7/LegacyReportPresentation.cs" Link="Legacy/LegacyReportPresentation.cs" />
+    <Compile Include="../ITSeti.Maintenance.Win7/LegacyDiagnosticAdapter.cs" Link="Legacy/LegacyDiagnosticAdapter.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/LegacyDiagnostics.cs" Link="Legacy/LegacyDiagnostics.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/LegacyApplicationErrors.cs" Link="Legacy/LegacyApplicationErrors.cs" />
     <Compile Include="../ITSeti.Maintenance.Win7/CpuLoadSampler.cs" Link="Legacy/CpuLoadSampler.cs" />
@@ -45,4 +47,5 @@
     <Resource Include="../ITSeti.Maintenance.App/Assets/logo.png" Link="Assets/logo.png" />
     <Resource Include="../ITSeti.Maintenance.App/Assets/favicon.ico" Link="Assets/favicon.ico" />
   </ItemGroup>
+  <ItemGroup><ProjectReference Include="../ITSeti.Maintenance.Core/ITSeti.Maintenance.Core.csproj" /></ItemGroup>
 </Project>

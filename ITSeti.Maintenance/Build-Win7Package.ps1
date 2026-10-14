@@ -67,7 +67,7 @@ if(Test-Path -LiteralPath $packagePath){
 $dotnetCommand = Get-Command dotnet -ErrorAction SilentlyContinue
 $dotnet = if($dotnetCommand){$dotnetCommand.Source}else{Join-Path $env:USERPROFILE '.dotnet10\dotnet.exe'}
 if(!(Test-Path -LiteralPath $dotnet -PathType Leaf)){throw 'dotnet SDK executable was not found.'}
-& $dotnet publish $project -c Release -o $app -p:NuGetAudit=false
+& $dotnet publish $project -c Release -o $app
 if($LASTEXITCODE -ne 0){throw 'Win7 client publish failed.'}
 New-Item -ItemType Directory -Path $tools -Force | Out-Null
 Get-ChildItem -LiteralPath $source -Force |

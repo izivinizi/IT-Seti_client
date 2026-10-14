@@ -21,7 +21,7 @@ function Set-UpdateStatus([string]$Message) {
 function ConvertTo-AppVersion([string]$Text) {
     if($Text -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$'){throw 'Неверный формат версии установленного приложения.'}
     $parsed=[Version]$Text
-    return [Version]::new($parsed.Major,$parsed.Minor,$parsed.Build)
+    return [Version]::new($parsed.Major,$parsed.Minor,$parsed.Build,[Math]::Max($parsed.Revision,0))
 }
 
 try {
@@ -41,7 +41,7 @@ try {
     if ($serverBase.Scheme -ne 'https') { throw 'Сервер обновлений должен использовать HTTPS.' }
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $updateUrl = New-Object Uri($serverBase, '/api/v1/application-update?platform=windows')
-    $headers = @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/2.3.9'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache'; 'X-Device-Id' = [string]$device.deviceId; 'X-Device-Key' = [string]$device.deviceKey }
+    $headers = @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/2.4.6'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache'; 'X-Device-Id' = [string]$device.deviceId; 'X-Device-Key' = [string]$device.deviceKey }
     $release = Invoke-RestMethod -Uri $updateUrl -Headers $headers -TimeoutSec 30
     if ($null -eq $release) {
         Set-UpdateStatus "Установлена последняя версия $currentVersion; обновление не требуется."
@@ -49,7 +49,7 @@ try {
     }
     $versionText = [string]$release.version
     if ($versionText -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$' -or [string]$release.key -cne 'application' -or [string]$release.platform -cne 'windows') { throw 'Сервер вернул некорректные параметры обновления.' }
-    $latestVersion = [Version]$versionText
+    $latestVersion = ConvertTo-AppVersion $versionText
     if ($latestVersion -le $currentVersion) {
         Set-UpdateStatus "Установлена последняя версия $currentVersion; обновление не требуется."
         exit 0
@@ -73,7 +73,9 @@ try {
         Set-UpdateStatus "Найдена версия $latestVersion. Подготавливаю установщик."
         $request = [Net.HttpWebRequest]::Create($downloadUrl)
         $request.Method = 'GET'
-        $request.UserAgent = 'ITSeti-Maintenance-Updater/2.3.9'
+        $request.UserAgent = 'ITSeti-Maintenance-Updater/2.4.6'
+        $request.Headers.Add('X-Device-Id', [string]$device.deviceId)
+        $request.Headers.Add('X-Device-Key', [string]$device.deviceKey)
         $request.Timeout = 30000
         $request.ReadWriteTimeout = 30000
         $response = $request.GetResponse()

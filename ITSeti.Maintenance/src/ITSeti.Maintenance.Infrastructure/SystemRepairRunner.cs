@@ -9,6 +9,16 @@ public sealed class SystemRepairRunner
     private static readonly string InstalledRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance", "Repairs");
     private static readonly string LocalRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ITSeti", "Maintenance", "Repairs");
 
+    public static bool IsRunning
+    {
+        get
+        {
+            var root = ReadLatestRoot(InstalledRoot) ?? ReadLatestRoot(LocalRoot);
+            return root is not null && !File.Exists(Path.Combine(root, "finished.txt")) &&
+                DateTime.UtcNow - Directory.GetCreationTimeUtc(root) < TimeSpan.FromHours(3);
+        }
+    }
+
     public static string LatestStatus
     {
         get

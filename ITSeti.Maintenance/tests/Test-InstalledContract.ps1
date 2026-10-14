@@ -35,6 +35,7 @@ if(!$rejectsMissingExit -or !$rejectsError -or !$rejectsFailure -or !$acceptsSuc
     throw 'DiskSpd blank exit code or stderr handling failed.'
 }
 $sampler=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\ResourceSampler.ps1') -Raw
+$diskTools=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\DiskTools.ps1') -Raw
 $samplerTokens=$null;$samplerErrors=$null
 $samplerAst=[Management.Automation.Language.Parser]::ParseInput($sampler,[ref]$samplerTokens,[ref]$samplerErrors)
 if($samplerErrors){throw 'Resource sampler has PowerShell syntax errors.'}
@@ -55,10 +56,14 @@ try {
         }
     }
 } finally {Remove-Item -LiteralPath $sampleRoot -Recurse -Force -ErrorAction SilentlyContinue}
-$counterFunction=@($samplerAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'CounterDelta'},$true))
-if($counterFunction.Count -ne 1){throw 'Resource counter delta helper was not found.'}
-. ([scriptblock]::Create($counterFunction[0].Extent.Text))
-if((CounterDelta 20 10) -ne 10 -or $null -ne (CounterDelta 10 20)){throw 'Reset performance counters must be ignored, not treated as 32-bit rollover.'}
+if($sampler.Contains('Win32_PerfRawData_PerfDisk_LogicalDisk') -or
+   !$sampler.Contains('DiskReadLatencyMs=$null;DiskWriteLatencyMs=$null') -or
+   !$source.Contains('Win32_PerfRawData_PerfDisk_PhysicalDisk') -or
+   !$source.Contains('Measure-DiskLatencyDelta') -or
+   !$diskTools.Contains('$script:ResourceSampling.DiskReadLatencyMs=$data.Result.DiskReadLatencyMs') -or
+   !$diskTools.Contains('$script:ResourceSampling.DiskWriteLatencyMs=$data.Result.DiskWriteLatencyMs')) {
+    throw 'Disk latency must come from the system-drive physical-disk counter during DiskSpd, not the unrelated sampler.'
+}
 $install=[IO.File]::ReadAllText((Join-Path $Root 'Install-Maintenance.ps1'),[Text.Encoding]::UTF8)
 $uninstall=[IO.File]::ReadAllText((Join-Path $Root 'Uninstall-Maintenance.ps1'),[Text.Encoding]::UTF8)
 foreach($name in @('Full','QuickFull','AutoFullRepair','Repair','Cleanup','OrganizationSetup','DisableUpdates','RestoreUpdates','Update')) {
@@ -158,7 +163,8 @@ $setupUninstaller=[IO.File]::ReadAllText((Join-Path $Root 'OrganizationUninstall
 $supportView=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\SupportDialog.xaml'),[Text.Encoding]::UTF8)
 $supportCode=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\SupportDialog.xaml.cs'),[Text.Encoding]::UTF8)
 if(!$appProject.Contains('Tools\Software\**\*') -or $softwareCode.Contains('MatchesPassword') -or !$softwareCode.Contains('ConfigureEngineerShell();') -or
-   !$softwareCode.Contains('EngineerPassword = "itseti"') -or $softwareCode.Contains('HandoffToEngineer(launch.Process)') -or
+   !$softwareCode.Contains('AuthenticateEngineerAsync(password)') -or $softwareCode.Contains('EngineerPassword = "itseti"') -or
+   $softwareCode.Contains('HandoffToEngineer(launch.Process)') -or
    $softwareCode.Contains('TryStartWithWindowsCredentials') -or $softwareCode.Contains('ChooseOrganizationInstallMode') -or
    !$softwareAudit.Contains('"Установлено" => "Удалить"') -or
    !$softwareCode.Contains('RunUninstallComponentAsync') -or !$systemTools.Contains('"ms-settings:"') -or
@@ -171,7 +177,8 @@ if(!$softwareCode.Contains('CopyAnyDesk_Click') -or !$softwareView.Contains('Use
     throw 'Support identity display or setup mode selection is missing.'
 }
 if($softwareView.Contains('SetupModeSelector') -or $softwareView.Contains('AcceptanceWarning') -or
-   !$softwareView.Contains('InstallComponent_Click') -or !$softwareView.Contains('Установить всё')) {
+   !$softwareView.Contains('InstallComponent_Click') -or
+   !$softwareView.Contains('x:Name="InstallSetupButton"') -or !$softwareView.Contains('Click="InstallSetup_Click"')) {
     throw 'Software screen must use the server catalog and omit the acceptance mode.'
 }
 $updateRunner=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\ApplicationUpdateRunner.cs'),[Text.Encoding]::UTF8)
@@ -186,15 +193,20 @@ $appProject=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\
 if($appProject -match 'Setup\\ITSETI-Setup\\\*\*') {throw 'Managed software packages must not be published inside the application.'}
 $bootstrap=[IO.File]::ReadAllText((Join-Path $Root 'Install-ITSeti.ps1'),[Text.Encoding]::UTF8)
 if($bootstrap -match 'LoadUserProfile' -or !$bootstrap.Contains('NativeErrorCode') -or !$bootstrap.Contains("Get-Service -Name 'seclogon'") -or !$bootstrap.Contains('Start-AdministratorHelper -PowerShell $powershell') -or !$bootstrap.Contains('[Diagnostics.Process]::Start($start)') -or !$bootstrap.Contains('Start-Process -FilePath $setup -Verb RunAs')) {throw 'Credential bootstrap must launch as the selected administrator and fall back to the Windows UAC prompt.'}
-if($install -notmatch 'ITSeti-Maintenance-Status' -or $install -notmatch 'CurrentVersion\\Run') {throw 'Failed-night-check status startup is missing.'}
+if($install -notmatch 'start= auto' -or $install -match 'start= delayed-auto' -or
+   $install -notmatch 'DelayedAutoStart') {throw 'The maintenance service must start automatically without a delayed-start policy.'}
 $entry=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\InstalledCheck.ps1'),[Text.Encoding]::UTF8)
 $scheduledPolicy=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\ScheduledFull.ps1'),[Text.Encoding]::UTF8)
 if(!$install.Contains('foreach($obsoleteQuickTask in @(''ITSeti-Maintenance-QuickFull'',''ITSeti-Maintenance-AutoQuick''))') -or
    $install -match 'foreach\(\$name in @\([^\r\n]*ITSeti-Maintenance-QuickFull') {throw 'Legacy quick-check tasks must be removed, not registered again.'}
-if($install -notmatch 'New-ScheduledTaskTrigger -Daily -At' -or $scheduledPolicy -notmatch 'FromDays\(60\)' -or
-   !$install.Contains('ITSeti-Maintenance-AutoFullRepair') -or !$install.Contains('Initialize-ScheduledFullBaseline') -or !$install.Contains('$autoFullSettings')) {throw 'The single full diagnostic and gated 60-day maintenance schedule must remain.'}
-if(!$install.Contains('ITSeti-Maintenance-Tickets') -or !$install.Contains('Notifier\ITSeti.Maintenance.TicketNotifier.exe')) {throw 'Ticket notifications must start with the user session, independent of the main app window.'}
+if($install -notmatch 'New-ScheduledTaskTrigger -Daily -At' -or $scheduledPolicy -notmatch 'FromDays\(10\)' -or
+   !$install.Contains('ITSeti-Maintenance-AutoFullRepair') -or !$install.Contains('Initialize-ScheduledFullBaseline') -or !$install.Contains('$autoFullSettings')) {throw 'The single full diagnostic and gated 10-day maintenance schedule must remain.'}
+if(!$install.Contains("Remove-ItemProperty -Path `$runKey -Name 'ITSeti-Maintenance-Tickets'") -or
+   !$install.Contains("Remove-Item -LiteralPath (Join-Path `$InstallRoot 'Notifier')") -or
+   $install.Contains("Set-ItemProperty -Path `$runKey -Name 'ITSeti-Maintenance-Tickets'") -or
+   $installerDefinition.Contains('{#PackageRoot}\Notifier\*')) {throw 'Upgrade must remove the legacy notifier process and must not register it again.'}
 $appSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\App.xaml.cs'),[Text.Encoding]::UTF8)
+if($appSource -notmatch 'FromDays\(10\)'){throw 'The overdue full-check reminder must use the same 10-day interval.'}
 $promptSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\ScheduledCheckPrompt.cs'),[Text.Encoding]::UTF8)
 $scheduledQuickStart=$appSource.IndexOf('if (e.Args.Contains("--scheduled-quick"',[StringComparison]::Ordinal)
 $scheduledQuickEnd=$appSource.IndexOf('if (MainWindow is null)',[Math]::Max(0,$scheduledQuickStart),[StringComparison]::Ordinal)
@@ -246,6 +258,17 @@ $updateTokens=$null;$updateErrors=$null
 if($updateErrors){throw 'Windows Update policy worker has PowerShell syntax errors.'}
 $updateSource=[IO.File]::ReadAllText($updatePolicy,[Text.Encoding]::UTF8)
 if($updateSource -notmatch 'original-policy\.json' -or $updateSource -notmatch 'ChangedExternally' -or $updateSource -notmatch 'NoAutoUpdate') {throw 'Windows Update policy worker must preserve and protect the existing setting.'}
+$fullWorkerSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\FullCheckWorker.ps1'),[Text.Encoding]::UTF8)
+$summarySource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Summary.ps1'),[Text.Encoding]::UTF8)
+$passwordPolicySource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Set-LocalPasswordsNeverExpire.ps1'),[Text.Encoding]::UTF8)
+if($fullWorkerSource -match 'Set-WindowsAutomaticUpdates\.ps1|Start-WindowsUpdatePolicyChange|Complete-WindowsUpdatePolicyChange' -or
+   $summarySource -match 'Set-WindowsAutomaticUpdates\.ps1|Start-WindowsUpdatePolicyChange' -or
+   $passwordPolicySource -notmatch "SchemaClassName.*-ne 'User'" -or
+   $passwordPolicySource -notmatch "Put\('UserFlags'" -or
+   $passwordPolicySource -match '\$managed=|ContainsKey\(\$name\.ToLowerInvariant\(\)\)' -or
+   $passwordPolicySource -notmatch 'AlreadyCompliant') {
+    throw 'Full diagnostics must not change Windows Update; password policy must cover and log all local user accounts.'
+}
 if(!$entry.Contains('[switch]$SmartOnly') -or $entry.Contains('[switch]$ScheduledQuick') -or
    !$entry.Contains('-SkipResourceSampling') -or !$entry.Contains('-SkipDiskBenchmark') -or
    $entry.Contains('last-quick-run.txt') -or $entry.Contains('latest-quick.txt') -or
@@ -268,6 +291,12 @@ if($entryErrors -or $repairPosition -lt 0 -or $postRepairCleanupPosition -le $re
    $entrySource -notmatch 'Invoke-Cleanup' -or
    $entrySource -notmatch 'Профиль вошедшего пользователя не запускался: плановая задача работает от SYSTEM' -or
    $entrySource -notmatch 'UnavailableCategories') { throw 'Scheduled full cleanup must report its user-context limitation and selected/unavailable system categories after DISM/SFC.' }
+$fullWorkerSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\FullCheckWorker.ps1'),[Text.Encoding]::UTF8)
+if($entrySource -notmatch '-Scheduled:\$StartRepair' -or
+   $fullWorkerSource -notmatch '\[switch\]\$Scheduled' -or
+   !$fullWorkerSource.Contains('KindLabel=$(if($Scheduled){''Плановая проверка''}else{''Проверка''})')) {
+    throw 'Scheduled check reports must identify their source in server history.'
+}
 $cleanupSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Cleanup.ps1'),[Text.Encoding]::UTF8)
 if($cleanupSource -notmatch 'Thumbnail Cache' -or $cleanupSource -notmatch 'Recycle Bin' -or
    $cleanupSource -notmatch 'Internet Cache' -or $cleanupSource -notmatch 'D3D Shader Cache' -or
@@ -289,8 +318,11 @@ if($entry.Contains('[switch]$Quick') -or $entry.Contains('[switch]$ScheduledQuic
 $accountScript=Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\Create-LocalAdmin.ps1'
 $accountTokens=$null;$accountErrors=$null
 [void][Management.Automation.Language.Parser]::ParseFile($accountScript,[ref]$accountTokens,[ref]$accountErrors)
-if($accountErrors -or (Get-Content -LiteralPath $accountScript -Raw) -notmatch 'if\(\$admin\)\{''it-seti''\}else\{''Admin''\}') {
-    throw 'Local admin creation must preserve the Admin/it-seti selection from the existing setup script.'
+if($accountErrors -or (Get-Content -LiteralPath $accountScript -Raw) -notmatch 'if\(\$admin\)\{''it-seti''\}else\{''Admin''\}' -or
+   (Get-Content -LiteralPath $accountScript -Raw) -notmatch 'Remove-LocalGroupMember' -or
+   (Get-Content -LiteralPath $accountScript -Raw) -notmatch '\$builtInAdministratorSid' -or
+   (Get-Content -LiteralPath $accountScript -Raw) -notmatch 'AccountDomainSid') {
+    throw 'Local admin creation must keep the selected account, remove other local users, and preserve the built-in and domain groups.'
 }
 $accountRunner=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\LocalAdminAccountRunner.cs'))
 if($accountRunner -notmatch 'ArgumentList\.Add\("-ExecutionPolicy"\)' -or $accountRunner -notmatch 'ArgumentList\.Add\("Bypass"\)' -or

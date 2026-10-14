@@ -7,9 +7,9 @@
   <link rel="icon" href="/favicon.ico" sizes="any">
   <title>ИТ-Сети · Сервер</title>
   <script src="/theme.js?v=1"></script>
-  <link rel="stylesheet" href="/app.css?v=9">
+  <link rel="stylesheet" href="/app.css?v=10">
   <link rel="stylesheet" href="/package-admin.css?v=1">
-  <script src="/app.js?v=11" defer></script>
+  <script src="/app.js?v=12" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -19,6 +19,7 @@
         <button class="nav-item active" type="button" data-view="computers" aria-current="page">Компьютеры</button>
         <button class="nav-item" type="button" data-view="monitoring">Мониторинг <span id="monitor-badge" class="nav-count hidden">0</span></button>
         <button class="nav-item" type="button" data-view="connections">Новые подключения</button>
+        <button class="nav-item" type="button" data-view="application-errors">Ошибки приложения</button>
         <button class="nav-item" type="button" data-view="tickets">Заявки</button>
         <button class="nav-item" type="button" data-view="packages">ПО и обновления</button>
       </nav>
@@ -67,6 +68,18 @@
           <div id="connections-status" class="status" role="status"></div>
           <div id="monitor-connections" class="monitor-connections-list"></div>
           <div id="monitor-connections-empty" class="empty hidden">Новых компьютеров за выбранный период нет.</div>
+        </section>
+        <section id="view-application-errors" class="view" aria-labelledby="application-errors-title">
+          <div class="page-heading"><div><h1 id="application-errors-title">Ошибки приложения</h1><p>Журнал, отправленный клиентскими компьютерами</p></div><button id="refresh-application-errors" type="button" class="secondary">Обновить</button></div>
+          <div class="filterbar">
+            <label><span>Период</span><select id="app-errors-days" class="field"><option value="1">24 часа</option><option value="7" selected>7 дней</option><option value="30">30 дней</option><option value="90">90 дней</option></select></label>
+            <label><span>Компания</span><select id="app-errors-company" class="field"><option value="">Все компании</option></select></label>
+            <label><span>Объект</span><select id="app-errors-site" class="field"><option value="">Все объекты</option></select></label>
+          </div>
+          <div id="app-errors-status" class="status" role="status"></div>
+          <div id="app-errors-list" class="application-errors-list"></div>
+          <div id="app-errors-empty" class="empty hidden">За выбранный период ошибок приложения нет.</div>
+          <div class="pager"><button id="app-errors-prev" type="button" class="secondary compact">Назад</button><span id="app-errors-page">Страница 1</span><button id="app-errors-next" type="button" class="secondary compact">Далее</button></div>
         </section>
         <section id="view-monitoring" class="view" aria-labelledby="monitoring-title">
           <div class="page-heading"><div><h1 id="monitoring-title">Мониторинг</h1><p>Проблемы, появившиеся после предыдущей проверки ПК</p></div><button id="refresh-monitoring" type="button" class="secondary">Обновить</button></div>

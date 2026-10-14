@@ -58,8 +58,24 @@ public static class DiagnosticRules
                     $"В журнале найдено неожиданных завершений работы: {powerLosses.Length}. Kernel-Power 41, BugcheckCode 0: причина не определена; это не подтверждённый синий экран. Проверьте питание и обстоятельства выключения компьютера.", "Warning"));
             var otherCritical = full.Events.Count(item => item.Level == 1 && !item.Provider.Contains("Kernel-Power", StringComparison.OrdinalIgnoreCase));
             if (otherCritical > 0)
+            {
+                var eventDetails = full.Events
+                    .Where(item => item.Level == 1 && !item.Provider.Contains("Kernel-Power", StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(item => DateTimeOffset.TryParse(item.Time, out var occurredAt)
+                        ? occurredAt : DateTimeOffset.MinValue)
+                    .Take(2)
+                    .Select(FormatCriticalWindowsEvent)
+                    .ToArray();
+                var detail = $"Количество: {otherCritical}.";
+                if (eventDetails.Length > 0)
+                {
+                    detail += " Последние критические события: " + string.Join("; ", eventDetails);
+                    if (otherCritical > eventDetails.Length) detail += $"; ещё событий: {otherCritical - eventDetails.Length}.";
+                }
+                else detail += " Подробности события не переданы в отчёте.";
                 issues.Add(new("В журнале Windows найдены критические события",
-                    $"Количество: {otherCritical}. Подробности доступны инженеру в разделе событий Windows.", "Critical"));
+                    detail, "Critical"));
+            }
         }
         if (snapshot.ActiveUptimeHours is >= 80)
             issues.Add(new("Компьютер долго работает без перезагрузки",
@@ -118,28 +134,28 @@ public static class DiagnosticRules
             issues.Add(new("Процессор долго работал на пределе", "Нагрузка держалась выше 90% большую часть проверки. Из-за этого программы могут отвечать медленно.", "Warning"));
         if (sample is not null && sample.MemoryCriticalSamples >= 3)
             issues.Add(new("Высокая загрузка памяти", $"ОЗУ было занято на 98% и выше в {sample.MemoryCriticalSamples} из {sample.Samples} замеров за 30 секунд.", "Warning"));
-        var systemDrive = (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").TrimEnd('\\');
+        var systemDrive = snapshot.SystemDrive.TrimEnd('\\');
         foreach (var disk in snapshot.Disks.Where(d =>
                      string.Equals(d.Name.TrimEnd('\\'), systemDrive, StringComparison.OrdinalIgnoreCase) &&
                      d.TotalBytes >= 50L * 1073741824 && d.FreeBytes < 15L * 1073741824))
         {
             issues.Add(new($"На диске {disk.Name} мало места", $"Свободно {disk.FreeBytes / 1073741824.0:N1} ГБ. Можно выполнить очистку или посмотреть, какие файлы занимают место.", "Warning"));
         }
-        foreach (var disk in (full?.PhysicalDisks ?? snapshot.QuickDisks ?? []).Where(d => IsSystemDisk(d.Model, full, snapshot.QuickDisks) && HasBadWindowsHealth(d.Health)))
+        foreach (var disk in (full?.PhysicalDisks ?? snapshot.QuickDisks ?? []).Where(d => IsSystemDisk(d.Model, full, snapshot.QuickDisks, snapshot.SystemDrive) && HasBadWindowsHealth(d.Health)))
             issues.Add(new($"Диск {disk.Model} требует проверки", "Windows сообщает о проблеме с накопителем. Сохраните важные файлы и обратитесь к специалисту.", "Critical"));
         if (full is not null)
         {
-            foreach (var disk in full.SmartDisks.Where(d => IsSystemSmartDisk(d, full) && (Regex.IsMatch(d.Status, "Caution|Bad|Тревог|Плох", RegexOptions.IgnoreCase)
+            foreach (var disk in full.SmartDisks.Where(d => IsSystemSmartDisk(d, full, snapshot.SystemDrive) && (Regex.IsMatch(d.Status, "Caution|Bad|Тревог|Плох", RegexOptions.IgnoreCase)
                          || !string.IsNullOrWhiteSpace(d.SmartWarnings))))
             {
                 var details = string.IsNullOrWhiteSpace(disk.SmartWarnings) ? "Сохраните важные файлы и обратитесь к специалисту для проверки диска."
                     : $"SMART: {disk.SmartWarnings}. Сохраните важные файлы и проверьте накопитель.";
                 issues.Add(new($"Состояние диска {disk.Model} вызывает опасения", details, "Critical"));
             }
-            foreach (var disk in full.SmartDisks.Where(d => IsSystemSmartDisk(d, full) && DiskLifetime.ExceedsWarning(d.PowerOnHours)))
+            foreach (var disk in full.SmartDisks.Where(d => IsSystemSmartDisk(d, full, snapshot.SystemDrive) && DiskLifetime.ExceedsWarning(d.PowerOnHours)))
                 issues.Add(new($"Накопитель {disk.Model} наработал более 60 000 часов",
                     $"Наработка: {DiskLifetime.Format(disk.PowerOnHours)}. Это повод внимательнее следить за состоянием SMART и резервными копиями, но само по себе не означает неисправность.", "Warning"));
-            foreach (var disk in full.PhysicalDisks.Where(d => IsSystemDisk(d.Model, full, snapshot.QuickDisks) && DiskLifetime.ExceedsWarning(d.PowerOnHours)
+            foreach (var disk in full.PhysicalDisks.Where(d => IsSystemDisk(d.Model, full, snapshot.QuickDisks, snapshot.SystemDrive) && DiskLifetime.ExceedsWarning(d.PowerOnHours)
                          && !full.SmartDisks.Any(s => string.Equals(s.Model, d.Model, StringComparison.OrdinalIgnoreCase)
                              && DiskLifetime.ExceedsWarning(s.PowerOnHours))))
                 issues.Add(new($"Накопитель {disk.Model} наработал более 60 000 часов",
@@ -157,24 +173,24 @@ public static class DiagnosticRules
                 var operations = sample.DiskReadOperations + sample.DiskWriteOperations;
                 const double limit = 100;
                 if (operations >= 100 && latency >= limit)
-                    issues.Add(new("Системный диск долго отвечает", $"В среднем ответ занимал {latency:N0} мс. Это может замедлять открытие файлов и программ; краткие скачки задержки не считаются неисправностью.", "Warning"));
+                    issues.Add(new("Системный диск долго отвечает", $"Средний отклик во время теста DiskSpd составил {latency:N0} мс. Это может замедлять открытие файлов и программ.", "Warning"));
             }
         }
         return issues.OrderByDescending(i => i.Priority).ToArray();
     }
 
-    private static bool IsSystemSmartDisk(SmartDiskDetails disk, FullDiagnosticDetails full)
+    private static bool IsSystemSmartDisk(SmartDiskDetails disk, FullDiagnosticDetails full, string systemDrive)
     {
-        var drive = (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").TrimEnd('\\').TrimEnd(':');
+        var drive = systemDrive.TrimEnd('\\').TrimEnd(':');
         if (Regex.IsMatch(disk.Letters ?? "", $@"(?<![A-Z]){Regex.Escape(drive)}(?=[:\\,\s]|$)", RegexOptions.IgnoreCase)) return true;
         return full.SmartDisks.Count == 1 && full.PhysicalDisks.Count <= 1;
     }
 
-    private static bool IsSystemDisk(string model, FullDiagnosticDetails? full, List<PhysicalDiskDetails>? quickDisks)
+    private static bool IsSystemDisk(string model, FullDiagnosticDetails? full, List<PhysicalDiskDetails>? quickDisks, string systemDrive)
     {
         if (full is null) return quickDisks?.Count <= 1;
         var smart = full.SmartDisks.FirstOrDefault(d => string.Equals(d.Model, model, StringComparison.OrdinalIgnoreCase));
-        return smart is not null ? IsSystemSmartDisk(smart, full) : full.PhysicalDisks.Count == 1;
+        return smart is not null ? IsSystemSmartDisk(smart, full, systemDrive) : full.PhysicalDisks.Count == 1;
     }
 
     private static void AddRailIssue(ICollection<UserIssue> issues, string label, double? value,
@@ -270,7 +286,7 @@ public static class DiagnosticRules
         {
             var latency = Math.Max(sample.DiskReadLatencyMs ?? 0, sample.DiskWriteLatencyMs ?? 0);
             if (sample.DiskReadOperations + sample.DiskWriteOperations >= 100 && latency >= 100)
-                findings.Add($"{benchmark.Drive}: средняя задержка диска {latency:N0} мс за 30 секунд; проверьте при обычной нагрузке.");
+                findings.Add($"{benchmark.Drive}: средняя задержка во время DiskSpd — {latency:N0} мс.");
         }
         return findings;
     }
@@ -292,9 +308,24 @@ public static class DiagnosticRules
         if (benchmark.IsNvme || snapshot.Full?.SmartDisks.Any(d =>
                 d.MediaType == "SSD" && Regex.IsMatch(d.TransferMode, "PCIe|NVMe|NVM Express", RegexOptions.IgnoreCase) &&
                 Regex.Matches(d.Letters, @"(?i)(?<![A-Z])[A-Z]:").Cast<Match>()
-                    .Any(m => string.Equals(m.Value, Environment.GetEnvironmentVariable("SystemDrive"), StringComparison.OrdinalIgnoreCase))) == true)
+                    .Any(m => string.Equals(m.Value, snapshot.SystemDrive, StringComparison.OrdinalIgnoreCase))) == true)
             return 900;
         return 210;
+    }
+
+    private static string FormatCriticalWindowsEvent(EventDetails item)
+    {
+        var time = DateTimeOffset.TryParse(item.Time, out var occurredAt)
+            ? occurredAt.ToString("dd.MM.yyyy HH:mm:ss zzz")
+            : item.Time;
+        var provider = string.IsNullOrWhiteSpace(item.Provider) ? "Источник Windows" : item.Provider.Trim();
+        var message = Regex.Replace(item.Message ?? "", @"\s+", " ").Trim();
+        if (message.StartsWith("Описание не получено для этого события", StringComparison.OrdinalIgnoreCase))
+            message = "текст события не получен";
+        else if (message.StartsWith("Event description unavailable:", StringComparison.OrdinalIgnoreCase))
+            message = "Windows не смогла прочитать текст события";
+        if (message.Length > 220) message = message.Substring(0, 219).TrimEnd() + "…";
+        return $"{time} · {provider} · № {item.Id}: {message}";
     }
 
     private static string FormatWindows(DiagnosticSnapshot snapshot)
@@ -315,10 +346,4 @@ public static class DiagnosticRules
 
     private static bool HasBadWindowsHealth(string health) =>
         Regex.IsMatch(health, "Warning|Unhealthy|Degraded|Pred Fail|Error|Тревог|Плох", RegexOptions.IgnoreCase);
-}
-
-public sealed record UserIssue(string Title, string Detail, string Severity)
-{
-    public int Priority => Severity switch { "Critical" => 3, "Warning" => 2, _ => 1 };
-    public string Accent => Severity switch { "Critical" => "#D94F4F", "Warning" => "#DA991D", _ => "#326EFF" };
 }

@@ -44,7 +44,7 @@ namespace ITSeti.Maintenance.App
             if (data == null) throw new InvalidDataException("Сервер вернул пустые данные обновления Windows 7.");
             var versionText = Required(data, "version");
             Version version;
-            if (!Regex.IsMatch(versionText, @"^\d+\.\d+\.\d+$") || !Version.TryParse(versionText, out version))
+            if (!Regex.IsMatch(versionText, @"^\d+\.\d+\.\d+(?:\.\d+)?$") || !Version.TryParse(versionText, out version))
                 throw new InvalidDataException("Сервер вернул неверную версию Windows 7.");
             if (Required(data, "key") != "application" || Required(data, "platform") != "win7")
                 throw new InvalidDataException("Сервер вернул пакет не для Windows 7.");
@@ -60,7 +60,8 @@ namespace ITSeti.Maintenance.App
                 !long.TryParse(Required(data, "sizeBytes"), out size) || size < 1 || size > 500000000)
                 throw new InvalidDataException("Размер или SHA-256 установщика некорректен.");
             var url = new Uri(serverUrl, "api/v1/packages/" + packageId.ToString("D") + "/download").ToString();
-            return version.CompareTo(new Version(current.Major, current.Minor, Math.Max(current.Build, 0))) > 0
+            return new Version(version.Major, version.Minor, Math.Max(version.Build, 0), Math.Max(version.Revision, 0))
+                .CompareTo(new Version(current.Major, current.Minor, Math.Max(current.Build, 0), Math.Max(current.Revision, 0))) > 0
                 ? new Win7Release { PackageId = packageId, Version = version, Size = size, Digest = digest, Url = url }
                 : null;
         }
@@ -199,8 +200,11 @@ namespace ITSeti.Maintenance.App
         private static WebClient NewClient()
         {
             var client = new TimeLimitedWebClient();
-                    client.Headers[HttpRequestHeader.UserAgent] = "ITSeti-Maintenance-Win7/2.3.9";
+            var device = ReadDevice();
+            client.Headers[HttpRequestHeader.UserAgent] = "ITSeti-Maintenance-Win7/2.4.6";
             client.Headers[HttpRequestHeader.CacheControl] = "no-cache";
+            client.Headers["X-Device-Id"] = device.DeviceId;
+            client.Headers["X-Device-Key"] = device.DeviceKey;
             return client;
         }
 
@@ -244,7 +248,7 @@ namespace ITSeti.Maintenance.App
             request.Method = "GET";
             request.Timeout = 30000;
             request.ReadWriteTimeout = 30000;
-            request.UserAgent = "ITSeti-Maintenance-Win7/2.3.9";
+            request.UserAgent = "ITSeti-Maintenance-Win7/2.4.6";
             request.Headers["X-Device-Id"] = device.DeviceId;
             request.Headers["X-Device-Key"] = device.DeviceKey;
             try

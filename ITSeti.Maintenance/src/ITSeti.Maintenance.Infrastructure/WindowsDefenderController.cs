@@ -41,7 +41,7 @@ public sealed class WindowsDefenderController
         {
             var operation = action == "Enable" ? MaintenanceServiceOperation.EnableWindowsDefender : MaintenanceServiceOperation.DisableWindowsDefender;
             var previousWrite = File.Exists(StatusPath) ? File.GetLastWriteTimeUtc(StatusPath) : DateTime.MinValue;
-            var service = await MaintenanceServiceClient.StartAsync(operation, "itseti", cancellationToken);
+            var service = await MaintenanceServiceClient.StartAsync(operation, cancellationToken);
             if (service.Connected)
             {
                 if (!service.Accepted) throw new InvalidOperationException(service.Message);

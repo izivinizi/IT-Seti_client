@@ -9,9 +9,15 @@ $function = $ast.Find({ param($node) $node -is [Management.Automation.Language.F
     $node.Name -eq 'ConvertTo-AppVersion' }, $true)
 if (!$function) { throw 'Application version parser is missing.' }
 . ([scriptblock]::Create($function.Extent.Text))
-foreach ($text in @('1.2.1', '1.2.1.0', '1.2.1.9')) {
-    if ((ConvertTo-AppVersion $text) -ne [version]'1.2.1') { throw "Incorrect version normalization: $text" }
+$cases = @{
+    '1.2.1' = [version]'1.2.1.0'
+    '1.2.1.0' = [version]'1.2.1.0'
+    '1.2.1.9' = [version]'1.2.1.9'
 }
+foreach ($text in $cases.Keys) {
+    if ((ConvertTo-AppVersion $text) -ne $cases[$text]) { throw "Incorrect version normalization: $text" }
+}
+if ((ConvertTo-AppVersion '7.7.7.3') -le (ConvertTo-AppVersion '7.7.7')) { throw 'Four-part update version did not compare as newer.' }
 foreach ($text in @('1.2', '1.2.1-preview', 'x.y.z')) {
     try { $null = ConvertTo-AppVersion $text; throw "Invalid version accepted: $text" }
     catch { if ($_.Exception.Message -eq "Invalid version accepted: $text") { throw } }

@@ -1,10 +1,10 @@
-﻿param([string]$ToolsRoot=(Join-Path $PSScriptRoot 'Tools'),[string]$OutputRoot=(Join-Path $PSScriptRoot 'dist\ITSeti-Maintenance'),[switch]$SkipReleaseManifest)
+param([string]$ToolsRoot=(Join-Path $PSScriptRoot 'Tools'),[string]$OutputRoot=(Join-Path $PSScriptRoot 'dist\ITSeti-Maintenance'),[switch]$SkipReleaseManifest,[switch]$ReleaseBuild)
 $ErrorActionPreference='Stop'
 $buildProject=New-Object System.Xml.XmlDocument
 $buildProject.Load((Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj'))
 $buildVersion=[string]$buildProject.SelectSingleNode('/Project/PropertyGroup/Version').InnerText
 $parsedVersion=[Version]$buildVersion
-$testBuild=$env:ITSETI_TEST_BUILD -eq '1' -or $parsedVersion.Major -ge 2
+$testBuild=$env:ITSETI_TEST_BUILD -eq '1' -or (!$ReleaseBuild -and $parsedVersion.Major -ge 2)
 $betaSeries=$parsedVersion.ToString(3)
 $installerBaseName='ITSeti-Maintenance-Setup'
 if($testBuild){
@@ -21,27 +21,17 @@ $required=@('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\Cdm
 foreach($relative in $required){if(!(Test-Path -LiteralPath (Join-Path $ToolsRoot $relative) -PathType Leaf)){throw "Missing: $relative"}}
 $appProject=Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj'
 $serviceProject=Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.Service\ITSeti.Maintenance.Service.csproj'
-$notifierProject=Join-Path $PSScriptRoot 'src\ITSeti.Maintenance.TicketNotifier\ITSeti.Maintenance.TicketNotifier.csproj'
 $dotnetCommand = Get-Command dotnet -ErrorAction SilentlyContinue
 $dotnet = if($dotnetCommand){$dotnetCommand.Source}else{Join-Path $env:USERPROFILE '.dotnet10\dotnet.exe'}
 if(!(Test-Path -LiteralPath $dotnet -PathType Leaf)){throw 'dotnet SDK executable was not found.'}
-& $dotnet restore $appProject -r win-x64 -p:NuGetAudit=false
-if($LASTEXITCODE -ne 0){
-    $cache=Join-Path $env:USERPROFILE '.nuget\packages'
-    Write-Warning 'NuGet недоступен; повторяем восстановление из локального кеша.'
-    & $dotnet restore $appProject -r win-x64 --source $cache -p:NuGetAudit=false
-    if($LASTEXITCODE -ne 0){throw 'dotnet restore failed; verify the NuGet connection or local package cache.'}
-}
-& $dotnet restore $serviceProject -r win-x64 -p:NuGetAudit=false
+& $dotnet restore $appProject -r win-x64
+if($LASTEXITCODE -ne 0){throw 'dotnet restore failed; verify the NuGet connection.'}
+& $dotnet restore $serviceProject -r win-x64
 if($LASTEXITCODE -ne 0){throw 'Service restore failed; verify the NuGet connection.'}
-& $dotnet restore $notifierProject -r win-x64 -p:NuGetAudit=false
-if($LASTEXITCODE -ne 0){throw 'Ticket notifier restore failed; verify the NuGet connection.'}
 & $dotnet publish $appProject -c Release -r win-x64 --self-contained true --no-restore -o (Join-Path $OutputRoot 'App')
 if($LASTEXITCODE -ne 0){throw 'dotnet publish failed.'}
-& $dotnet publish $serviceProject -c Release -r win-x64 --self-contained true --no-restore -o (Join-Path $OutputRoot 'Service')
+& $dotnet publish $serviceProject -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=false -o (Join-Path $OutputRoot 'Service')
 if($LASTEXITCODE -ne 0){throw 'Service publish failed.'}
-& $dotnet publish $notifierProject -c Release -r win-x64 --self-contained true --no-restore -o (Join-Path $OutputRoot 'Notifier')
-if($LASTEXITCODE -ne 0){throw 'Ticket notifier publish failed.'}
 Remove-Item -LiteralPath (Join-Path $OutputRoot 'Service\Backend') -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $OutputRoot 'App\Setup') -Recurse -Force -ErrorAction SilentlyContinue
 $accessControlPackage=Join-Path $env:USERPROFILE '.nuget\packages\system.threading.accesscontrol\10.0.3\runtimes\win\lib\net9.0\System.Threading.AccessControl.dll'

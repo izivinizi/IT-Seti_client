@@ -6,6 +6,7 @@ using System.IO;
 using System.IO.Pipes;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Globalization;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.ServiceProcess;
@@ -14,6 +15,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using ITSeti.Maintenance.Win7;
+using ITSeti.Maintenance.Core;
 
 namespace ITSeti.Maintenance.App
 {
@@ -65,12 +67,18 @@ namespace ITSeti.Maintenance.App
             ServiceBase.Run(new ServiceBase[] { new Win7MaintenanceService() });
         }
 
-        internal static Win7ServiceStatus ReadStatus()
+        internal static Win7ServiceStatus ReadStatus(string runId = null)
         {
             try
             {
-                if (!File.Exists(StatusPath)) return null;
-                using (var stream = new FileStream(StatusPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                var path = StatusPath;
+                if (!string.IsNullOrWhiteSpace(runId) && Guid.TryParse(runId, out var id))
+                {
+                    var archived = Path.Combine(ServiceRoot, "OperationResults", id.ToString("D") + ".json");
+                    if (File.Exists(archived)) path = archived;
+                }
+                if (!File.Exists(path)) return null;
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 using (var reader = new StreamReader(stream, Encoding.UTF8))
                     return Serializer.Deserialize<Win7ServiceStatus>(reader.ReadToEnd());
             }
@@ -87,18 +95,30 @@ namespace ITSeti.Maintenance.App
             private static readonly object ErrorGate = new object();
             private static readonly Dictionary<string, DateTime> RecentErrors = new Dictionary<string, DateTime>(StringComparer.Ordinal);
             private readonly object gate = new object();
+            private readonly string pipeName;
             private CancellationTokenSource stop;
             private CancellationTokenSource activeRun;
+            private readonly OperationQueue<string> operations = new OperationQueue<string>();
+            private readonly Dictionary<string, PendingOperation> requests = new Dictionary<string, PendingOperation>();
+            private string activeOperation;
+            private bool stopping;
+            private sealed class PendingOperation
+            {
+                public string RunId;
+                public string OwnerSid;
+                public string StartedAtUtc;
+                public Action<string, CancellationToken> Execute;
+            }
             private string activeRunOwnerSid;
             private Task pipeTask;
             private Task monitorTask;
             private NamedPipeServerStream activePipe;
-            private readonly Queue<LegacySnapshot> monitoringWindow = new Queue<LegacySnapshot>();
-            private readonly HashSet<string> reportedCritical=new HashSet<string>();
+            private readonly MonitoringConfirmation monitoring = new MonitoringConfirmation();
             private DateTime nextSmartAttempt;
 
-            public Win7MaintenanceService()
+            public Win7MaintenanceService(string pipeNameOverride = null)
             {
+                pipeName = pipeNameOverride ?? PipeName;
                 ServiceName = Win7MaintenanceServiceHost.ServiceName;
                 CanStop = true;
                 CanShutdown = true;
@@ -121,6 +141,8 @@ namespace ITSeti.Maintenance.App
                 stop.Cancel();
                 lock (gate)
                 {
+                    stopping = true;
+                    foreach (var item in operations.Snapshot) operations.Cancel(item.Operation);
                     if (activeRun != null) activeRun.Cancel();
                     if (activePipe != null) activePipe.Dispose();
                 }
@@ -145,11 +167,12 @@ namespace ITSeti.Maintenance.App
                     {
                         pipe = CreatePipe();
                         lock (gate) activePipe = pipe;
-                        var wait = pipe.WaitForConnectionAsync();
-                        var completed = await Task.WhenAny(wait, Task.Delay(Timeout.Infinite, cancellationToken));
-                        if (completed != wait) break;
+                        // Let the asynchronous pipe own cancellation. An infinite delay
+                        // per connection retained registrations until the service stopped.
+                        await pipe.WaitForConnectionAsync(cancellationToken);
                         await HandleClient(pipe, cancellationToken);
                     }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
                     catch (Exception ex) when (ex is IOException || ex is ObjectDisposedException || ex is InvalidOperationException)
                     {
                         if (!cancellationToken.IsCancellationRequested) WriteError(ex);
@@ -162,7 +185,7 @@ namespace ITSeti.Maintenance.App
                 }
             }
 
-            private static NamedPipeServerStream CreatePipe()
+            private NamedPipeServerStream CreatePipe()
             {
                 var security = new PipeSecurity();
                 security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
@@ -171,7 +194,7 @@ namespace ITSeti.Maintenance.App
                     PipeAccessRights.FullControl, AccessControlType.Allow));
                 security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
                     PipeAccessRights.ReadWrite, AccessControlType.Allow));
-                return new NamedPipeServerStream(PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+                return new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous, 4096, 4096, security);
             }
 
@@ -181,7 +204,21 @@ namespace ITSeti.Maintenance.App
                 using (var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, true) { AutoFlush = true })
                 {
                     var read = Task.Run(() => ReadBoundedRequest(reader));
-                    if (await Task.WhenAny(read, Task.Delay(5000, cancellationToken)) != read) return;
+                    using (var readTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                    {
+                        try
+                        {
+                            if (await Task.WhenAny(read, Task.Delay(5000, readTimeout.Token)) != read)
+                            {
+                                // The pipe is closed by PipeLoop. Observe a read failure caused
+                                // by that close even though the request deadline already elapsed.
+                                _ = read.ContinueWith(task => { _ = task.Exception; },
+                                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+                                return;
+                            }
+                        }
+                        finally { readTimeout.Cancel(); }
+                    }
                     var response = HandleRequest(read.Result, pipe);
                     await writer.WriteLineAsync(Serializer.Serialize(response));
                 }
@@ -198,15 +235,25 @@ namespace ITSeti.Maintenance.App
                 var operation = Value(request, "operation");
                 if (string.Equals(command, "ping", StringComparison.OrdinalIgnoreCase))
                     return Response(true, "Служба обслуживания Windows 7 работает.");
+                if (string.Equals(command, "save-enrollment", StringComparison.OrdinalIgnoreCase))
+                {
+                    try { return SaveEnrollment(request); }
+                    catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException ||
+                        ex is InvalidDataException || ex is ArgumentException)
+                    {
+                        WriteError(ex);
+                        return Response(false, ex.Message);
+                    }
+                }
                 if (string.Equals(command, "start", StringComparison.OrdinalIgnoreCase))
                 {
                     if (string.Equals(operation, "full", StringComparison.OrdinalIgnoreCase)) return StartRun(true, ClientSid(pipe));
                     if (string.Equals(operation, "quick", StringComparison.OrdinalIgnoreCase)) return StartRun(true, ClientSid(pipe));
-                    if (string.Equals(operation, "cleanup", StringComparison.OrdinalIgnoreCase)) return StartCleanup();
+                    if (string.Equals(operation, "cleanup", StringComparison.OrdinalIgnoreCase)) return StartCleanup(ClientSid(pipe));
                     if (string.Equals(operation, "repair", StringComparison.OrdinalIgnoreCase))
                     {
                         if (!IsAdministrator(pipe)) return Response(false, "Восстановление доступно только инженеру.");
-                        return StartRepair();
+                        return StartRepair(ClientSid(pipe));
                     }
                 }
                 if (string.Equals(command, "launch", StringComparison.OrdinalIgnoreCase))
@@ -222,23 +269,106 @@ namespace ITSeti.Maintenance.App
                 return Response(false, "Операция не поддерживается службой Windows 7.");
             }
 
+            private static Dictionary<string, object> SaveEnrollment(Dictionary<string, object> request)
+            {
+                object raw;
+                var enrollment = request.TryGetValue("enrollment", out raw) ? raw as Dictionary<string, object> : null;
+                if (enrollment == null) throw new InvalidDataException("Не переданы данные привязки ПК.");
+                var serverUrl = EnrollmentText(enrollment, "serverUrl");
+                var deviceId = EnrollmentText(enrollment, "deviceId");
+                var deviceKey = EnrollmentText(enrollment, "deviceKey");
+                var supportKey = EnrollmentText(enrollment, "supportKey");
+                var companyId = EnrollmentNumber(enrollment, "companyId");
+                var siteId = EnrollmentNumber(enrollment, "siteId");
+                Uri server;
+                Guid parsedId;
+                if (!Uri.TryCreate(serverUrl, UriKind.Absolute, out server) || server.Scheme != Uri.UriSchemeHttps ||
+                    !string.Equals(server.Host, "it-seti.nylenz.ru", StringComparison.OrdinalIgnoreCase) ||
+                    server.Port != 443 || !string.IsNullOrEmpty(server.UserInfo) || !Guid.TryParse(deviceId, out parsedId) ||
+                    deviceKey.Length < 16 || deviceKey.Length > 512 || supportKey.Length > 512 ||
+                    (companyId.HasValue && companyId.Value <= 0) || (siteId.HasValue && siteId.Value <= 0))
+                    throw new InvalidDataException("Некорректные данные привязки ПК.");
+
+                var path = Path.Combine(ResultsRoot, "server-device.json");
+                if (File.Exists(path))
+                {
+                    Dictionary<string, object> existing;
+                    try { existing = Serializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(path)); }
+                    catch (Exception ex) when (ex is ArgumentException || ex is InvalidOperationException)
+                    { throw new InvalidDataException("Сохранённая привязка ПК повреждена.", ex); }
+                    if (existing == null || !string.Equals(EnrollmentText(existing, "deviceId"), deviceId, StringComparison.OrdinalIgnoreCase) ||
+                        !string.Equals(EnrollmentText(existing, "deviceKey"), deviceKey, StringComparison.Ordinal))
+                        throw new InvalidDataException("Ключ ПК изменился. Повторное подключение требует отдельного восстановления.");
+                }
+                var data = new Dictionary<string, object> {
+                    { "serverUrl", serverUrl }, { "deviceId", deviceId }, { "deviceKey", deviceKey },
+                    { "supportKey", supportKey }, { "companyId", companyId }, { "siteId", siteId }
+                };
+                WriteAtomically(path, Serializer.Serialize(data));
+                if (!string.IsNullOrWhiteSpace(supportKey))
+                {
+                    var support = new Dictionary<string, object> {
+                        { "serverUrl", serverUrl }, { "deviceId", deviceId }, { "supportKey", supportKey }
+                    };
+                    WriteAtomically(Path.Combine(ResultsRoot, "server-support.json"), Serializer.Serialize(support));
+                }
+                return Response(true, "Привязка ПК сохранена службой SYSTEM.");
+            }
+
+            private static string EnrollmentText(Dictionary<string, object> values, string name)
+            {
+                object value;
+                return values.TryGetValue(name, out value) ? Convert.ToString(value, CultureInfo.InvariantCulture) ?? "" : "";
+            }
+
+            private static long? EnrollmentNumber(Dictionary<string, object> values, string name)
+            {
+                object value;
+                if (!values.TryGetValue(name, out value) || value == null) return null;
+                long parsed;
+                if (long.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), NumberStyles.Integer,
+                    CultureInfo.InvariantCulture, out parsed)) return parsed;
+                throw new InvalidDataException("Некорректное числовое поле привязки ПК: " + name + ".");
+            }
+
             private Dictionary<string, object> StartRun(bool full, string ownerSid)
             {
-                if (string.IsNullOrWhiteSpace(ownerSid)) return Response(false, "Не удалось определить пользователя, запустившего проверку.");
+                return EnqueueOperation("FullCheck", ownerSid, (id, token) => ExecuteCheck(true, id, token));
+            }
+
+            private Dictionary<string, object> EnqueueOperation(string operation, string ownerSid, Action<string, CancellationToken> execute)
+            {
+                if (string.IsNullOrWhiteSpace(ownerSid)) return Response(false, "Не удалось определить пользователя.");
                 lock (gate)
                 {
-                    full = true;
-                    if (activeRun != null)
-                        return Response(false, "Проверка уже выполняется.");
+                    if (stopping) return Response(false, "Служба останавливается.");
+                    PendingOperation existing;
+                    if (requests.TryGetValue(operation, out existing))
+                        return existing.OwnerSid == ownerSid ? Response(true, "Операция уже принята.", existing.RunId) : Response(false, "Операция другого пользователя уже выполняется.");
+                    var request = new PendingOperation { RunId = Guid.NewGuid().ToString("D"), OwnerSid = ownerSid,
+                        StartedAtUtc = UtcNow(), Execute = execute };
+                    requests.Add(operation, request);
+                    operations.Enqueue(operation, "maintenance");
+                    StartNextOperation();
+                    return Response(true, activeOperation == operation ? "Операция запущена службой SYSTEM." : "Операция ожидает в очереди.", request.RunId);
+                }
+            }
+
+            private void StartNextOperation()
+            {
+                if (stopping || activeRun != null) return;
+                foreach (var operation in operations.Pending)
+                {
+                    if (!operations.TryStart(operation)) continue;
+                    var request = requests[operation];
                     activeRun = new CancellationTokenSource();
-                    activeRunOwnerSid = ownerSid;
+                    activeRunOwnerSid = request.OwnerSid;
+                    activeOperation = operation;
                     var token = activeRun.Token;
-                    var operation = full ? "FullCheck" : "QuickCheck";
-                    var runId = Guid.NewGuid().ToString("D");
-                    WriteStatus(new Win7ServiceStatus { State = "Running", Operation = operation, RunId = runId,
-                        StartedAtUtc = UtcNow(), Message = "Проверка выполняется службой SYSTEM." });
-                    Task.Run(() => ExecuteCheck(full, runId, token));
-                    return Response(true, "Проверка запущена службой SYSTEM.", runId);
+                    WriteStatus(new Win7ServiceStatus { State = "Running", Operation = operation, RunId = request.RunId,
+                        StartedAtUtc = request.StartedAtUtc, Message = "Операция выполняется службой SYSTEM." });
+                    Task.Run(() => request.Execute(request.RunId, token));
+                    break;
                 }
             }
 
@@ -248,37 +378,8 @@ namespace ITSeti.Maintenance.App
                 while((character=reader.Read())>=0){if(character=='\n')return value.ToString();if(value.Length>=4096)throw new InvalidDataException("Запрос превышает 4096 символов.");value.Append((char)character);}return value.ToString();
             }
 
-            private Dictionary<string, object> StartCleanup()
-            {
-                lock (gate)
-                {
-                    if (activeRun != null)
-                        return Response(false, "Другая операция обслуживания уже выполняется.");
-                    activeRun = new CancellationTokenSource();
-                    var token = activeRun.Token;
-                    var runId = Guid.NewGuid().ToString("D");
-                    WriteStatus(new Win7ServiceStatus { State = "Running", Operation = "Cleanup", RunId = runId,
-                        StartedAtUtc = UtcNow(), Message = "Очистка выполняется службой SYSTEM." });
-                    Task.Run(() => ExecuteCleanup(runId, token));
-                    return Response(true, "Очистка запущена службой SYSTEM.", runId);
-                }
-            }
-
-            private Dictionary<string, object> StartRepair()
-            {
-                lock (gate)
-                {
-                    if (activeRun != null)
-                        return Response(false, "Другая операция обслуживания уже выполняется.");
-                    activeRun = new CancellationTokenSource();
-                    var token = activeRun.Token;
-                    var runId = Guid.NewGuid().ToString("D");
-                    WriteStatus(new Win7ServiceStatus { State = "Running", Operation = "Repair", RunId = runId,
-                        StartedAtUtc = UtcNow(), Message = "Восстановление выполняется службой SYSTEM." });
-                    Task.Run(() => ExecuteRepair(runId, token));
-                    return Response(true, "Восстановление запущено службой SYSTEM.", runId);
-                }
-            }
+            private Dictionary<string, object> StartCleanup(string ownerSid) => EnqueueOperation("Cleanup", ownerSid, ExecuteCleanup);
+            private Dictionary<string, object> StartRepair(string ownerSid) => EnqueueOperation("Repair", ownerSid, ExecuteRepair);
 
             private Dictionary<string, object> StopRun(NamedPipeServerStream pipe)
             {
@@ -286,9 +387,24 @@ namespace ITSeti.Maintenance.App
                 var administrator = IsAdministrator(pipe);
                 lock (gate)
                 {
-                    if (activeRun == null || activeRun.IsCancellationRequested) return Response(true, "Активная операция не найдена.");
+                    var removedPending = false;
+                    foreach (var pending in operations.Pending)
+                    {
+                        if (administrator || requests[pending].OwnerSid == callerSid)
+                        {
+                            var request = requests[pending];
+                            operations.Cancel(pending);
+                            requests.Remove(pending);
+                            WriteOperationResult(new Win7ServiceStatus { State = "Stopped", Operation = pending,
+                                RunId = request.RunId, StartedAtUtc = request.StartedAtUtc,
+                                FinishedAtUtc = UtcNow(), Message = "Ожидающая операция остановлена." });
+                            removedPending = true;
+                        }
+                    }
+                    if (activeRun == null || activeRun.IsCancellationRequested) return Response(true, "Активная операция не найдена; очередь очищена.");
                     if (!administrator && !string.Equals(callerSid, activeRunOwnerSid, StringComparison.OrdinalIgnoreCase))
-                        return Response(false, "Остановить проверку может только запустивший её пользователь или администратор.");
+                        return Response(removedPending, removedPending ? "Ожидающая операция остановлена." : "Остановить проверку может только запустивший её пользователь или администратор.");
+                    operations.Cancel(activeOperation);
                     activeRun.Cancel();
                     return Response(true, "Операция остановлена.");
                 }
@@ -319,6 +435,7 @@ namespace ITSeti.Maintenance.App
                 {
                     var snapshot = LegacyDiagnostics.Collect(full, token);
                     LegacyHwInfoReader.Apply(snapshot);
+                    LegacyDiagnosticAdapter.Apply(snapshot);
                     SaveSnapshot(snapshot);
                     WriteStatus(new Win7ServiceStatus { State = "Completed", Operation = full ? "FullCheck" : "QuickCheck", RunId = runId,
                         StartedAtUtc = snapshot.StartedAt, FinishedAtUtc = UtcNow(), Message = "Проверка завершена службой SYSTEM.", ResultPath = ResultPath });
@@ -378,6 +495,9 @@ namespace ITSeti.Maintenance.App
                 {
                     if (activeRun != null) { activeRun.Dispose(); activeRun = null; }
                     activeRunOwnerSid = null;
+                    if (activeOperation != null) requests.Remove(activeOperation);
+                    activeOperation = null;
+                    StartNextOperation();
                 }
             }
 
@@ -427,35 +547,14 @@ namespace ITSeti.Maintenance.App
                 LegacyHwInfoReader.Apply(snapshot);
                 WriteAtomically(MonitoringPath, snapshot.ToJson());
 
-                monitoringWindow.Enqueue(snapshot);
-                while (monitoringWindow.Count > 6) monitoringWindow.Dequeue();
-                var critical = snapshot.Findings.FindAll(IsCriticalFinding);
-                if (snapshot.CpuTemperatureC >= 85) critical.Add("HWiNFO критично: CPU " + snapshot.CpuTemperatureC.Value.ToString("N0") + " °C");
-                if (monitoringWindow.Count == 6)
-                {
-                    var cpuSamples = monitoringWindow.Where(item => item.CpuPercent.HasValue).Select(item => item.CpuPercent.Value).ToArray();
-                    var memorySamples = monitoringWindow.Where(item => item.MemoryUsedPercent.HasValue).Select(item => item.MemoryUsedPercent.Value).ToArray();
-                    if (cpuSamples.Count(value => value >= 98) >= 3)
-                        critical.Add("HWiNFO критично: загрузка CPU держится на уровне 98% и выше");
-                    if (memorySamples.Count(value => value >= 98) >= 3)
-                        critical.Add("HWiNFO критично: загрузка ОЗУ держится на уровне 98% и выше");
-                }
-                Func<string,string> key=value=>System.Text.RegularExpressions.Regex.Replace(value,@"[-+]?\d+(?:[.,]\d+)?","#");
-                var active=new HashSet<string>(critical.Select(key));
-                foreach(var expired in reportedCritical.Where(item=>!active.Contains(item)).ToArray()) reportedCritical.Remove(expired);
-                critical=critical.Where(value=>reportedCritical.Add(key(value))).ToList();
+                var diagnostic = LegacyDiagnosticAdapter.ToSnapshot(snapshot);
+                var confirmed = monitoring.Observe(CriticalMonitoringEvaluator.Evaluate(diagnostic), diagnostic.StartedAt);
+                var critical = confirmed.Select(issue => issue.Title + ". " + issue.Detail).ToList();
                 if (critical.Count == 0) return;
                 snapshot.Kind = "Постоянный мониторинг";
                 snapshot.Findings = critical;
                 ServerReportUploader.Queue(snapshot);
                 if (ServerReportUploader.Upload() != 0) ServerReportUploader.Trigger();
-            }
-
-            private static bool IsCriticalFinding(string value)
-            {
-                return value != null && (value.StartsWith("SMART:", StringComparison.OrdinalIgnoreCase) ||
-                    value.StartsWith("HWiNFO критично:",StringComparison.OrdinalIgnoreCase) ||
-                    value.StartsWith("Мало свободного места", StringComparison.OrdinalIgnoreCase));
             }
 
             private static bool IsAdministrator(NamedPipeServerStream pipe)
@@ -507,9 +606,40 @@ namespace ITSeti.Maintenance.App
 
             private static string UtcNow() { return DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture); }
 
-            private static void WriteStatus(Win7ServiceStatus status)
+            private void WriteStatus(Win7ServiceStatus status)
             {
+                lock (gate)
+                {
+                    if (activeOperation != null && requests.TryGetValue(activeOperation, out var activeRequest) &&
+                        string.Equals(activeRequest.RunId, status.RunId, StringComparison.OrdinalIgnoreCase) &&
+                        (status.State == "Completed" || status.State == "Failed" || status.State == "Stopped"))
+                    {
+                        if (status.State == "Stopped") operations.Cancel(activeOperation);
+                        operations.Complete(activeOperation, status.State == "Failed" ? status.Error ?? "Failed" : null);
+                    }
+                }
+                WriteOperationResult(status);
                 WriteAtomically(StatusPath, Serializer.Serialize(status));
+            }
+
+            private static void WriteOperationResult(Win7ServiceStatus status)
+            {
+                if (!Guid.TryParse(status.RunId, out var id) ||
+                    (status.State != "Completed" && status.State != "Failed" && status.State != "Stopped")) return;
+                var archive = Path.Combine(ServiceRoot, "OperationResults", id.ToString("D") + ".json");
+                WriteAtomically(archive, Serializer.Serialize(status));
+                PruneOperationResults();
+            }
+
+            private static void PruneOperationResults()
+            {
+                try
+                {
+                    var root = Path.Combine(ServiceRoot, "OperationResults");
+                    foreach (var path in Directory.GetFiles(root, "*.json")
+                        .OrderByDescending(File.GetLastWriteTimeUtc).Skip(128)) File.Delete(path);
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
             }
 
             private static void WriteError(Exception exception)
@@ -553,6 +683,10 @@ namespace ITSeti.Maintenance.App
         private static readonly JavaScriptSerializer Serializer = new JavaScriptSerializer();
 
         internal static Task<Win7ServiceCallResult> PingAsync() { return SendAsync("ping", null); }
+        internal static Task<Win7ServiceCallResult> SaveEnrollmentAsync(Dictionary<string, object> enrollment)
+        {
+            return SendAsync("save-enrollment", null, enrollment: enrollment);
+        }
         internal static Task<Win7ServiceCallResult> StartAsync(bool full) { return SendAsync("start", full ? "full" : "quick"); }
         internal static Task<Win7ServiceCallResult> CleanupAsync() { return SendAsync("start", "cleanup"); }
         internal static Task<Win7ServiceCallResult> RepairAsync() { return SendAsync("start", "repair"); }
@@ -567,7 +701,7 @@ namespace ITSeti.Maintenance.App
         }
 
         private static Task<Win7ServiceCallResult> SendAsync(string command, string operation, string target = null,
-            string argument = null, int? sessionId = null)
+            string argument = null, int? sessionId = null, Dictionary<string, object> enrollment = null)
         {
             return Task.Run(() =>
             {
@@ -581,7 +715,7 @@ namespace ITSeti.Maintenance.App
                         {
                             writer.WriteLine(Serializer.Serialize(new Dictionary<string, object> {
                                 { "command", command }, { "operation", operation }, { "target", target },
-                                { "argument", argument }, { "sessionId", sessionId }
+                                { "argument", argument }, { "sessionId", sessionId }, { "enrollment", enrollment }
                             }));
                             var line = reader.ReadLine();
                             if (string.IsNullOrWhiteSpace(line)) return Win7ServiceCallResult.Unavailable("Служба не вернула ответ.");

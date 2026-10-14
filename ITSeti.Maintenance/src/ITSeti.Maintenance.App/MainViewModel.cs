@@ -131,7 +131,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private bool applicationUpdateRunning;
     private string applicationUpdateStatus = ApplicationUpdateRunner.ReadLastStatus() ?? "Проверка обновлений ещё не выполнялась";
     public bool HasBundledSetup => false;
-    public bool CanInstallSetup => !setupInstallRunning && (HasBundledSetup || SetupComponents.Any(component => component.Package == "На сервере" && component.CanInstall && component.InstallKey is not "WinRAR" and not "Yandex"));
+    public bool CanInstallSetup => !setupInstallRunning && SetupComponents.Any(component => component.IsSelected && component.CanSelectInstall);
     public bool CanManageSetup => !setupInstallRunning;
     public bool CanLaunchDiskTools => fullRunner is FullDiagnosticsRunner;
     public string SoftwareActionStatus => softwareActionStatus;
@@ -162,11 +162,15 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private DiagnosticSnapshot? selected;
     private DiagnosticSnapshot? live;
     private bool busy;
+    private bool serviceAvailable;
+    private string serviceStatus = "Состояние службы не проверено";
+    private DateTimeOffset nextServiceProbeUtc;
     private CancellationTokenSource? fullCheckCancellation;
     private int liveRefreshRunning;
     private bool cleanupRunning;
     private bool repairRunning;
     private bool windowsUpdateActionRunning;
+    private bool diagnosticDataActionRunning;
     private bool windowsDefenderActionRunning;
     private bool windowsDefenderStatusRunning;
     private bool canManageWindowsDefender;
@@ -174,8 +178,10 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private string windowsDefenderStatus = "Состояние защиты не проверено";
     private string? cleanupResult;
     private string? repairResult;
+    private string? lastMaintenanceSignature;
     private string windowsUpdateStatus = "Проверка обновлений не запускалась";
     private string windowsUpdatePolicyStatus = "Автоматические обновления не изменялись приложением";
+    private string diagnosticDataStatus = new WindowsDiagnosticDataPolicyRunner().ReadStatus();
     private string status = "Загрузка истории…";
     private string? userStatusOverride;
     private readonly MachineIdentityStore identityStore = new();
@@ -347,9 +353,11 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     }
     public string ComputerName => Environment.MachineName;
     public string AdminAccountAuditStatus => adminAccountAuditStatus;
+    public string AdminPasswordExpiryStatus { get; private set; } = "Срок действия пароля ещё не проверен.";
     public async Task RefreshAdminAccountAuditAsync()
     {
         var audit = await Task.Run(WindowsAdminAccountDiscovery.InspectAdministrators);
+        AdminPasswordExpiryStatus = await Task.Run(WindowsAdminAccountDiscovery.ReadLocalPasswordExpiry);
         adminAccountAuditStatus = audit.Status;
         unexpectedAdminAccounts = audit.UnexpectedAccounts;
         currentAccountUnexpectedAdministrator = WindowsAdminAccountDiscovery.IsCurrentAccountUnexpectedAdministrator();
@@ -485,7 +493,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             return string.Join(" · ", parts);
         }
     }
-    public IReadOnlyList<UserIssue> UserIssues => busy || Selected is null ? [] : DiagnosticRules.GetUserIssues(Selected);
+    public IReadOnlyList<UserIssue> UserIssues => busy || Selected is null ? [] : DiagnosticEngine.Evaluate(Selected).Issues;
     public IReadOnlyList<UserIssue> UserVisibleIssues => UserIssues.Take(2).ToArray();
     public bool HasMoreUserIssues => UserIssues.Count > 2;
     public string MoreUserIssuesLabel => $"Все причины ({UserIssues.Count})";
@@ -557,12 +565,14 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         setupInstallRunning = false;
         Notify();
     }
-    public string ScheduleStatus => FullDiagnosticsRunner.IsInstalled ? "Мониторинг работает постоянно · полная проверка ночью по сроку (не чаще раза в 60 дней)" : "Не настроено";
+    public string ScheduleStatus => $"{serviceStatus} · " + (FullDiagnosticsRunner.IsInstalled
+        ? "плановая полная проверка настроена"
+        : "плановая полная проверка не настроена");
     public string ApplicationUpdateStatus => applicationUpdateStatus;
     public bool CanCheckApplicationUpdates => !busy && !applicationUpdateCheckRunning && !applicationUpdateRunning;
     public bool CanInstallApplicationUpdate => !busy && !applicationUpdateRunning && !applicationUpdateCheckRunning;
     public string ApplicationUpdateTarget => availableApplicationRelease?.Version.ToString() ?? "";
-    public string FullRunHint => FullDiagnosticsRunner.IsInstalled ? "Запустить установленную проверку без UAC" : "Полная проверка: требуется подтверждение UAC";
+    public string FullRunHint => serviceAvailable ? "Запустить установленную проверку без UAC" : "Служба недоступна; для полной проверки может потребоваться повышение прав";
     public bool CanRun => !busy;
     public bool CanRunFull => CanRun && fullRunner is not null;
     public bool CanRunQuickFull => CanRun && fullRunner is not null;
@@ -570,9 +580,11 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public bool CanStopFullCheck => fullCheckCancellation is { IsCancellationRequested: false };
     public bool LastCheckWasStopped { get; private set; }
     public bool CanRunCleanup => !busy && !cleanupRunning;
-    public bool CanRunRepair => !busy && !repairRunning;
+    public bool CanRunRepair => !busy && !cleanupRunning && !StandaloneRepairIsRunning;
     public bool CanCheckWindowsUpdates => !busy && !windowsUpdateActionRunning;
     public bool CanChangeWindowsUpdatePolicy => !busy && !windowsUpdateActionRunning;
+    public bool CanChangeDiagnosticData => canManageWindowsDefender && !busy && !diagnosticDataActionRunning;
+    public string DiagnosticDataStatus => diagnosticDataStatus;
     public string WindowsUpdateStatus => windowsUpdateStatus;
     public string WindowsUpdatePolicyStatus => windowsUpdatePolicyStatus;
     public bool CanToggleWindowsDefender => canManageWindowsDefender && !busy && !windowsDefenderActionRunning && !windowsDefenderStatusRunning
@@ -591,6 +603,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     public string RepairStatusDetails => repairResult ?? SystemRepairRunner.LatestStatus;
     public string CleanupStatus => BriefCleanupStatus(CleanupStatusDetails);
     public string StandaloneRepairStatus => BriefMaintenanceStatus(RepairStatusDetails);
+    public bool StandaloneRepairIsRunning => repairRunning || SystemRepairRunner.IsRunning;
     private static string BriefCleanupStatus(string value)
     {
         var firstLine = value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "Нет данных";
@@ -745,8 +758,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                         .Select(address => address.ToString())
                         .Distinct(StringComparer.OrdinalIgnoreCase));
                 }
-                catch (NetworkInformationException) { continue; }
-                if (string.IsNullOrWhiteSpace(addresses)) continue;
+                catch (NetworkInformationException) { addresses = ""; }
+                if (adapter.OperationalStatus != OperationalStatus.Up) addresses = "";
                 var status = adapter.OperationalStatus switch
                 {
                     OperationalStatus.Up => "Подключён",
@@ -768,7 +781,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                 };
                 var mac = string.Join(":", adapter.GetPhysicalAddress().GetAddressBytes().Select(value => value.ToString("X2")));
                 NetworkAdapters.Add(new(adapter.Name, type, status, speed,
-                    string.IsNullOrWhiteSpace(mac) ? "—" : mac, addresses));
+                    string.IsNullOrWhiteSpace(mac) ? "—" : mac,
+                    string.IsNullOrWhiteSpace(addresses) ? "Нет IP-адреса" : addresses));
             }
         }
         catch (NetworkInformationException) { }
@@ -861,7 +875,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
 
     private static bool IsRelevantNetworkAdapter(NetworkInterface adapter)
     {
-        if (adapter.OperationalStatus != OperationalStatus.Up || adapter.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+        if (adapter.NetworkInterfaceType == NetworkInterfaceType.Loopback)
             return false;
 
         var identity = adapter.Name + " " + adapter.Description;
@@ -895,7 +909,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             if (Selected is null) return "Нет результатов";
             if (Selected.Full is null)
             {
-                var quickIssues = DiagnosticRules.GetUserIssues(Selected);
+                var quickIssues = DiagnosticEngine.Evaluate(Selected).Issues;
                 return quickIssues.Count > 0
                     ? string.Join(Environment.NewLine, quickIssues.Select(i => $"{i.Title}. {i.Detail}"))
                     : "По проверенным показателям причин замедления не найдено. Это короткая проверка, а не оценка всего компьютера.";
@@ -915,7 +929,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         get
         {
             if (Selected is null) return [];
-            var issues = DiagnosticRules.GetUserIssues(Selected).ToList();
+            var issues = DiagnosticEngine.Evaluate(Selected).Issues.ToList();
             if (Selected.Full is { } full)
             {
                 issues.AddRange(DiagnosticRules.GetActionableEvents(full.Events)
@@ -991,7 +1005,16 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         }
     }
     public void RefreshRepairStatus() => Notify();
-    public void RefreshMaintenanceStatus() => Notify();
+    public void RefreshMaintenanceStatus()
+    {
+        var signature = CleanupStatusDetails + "\n" + RepairStatusDetails + "\n" + StandaloneRepairIsRunning + "\n" + RepairStatus;
+        if (string.Equals(signature, lastMaintenanceSignature, StringComparison.Ordinal)) return;
+        lastMaintenanceSignature = signature;
+        Notify(nameof(CleanupStatusDetails), nameof(CleanupStatus), nameof(RepairStatusDetails),
+            nameof(StandaloneRepairStatus), nameof(StandaloneRepairIsRunning), nameof(CanRunRepair),
+            nameof(CanRunCleanup), nameof(IsBackgroundMaintenanceRunning), nameof(CanOpenRepairLog),
+            nameof(RepairLogPath), nameof(RepairStatus));
+    }
 
     public void SetWindowsDefenderAccess(bool isAdministrator)
     {
@@ -1127,6 +1150,28 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
 
     public Task DisableWindowsAutomaticUpdatesAsync() => RunWindowsUpdatePolicyAsync(disable: true);
     public Task RestoreWindowsAutomaticUpdatesAsync() => RunWindowsUpdatePolicyAsync(disable: false);
+
+    public Task MinimizeWindowsDiagnosticDataAsync() => RunDiagnosticDataPolicyAsync(restore: false);
+    public Task RestoreWindowsDiagnosticDataAsync() => RunDiagnosticDataPolicyAsync(restore: true);
+
+    private async Task RunDiagnosticDataPolicyAsync(bool restore)
+    {
+        if (!CanChangeDiagnosticData) return;
+        diagnosticDataActionRunning = true;
+        diagnosticDataStatus = restore ? "Восстанавливаем исходную настройку…" : "Устанавливаем минимальный уровень диагностических данных…";
+        Notify();
+        try
+        {
+            var runner = new WindowsDiagnosticDataPolicyRunner();
+            diagnosticDataStatus = restore ? await runner.RestoreAsync() : await runner.MinimizeAsync();
+        }
+        catch (Exception ex)
+        {
+            ApplicationErrorStore.Record("Диагностические данные Windows", "Изменение политики", ex);
+            diagnosticDataStatus = "Не удалось изменить настройку: " + ex.Message;
+        }
+        finally { diagnosticDataActionRunning = false; Notify(); }
+    }
 
     private async Task RunWindowsUpdatePolicyAsync(bool disable)
     {
@@ -1468,7 +1513,16 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
 
     public async Task RunRepairAsync()
     {
-        if (repairRunning || busy) return;
+        if (repairRunning || cleanupRunning || busy)
+        {
+            repairResult = cleanupRunning
+                ? "Восстановление будет доступно после завершения очистки."
+                : busy ? "Восстановление будет доступно после завершения проверки."
+                : "Восстановление уже выполняется.";
+            status = repairResult;
+            Notify();
+            return;
+        }
         repairRunning = true;
         repairResult = "Подготовка восстановления Windows…";
         status = repairResult;
@@ -1547,6 +1601,18 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         if (Interlocked.Exchange(ref liveRefreshRunning, 1) != 0) return;
         try
         {
+            if (DateTimeOffset.UtcNow >= nextServiceProbeUtc)
+            {
+                nextServiceProbeUtc = DateTimeOffset.UtcNow.AddSeconds(30);
+                var previous = serviceStatus;
+                var ping = await MaintenanceServiceClient.PingAsync();
+                serviceAvailable = ping.Connected && ping.Accepted;
+                serviceStatus = serviceAvailable
+                    ? $"Служба работает{(string.IsNullOrWhiteSpace(ping.Version) ? "" : $" · {ping.Version}")}"
+                    : "Служба обслуживания недоступна";
+                if (!string.Equals(previous, serviceStatus, StringComparison.Ordinal))
+                    Notify(nameof(ScheduleStatus), nameof(FullRunHint));
+            }
             var operationActive = busy || cleanupRunning || repairRunning || windowsUpdateActionRunning;
             if (!operationActive && DateTimeOffset.UtcNow >= nextInstalledReportImport)
             {
@@ -1568,13 +1634,13 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                 CpuTemperatureStatus = temperature?.Status ?? snapshot.CpuTemperatureStatus
             };
             RefreshHwInfoSensors();
-            Notify();
+            NotifyLiveMetrics();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             ApplicationErrorStore.Record("Мониторинг", "Чтение текущих показателей", ex);
             if (live is null && Selected is null) status = "Не удалось получить текущие показатели: " + ex.Message;
-            Notify();
+            Notify(nameof(Status), nameof(UserStatus));
         }
         finally
         {
@@ -1615,5 +1681,19 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         finally { historyLoading = false; Notify(); }
     }
 
-    private void Notify() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
+    private void NotifyLiveMetrics() => Notify(
+        nameof(UserUptimeLabel), nameof(OverviewUptimeLabel), nameof(HasLowDiskSpace),
+        nameof(LowSpaceActionLabel), nameof(UserCpuValue), nameof(UserMemoryValue),
+        nameof(UserDiskValue), nameof(UserCpuLabel), nameof(UserCpuDetail), nameof(UserCpuName),
+        nameof(UserCpuNameAndTemperature), nameof(UserMemoryLabel), nameof(UserMemoryDetail),
+        nameof(UserDiskLabel), nameof(UserDiskDetail), nameof(UserDiskHealth), nameof(UserLiveSummary),
+        nameof(HwInfoStatus), nameof(Cpu), nameof(CpuStatusBrush), nameof(CpuDetail),
+        nameof(Gpu), nameof(MemoryType), nameof(Memory), nameof(MemoryStatusBrush),
+        nameof(MemoryDetail));
+
+    private void Notify(params string[] names)
+    {
+        if (names.Length == 0) PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
+        else foreach (var name in names) PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    }
 }

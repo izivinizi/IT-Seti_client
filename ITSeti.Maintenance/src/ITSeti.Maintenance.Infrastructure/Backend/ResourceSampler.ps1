@@ -1,18 +1,11 @@
 ﻿param([string]$RunRoot,[int]$Seconds=30,[int]$Interval=5)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'HWiNFO.ps1')
-function CounterDelta([double]$Current,[double]$Previous) {
-    $difference=$Current-$Previous
-    if($difference -lt 0){return $null}
-    return $difference
-}
 try {
     $total=[double](Get-WmiObject Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory
     $sampleCount=[int][math]::Floor($Seconds/$Interval)+1
     $cpuValues=@();$memoryValues=@();$pageValues=@()
     $cpuHigh=0;$cpuCritical=0;$memoryHigh=0;$memoryCritical=0;$lowAvailable=0;$pagingHigh=0
-    $readTicks=0.0;$writeTicks=0.0;$readOps=0.0;$writeOps=0.0
-    $previousDisk=$null;$diskFrequency=0.0
     $sampleClock=[Diagnostics.Stopwatch]::StartNew()
     for($index=0;$index -lt $sampleCount;$index++) {
         if($index -gt 0) {
@@ -20,7 +13,6 @@ try {
             if($waitMilliseconds -gt 0){Start-Sleep -Milliseconds $waitMilliseconds}
         }
         $memory=Get-WmiObject Win32_PerfFormattedData_PerfOS_Memory -ErrorAction Stop
-        $disk=Get-WmiObject Win32_PerfRawData_PerfDisk_LogicalDisk -Filter "Name='$env:SystemDrive'" -ErrorAction SilentlyContinue
         $cpuPercent=Get-HwInfoCpuLoadPercent
         if($null -eq $cpuPercent){throw 'Свежая загрузка CPU из HWiNFO недоступна.'}
         $availableMb=[double]$memory.AvailableMBytes
@@ -34,23 +26,6 @@ try {
         if($usedPercent -ge 98){$memoryCritical++}
         if($availableMb -lt 500){$lowAvailable++}
         if($pagesOut -ge 100){$pagingHigh++}
-        if($disk -and $previousDisk -and !(Get-Process DiskSpd* -ErrorAction SilentlyContinue)) {
-            $frequency=[double]$disk.Frequency_PerfTime
-            if($frequency -gt 0) {
-                $diskFrequency=$frequency
-                $reads=[double]$disk.AvgDisksecPerRead_Base-[double]$previousDisk.AvgDisksecPerRead_Base
-                $writes=[double]$disk.AvgDisksecPerWrite_Base-[double]$previousDisk.AvgDisksecPerWrite_Base
-                if($reads -gt 0){
-                    $delta=CounterDelta ([double]$disk.AvgDisksecPerRead) ([double]$previousDisk.AvgDisksecPerRead)
-                    if($null -ne $delta){$readOps+=$reads;$readTicks+=$delta}
-                }
-                if($writes -gt 0){
-                    $delta=CounterDelta ([double]$disk.AvgDisksecPerWrite) ([double]$previousDisk.AvgDisksecPerWrite)
-                    if($null -ne $delta){$writeOps+=$writes;$writeTicks+=$delta}
-                }
-            }
-        }
-        $previousDisk=$disk
         $progressResult=@{
             Samples=$index+1;CpuHighSamples=$cpuHigh;MemoryHighSamples=$memoryHigh
             CpuCriticalSamples=$cpuCritical;MemoryCriticalSamples=$memoryCritical
@@ -58,9 +33,8 @@ try {
             CpuAverage=[math]::Round(($cpuValues | Measure-Object -Average).Average,1)
             MemoryAverage=[math]::Round(($memoryValues | Measure-Object -Average).Average,1)
             PagesOutputAverage=[math]::Round(($pageValues | Measure-Object -Average).Average,1)
-            DiskReadLatencyMs=$(if($readOps -ge 30 -and $diskFrequency -gt 0){[math]::Round(1000*$readTicks/$readOps/$diskFrequency,1)}else{$null})
-            DiskWriteLatencyMs=$(if($writeOps -ge 30 -and $diskFrequency -gt 0){[math]::Round(1000*$writeTicks/$writeOps/$diskFrequency,1)}else{$null})
-            DiskReadOperations=[long]$readOps;DiskWriteOperations=[long]$writeOps;Error=''
+            DiskReadLatencyMs=$null;DiskWriteLatencyMs=$null
+            DiskReadOperations=0;DiskWriteOperations=0;Error=''
         }
         $pending=Join-Path $RunRoot 'resource-sample-progress.pending.json'
         $progressPath=Join-Path $RunRoot 'resource-sample-progress.json'
@@ -74,9 +48,8 @@ try {
         CpuAverage=[math]::Round(($cpuValues | Measure-Object -Average).Average,1)
         MemoryAverage=[math]::Round(($memoryValues | Measure-Object -Average).Average,1)
         PagesOutputAverage=[math]::Round(($pageValues | Measure-Object -Average).Average,1)
-        DiskReadLatencyMs=$(if($readOps -ge 30 -and $diskFrequency -gt 0){[math]::Round(1000*$readTicks/$readOps/$diskFrequency,1)}else{$null})
-        DiskWriteLatencyMs=$(if($writeOps -ge 30 -and $diskFrequency -gt 0){[math]::Round(1000*$writeTicks/$writeOps/$diskFrequency,1)}else{$null})
-        DiskReadOperations=[long]$readOps;DiskWriteOperations=[long]$writeOps;Error=''
+        DiskReadLatencyMs=$null;DiskWriteLatencyMs=$null
+        DiskReadOperations=0;DiskWriteOperations=0;Error=''
     }
     $result | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $RunRoot 'resource-sample.json') -Encoding UTF8
 } catch {

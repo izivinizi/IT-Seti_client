@@ -34,25 +34,39 @@ namespace ITSeti.Maintenance.Win7
             catch (Exception ex) { snapshot.Unavailable.Add("Модель CPU: " + ex.Message); }
             try
             {
-                using (var search = new ManagementObjectSearcher("root\\cimv2", "SELECT Name FROM Win32_VideoController"))
+                var physical = new List<Tuple<int, string>>();
+                var virtualAdapters = new List<string>();
+                using (var search = new ManagementObjectSearcher("root\\cimv2", "SELECT Name, VideoProcessor, AdapterCompatibility, PNPDeviceID FROM Win32_VideoController"))
                 using (var values = search.Get())
                 {
-                    var names = values.Cast<ManagementObject>().Select(x => Convert.ToString(x["Name"]))
-                        .Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
-                    snapshot.GpuName = names.FirstOrDefault(x => !Regex.IsMatch(x, "Virtual|Remote|Parsec|Basic Display|Mirror", RegexOptions.IgnoreCase))
-                        ?? names.FirstOrDefault();
+                    foreach (ManagementObject adapter in values)
+                        AddGpuCandidate(adapter, physical, virtualAdapters);
                 }
+                if (physical.Count == 0)
+                {
+                    using (var fallback = new ManagementObjectSearcher("root\\cimv2", "SELECT Name, PNPDeviceID FROM Win32_PnPEntity WHERE PNPClass='Display'"))
+                    using (var fallbackValues = fallback.Get())
+                    {
+                        foreach (ManagementObject adapter in fallbackValues)
+                            AddGpuCandidate(adapter, physical, virtualAdapters);
+                    }
+                }
+                var names = physical.OrderBy(x => x.Item1).Select(x => x.Item2)
+                    .Concat(virtualAdapters).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                snapshot.GpuName = names.Length == 0 ? "нет данных" : string.Join(", ", names);
+                if (names.Length == 0) snapshot.Unavailable.Add("Видеокарта: WMI не вернул имя, видеопроцессор или совместимость адаптера.");
             }
             catch (Exception ex) { snapshot.Unavailable.Add("Видеокарта: " + ex.Message); }
             try
             {
-                using (var search = new ManagementObjectSearcher("root\\cimv2", "SELECT MemoryType FROM Win32_PhysicalMemory"))
+                using (var search = new ManagementObjectSearcher("root\\cimv2", "SELECT MemoryType, SMBIOSMemoryType FROM Win32_PhysicalMemory"))
                 using (var values = search.Get())
                 {
                     var kinds = values.Cast<ManagementObject>()
-                        .Select(x => Convert.ToInt32(x["MemoryType"] ?? 0))
+                        .Select(x => Convert.ToInt32(x["SMBIOSMemoryType"] ?? 0) is var smbios && smbios != 0
+                            ? smbios : Convert.ToInt32(x["MemoryType"] ?? 0))
                         .Where(x => x != 0).Distinct().ToArray();
-                    snapshot.MemoryType = string.Join(", ", kinds.Select(x => x == 20 ? "DDR" : x == 21 ? "DDR2" : x == 24 ? "DDR3" : x == 26 ? "DDR4" : x == 34 ? "DDR5" : "тип " + x));
+                    snapshot.MemoryType = string.Join(", ", kinds.Select(FormatMemoryType));
                 }
             }
             catch (Exception ex) { snapshot.Unavailable.Add("Тип памяти: " + ex.Message); }
@@ -81,7 +95,7 @@ namespace ITSeti.Maintenance.Win7
                 catch (UnauthorizedAccessException) { }
             }
 
-            foreach (var path in new[] { @"SOFTWARE\TektonIT\RMS Host\Host\Parameters", @"SOFTWARE\WOW6432Node\TektonIT\RMS Host\Host\Parameters" })
+            if (IsRmsHostRunning()) foreach (var path in new[] { @"SOFTWARE\TektonIT\RMS Host\Host\Parameters", @"SOFTWARE\WOW6432Node\TektonIT\RMS Host\Host\Parameters" })
             {
                 try
                 {
@@ -113,6 +127,87 @@ namespace ITSeti.Maintenance.Win7
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }
             }
+        }
+
+        private static string FormatMemoryType(int value)
+        {
+            switch (value)
+            {
+                case 0: return "неизвестный тип (0)";
+                case 1: return "другой тип памяти";
+                case 2: return "DRAM";
+                case 3: return "Synchronous DRAM";
+                case 4: return "Cache DRAM";
+                case 5: return "EDO";
+                case 6: return "EDRAM";
+                case 7: return "VRAM";
+                case 8: return "SRAM";
+                case 9: return "RAM";
+                case 10: return "ROM";
+                case 11: return "Flash";
+                case 12: return "EEPROM";
+                case 13: return "FEPROM";
+                case 14: return "EPROM";
+                case 15: return "CDRAM";
+                case 16: return "3DRAM";
+                case 17: return "SDRAM";
+                case 18: return "SGRAM";
+                case 19: return "RDRAM";
+                case 20: return "DDR";
+                case 21: return "DDR2";
+                case 22: return "BRAM";
+                case 23: return "FB-DIMM";
+                case 24: return "DDR3";
+                case 25: return "FBD2";
+                case 26: return "DDR4";
+                case 27: return "LPDDR";
+                case 28: return "LPDDR2";
+                case 29: return "LPDDR3";
+                case 30: return "LPDDR4";
+                case 31: return "энергонезависимая память";
+                case 32: return "HBM";
+                case 33: return "HBM2";
+                case 34: return "DDR5";
+                case 35: return "LPDDR5";
+                case 36: return "HBM3";
+                default: return "тип " + value;
+            }
+        }
+
+        private static void AddGpuCandidate(ManagementBaseObject adapter, ICollection<Tuple<int, string>> physical,
+            ICollection<string> virtualAdapters)
+        {
+            var name = FirstValue(adapter, "Name", "VideoProcessor", "AdapterCompatibility");
+            if (string.IsNullOrWhiteSpace(name)) return;
+            var deviceId = Convert.ToString(adapter["PNPDeviceID"]) ?? string.Empty;
+            var isPci = deviceId.StartsWith("PCI\\", StringComparison.OrdinalIgnoreCase);
+            var looksVirtual = Regex.IsMatch(name, "Virtual|Remote|Parsec|Mirror|Indirect Display", RegexOptions.IgnoreCase) ||
+                (!isPci && Regex.IsMatch(name, "Basic Display", RegexOptions.IgnoreCase));
+            if (looksVirtual) virtualAdapters.Add(name.Trim());
+            else physical.Add(Tuple.Create(isPci ? 0 : 1, name.Trim()));
+        }
+
+        private static string FirstValue(ManagementBaseObject item, params string[] properties)
+        {
+            foreach (var property in properties)
+            {
+                var value = Convert.ToString(item[property]);
+                if (!string.IsNullOrWhiteSpace(value)) return value.Trim();
+            }
+            return null;
+        }
+
+        private static bool IsRmsHostRunning()
+        {
+            var roots = new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) };
+            if (!roots.Any(root => !string.IsNullOrWhiteSpace(root) &&
+                File.Exists(Path.Combine(root, "Remote Manipulator System - Host", "rutserv.exe")))) return false;
+            Process[] processes;
+            try { processes = Process.GetProcessesByName("rutserv"); }
+            catch { return false; }
+            try { return processes.Any(process => { try { return !process.HasExited; } catch { return false; } }); }
+            finally { foreach (var process in processes) process.Dispose(); }
         }
 
         internal static void CollectNetwork(LegacySnapshot snapshot)

@@ -1,9 +1,20 @@
-param([string]$Root,[switch]$LimitedMode,[switch]$WithResourceSampling,[ValidateSet('Debug','Release')][string]$Configuration='Debug')
+﻿param([string]$Root,[switch]$LimitedMode,[switch]$WithResourceSampling,[switch]$LegacySummary,[ValidateSet('Debug','Release')][string]$Configuration='Debug')
 $ErrorActionPreference='Stop'
 $bundle=Join-Path $Root "src\ITSeti.Maintenance.App\bin\$Configuration\net9.0-windows\Backend"
 $run=Join-Path $Root ('artifacts\backend-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $run -Force | Out-Null
 Get-ChildItem -LiteralPath $bundle -File | Copy-Item -Destination $run
+if($LegacySummary){
+    $summaryPath=Join-Path $run 'Summary.ps1'
+    $summary=[IO.File]::ReadAllText($summaryPath,[Text.Encoding]::UTF8)
+    $tokens=$null;$parseErrors=$null
+    $summaryAst=[Management.Automation.Language.Parser]::ParseInput($summary,[ref]$tokens,[ref]$parseErrors)
+    if($parseErrors){throw 'Packaged summary failed parsing before compatibility test.'}
+    $uptime=@($summaryAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-ActiveUptimeHours'},$true))
+    if($uptime.Count -ne 1){throw 'Legacy fixture expected exactly one uptime helper.'}
+    $summary=$summary.Remove($uptime[0].Extent.StartOffset,$uptime[0].Extent.EndOffset-$uptime[0].Extent.StartOffset)
+    [IO.File]::WriteAllText($summaryPath,$summary,[Text.Encoding]::UTF8)
+}
 $temperatureFile=Join-Path $run 'temperature-fixture.json'
 $temperatureFixture=[pscustomobject]@{TemperatureC=63.5;Status='synthetic integration fixture';CapturedAtUtc=[DateTimeOffset]::UtcNow.ToString('O')}
 [IO.File]::WriteAllText($temperatureFile,($temperatureFixture | ConvertTo-Json -Compress),[Text.Encoding]::UTF8)
@@ -23,5 +34,6 @@ if(!$data.Full.Processes -and !$data.Full.ProcessUnavailable){throw 'No process 
 if(!$data.Full.Events -and !$data.Full.EventUnavailable){throw 'No event coverage'}
 if(@($data.Full.TopMemoryProcesses).Count -lt 1 -or !$data.Full.TopMemoryProcesses[0].DisplayName){throw 'No friendly top-memory application names'}
 if($WithResourceSampling -and ($data.Full.ResourceSampling.Samples -lt 6 -or $data.Full.ResourceSampling.Error)){throw '30-second resource sample missing or failed'}
+if($LegacySummary -and @($data.Notes | Where-Object {$_ -like 'Время работы рассчитано резервным способом*'}).Count -eq 0){throw 'Legacy Summary.ps1 did not use the fallback uptime helper.'}
 if($LimitedMode -and ($data.Full.Benchmark.Error -notmatch 'SMART' -or @($data.Notes | Where-Object {$_ -match 'SMART'}).Count -ne 1)){throw 'Limited mode not marked in report'}
 "PASS: real hardware/process/event backend; disk write/cleanup/repair skipped. $run"

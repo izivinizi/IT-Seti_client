@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using ITSeti.Maintenance.Core;
 
@@ -101,9 +102,9 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
             try { return await AddCpuTemperatureAsync(await RunInstalledAsync(progress, InstalledTask, cancellationToken)); }
             catch (InstalledTaskUnavailableException ex)
             {
-                progress.Report(new(ElevatedProcessLauncher.IsCurrentProcessElevated
-                    ? $"Задача Windows недоступна ({ex.Message}). Продолжаю проверку с правами администратора текущего окна."
-                    : $"Задача Windows недоступна ({ex.Message}). Продолжаю проверку с правами текущей учётной записи."));
+                throw new InvalidOperationException(
+                    $"Системная служба и резервная задача диагностики недоступны: {ex.Message}. " +
+                    "Проверьте службу ITSetiMaintenanceService и журнал установки в C:\\ProgramData\\ITSeti\\Maintenance\\install.log.", ex);
             }
         }
         var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ITSeti", "Maintenance", "Runs", Guid.NewGuid().ToString("N"));
@@ -112,10 +113,15 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         foreach (var file in Directory.GetFiles(backend)) File.Copy(file, Path.Combine(root, Path.GetFileName(file)));
         var tools = ToolsRoot ?? FindTools(!userMode);
         var worker = Path.Combine(root, "FullCheckWorker.ps1");
-        var info = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
+        var powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+        var info = new ProcessStartInfo(powershell)
         {
             UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden,
-            WorkingDirectory = root
+            // The report folder can inherit restrictive ACLs from another user
+            // profile. CreateProcess still needs access to its working directory;
+            // every script and data path is passed explicitly, so use the trusted
+            // Windows PowerShell folder instead of the per-run output directory.
+            WorkingDirectory = Path.GetDirectoryName(powershell)!
         };
         info.ArgumentList.Add("-NoProfile");
         info.ArgumentList.Add("-ExecutionPolicy");
@@ -129,6 +135,11 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
         if (userMode) info.ArgumentList.Add("-InteractiveDiskMark");
         else info.ArgumentList.Add("-HeadlessDiskSpd");
         if (userMode) info.ArgumentList.Add("-UserMode");
+        info.Environment["ITSETI_CHECK_TRIGGER"] = userMode
+            ? "Запуск пользователем из приложения"
+            : "Полная диагностика из приложения";
+        if (userMode)
+            info.Environment["ITSETI_REQUESTED_SESSION_ID"] = Process.GetCurrentProcess().SessionId.ToString(CultureInfo.InvariantCulture);
         var currentElevated = ElevatedProcessLauncher.IsCurrentProcessElevated;
         progress.Report(new(userMode
             ? currentElevated
@@ -331,15 +342,9 @@ public sealed class FullDiagnosticsRunner(string? configuredToolsRoot = null) : 
             await StopInstalledTaskAsync(taskName);
             throw new OperationCanceledException(cancellationToken);
         }
-        if (root is null) throw new TimeoutException("Задача запущена, но новый каталог отчёта не появился. Проверьте планировщик задач.");
-
-        var ownership = $"owner:{Environment.ProcessId}:{Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks}";
-        try { if (!joined) await File.WriteAllTextAsync(Path.Combine(root, "cancel-request.txt"), ownership); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            await CancelInstalledRunAsync(root, taskName);
-            throw new InvalidOperationException("Не удалось привязать проверку к окну приложения; системная задача остановлена.", ex);
-        }
+        if (root is null) throw new TimeoutException(
+            "Служба приняла команду, но проверка не создала каталог отчёта за минуту. " +
+            "Проверьте C:\\ProgramData\\ITSeti\\Maintenance\\Logs\\application-errors.log и журнал установки.");
 
         var lastStage = "";
         var partialTimestamp = DateTime.MinValue;

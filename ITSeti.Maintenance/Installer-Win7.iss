@@ -3,7 +3,7 @@
 [Setup]
 AppId={{9C83D41A-9753-4E64-8EC8-A9A324BD7D52}
 AppName=ИТ-Сети Обслуживание ПК (Windows 7 beta)
-AppVersion=2.3.9
+AppVersion=2.4.6
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance Win7
 DisableDirPage=yes
@@ -132,6 +132,12 @@ var
 begin
   if CurStep = ssInstall then
   begin
+    if not ForceDirectories(ExpandConstant('{commonappdata}\ITSeti\Maintenance')) then
+      RaiseException('Не удалось создать каталог данных обслуживания.');
+    if not Exec(ExpandConstant('{sys}\icacls.exe'),
+      '"' + ExpandConstant('{commonappdata}\ITSeti') + '" /grant "*S-1-5-18:(OI)(CI)F" /T /C',
+      '', SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
+      RaiseException('Не удалось восстановить доступ службы SYSTEM к данным обслуживания Windows 7 (код ' + IntToStr(ExitCode) + ').');
     if Trim(InventoryPage.Values[0]) <> '' then
     begin
       if not ForceDirectories(ExpandConstant('{commonappdata}\ITSeti\Maintenance')) then

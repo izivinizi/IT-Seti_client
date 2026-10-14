@@ -10,10 +10,18 @@ namespace ITSeti.Maintenance.Infrastructure;
 public static class HwInfoReader
 {
     private static readonly Regex NumberPattern = new(@"[-+]?\d+(?:[\.,]\d+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly JsonSerializerOptions CacheJsonOptions = new() { PropertyNameCaseInsensitive = true };
     private static readonly object SessionGate = new();
+    private static readonly SemaphoreSlim ReadGate = new(1, 1);
     private static DateTimeOffset sessionStartedUtc;
     private static Process? sensorProcess;
+    private static DateTimeOffset sensorProcessStartedUtc;
     private static DateTimeOffset nextStartAttemptUtc;
+    private static DateTimeOffset nextRecoveryUtc;
+    private static DateTimeOffset nextFailureWriteUtc;
+    private static string? lastFailureMessage;
+    private static int missingMemoryReads;
+    private static int staleSourceReads;
     private static string SessionMarker => Path.ChangeExtension(CachePath,"session.txt");
     public static TimeSpan SessionLifetime { get; } = TimeSpan.FromHours(10);
     public static string CachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
@@ -40,10 +48,13 @@ public static class HwInfoReader
                 catch (Exception ex) when (ex is Win32Exception or InvalidOperationException) { }
                 sensorProcess.Dispose(); sensorProcess = null;
             }
+            sensorProcessStartedUtc = default;
             sessionStartedUtc = DateTimeOffset.UtcNow;
             HwInfoVoltageStabilizer.Reset();
             SaveSessionMarker();
             nextStartAttemptUtc = default;
+            missingMemoryReads = 0;
+            staleSourceReads = 0;
         }
         try { File.Delete(CachePath); }
         catch (IOException) { }
@@ -58,10 +69,18 @@ public static class HwInfoReader
             try {if(!sensorProcess.HasExited)sensorProcess.Kill(entireProcessTree:true);}
             catch(Exception ex) when(ex is Win32Exception or InvalidOperationException){}
             sensorProcess.Dispose();sensorProcess=null;
+            sensorProcessStartedUtc = default;
         }
     }
 
     public static async Task<HwInfoSnapshot?> ReadAsync(CancellationToken cancellationToken = default)
+    {
+        await ReadGate.WaitAsync(cancellationToken);
+        try { return await ReadCoreAsync(cancellationToken); }
+        finally { ReadGate.Release(); }
+    }
+
+    private static async Task<HwInfoSnapshot?> ReadCoreAsync(CancellationToken cancellationToken)
     {
         if (!OperatingSystem.IsWindows()) return null;
         lock (SessionGate)
@@ -75,7 +94,12 @@ public static class HwInfoReader
         }
         if(SessionRestartDue) ResetSession();
         var executable = FindExecutable();
-        if (executable is null) { WriteFailure("HWiNFO не найден в комплекте приложения."); return null; }
+        if (executable is null)
+        {
+            WriteFailure("HWiNFO32.exe не найден в каталоге установленных инструментов.",
+                "Не найден HWiNFO32.exe в комплекте приложения.");
+            return null;
+        }
         try
         {
             lock (SessionGate)
@@ -89,33 +113,100 @@ public static class HwInfoReader
                         UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden,
                         WorkingDirectory = Path.GetDirectoryName(executable)!
                     });
-                    if (sensorProcess is not null) HwInfoVoltageStabilizer.Reset();
+                    if (sensorProcess is not null)
+                    {
+                        sensorProcessStartedUtc = DateTimeOffset.UtcNow;
+                        HwInfoVoltageStabilizer.Reset();
+                    }
                 }
             }
             ITSeti.HwInfoBridge.SensorValue[]? values = null;
+            FileNotFoundException? missingMemory = null;
             for (var attempt = 0; attempt < 3; attempt++)
             {
                 if(sensorProcess is not null && !sensorProcess.HasExited) ITSeti.HwInfoBridge.SensorReader.StartSensors(sensorProcess.Id);
                 try { values = ITSeti.HwInfoBridge.SensorReader.Read(); break; }
-                catch (FileNotFoundException) when (attempt < 2) { await Task.Delay(250, cancellationToken); }
+                catch (FileNotFoundException ex)
+                {
+                    missingMemory = ex;
+                    if (attempt < 2) await Task.Delay(250, cancellationToken);
+                }
             }
-            var readings = (values ?? []).Select(value => new { value, category = Classify(value.Name, value.Unit) })
-                .Where(item => item.category is not null)
-                .Select(item => new HwInfoSensorReading(item.value.Name, item.value.Value, item.value.Unit, item.category!,
-                    IsCritical:item.category=="HardwareAlarm" && item.value.Value>0 && !item.value.Unit.Contains("C",StringComparison.OrdinalIgnoreCase))).ToArray();
+            if (values is null && missingMemory is not null)
+            {
+                if (sensorProcess is { HasExited: false } &&
+                    DateTimeOffset.UtcNow - sensorProcessStartedUtc < TimeSpan.FromSeconds(30))
+                    return null;
+                missingMemoryReads++;
+                var startup = sensorProcess is { HasExited: false } process
+                    ? ITSeti.HwInfoBridge.SensorReader.StartupState(process.Id) : "process exited";
+                var details = $"Shared Memory отсутствует после трёх попыток чтения с паузой 250 мс; " +
+                    $"пропуски подряд={missingMemoryReads}; {startup}; {DescribeSession(executable)}";
+                if (HwInfoRecoveryPolicy.ShouldRestart(missingMemoryReads, DateTimeOffset.UtcNow, nextRecoveryUtc))
+                {
+                    nextRecoveryUtc = DateTimeOffset.UtcNow + HwInfoRecoveryPolicy.MinimumRestartInterval;
+                    ResetSession();
+                    WriteFailure("HWiNFO не создал Shared Memory; сеанс перезапущен. " + details,
+                        "HWiNFO не создал Shared Memory.");
+                }
+                else WriteFailure("HWiNFO не создал Shared Memory. " + details,
+                    "HWiNFO не создал Shared Memory.");
+                return null;
+            }
+            missingMemoryReads = 0;
+            var sourceTime = SourceTime(values ?? []);
+            if (HwInfoRecoveryPolicy.IsSourceTimestampStale(sourceTime, DateTimeOffset.UtcNow))
+            {
+                staleSourceReads++;
+                var details = $"метка источника={sourceTime:O}; возраст={(DateTimeOffset.UtcNow - sourceTime).TotalSeconds:N1} с; " +
+                    $"пропуски подряд={staleSourceReads}; {DescribeSession(executable)}";
+                if (HwInfoRecoveryPolicy.ShouldRestartStaleSource(staleSourceReads, DateTimeOffset.UtcNow, nextRecoveryUtc))
+                {
+                    nextRecoveryUtc = DateTimeOffset.UtcNow + HwInfoRecoveryPolicy.MinimumRestartInterval;
+                    ResetSession();
+                    WriteFailure($"HWiNFO возвращал устаревшие данные более {HwInfoRecoveryPolicy.StaleSourceReadsBeforeRestart} циклов; сеанс перезапущен. {details}",
+                        "HWiNFO не обновляет Shared Memory.");
+                }
+                else WriteFailure("HWiNFO вернул устаревшую метку измерения; старые показания не публикуются. " + details,
+                    "HWiNFO не обновляет Shared Memory.");
+                return null;
+            }
+            staleSourceReads = 0;
+            var readings = MapReadings(values ?? []);
             readings = HwInfoVoltageStabilizer.Stabilize(readings).ToArray();
             var snapshot = readings.Length == 0 ? null : new HwInfoSnapshot("HWiNFO Shared Memory", FileVersionInfo.GetVersionInfo(executable).FileVersion ?? "",
-                DateTimeOffset.UtcNow, null, null, null, null, readings);
+                sourceTime, null, null, null, null, readings, "SourceTimestampChecked");
             if (snapshot is not null)
             {
                 await WriteCacheAsync(snapshot, cancellationToken);
                 try { File.Delete(ErrorPath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+                lastFailureMessage = null;
             }
-            else WriteFailure("HWiNFO не передал датчики. Проверьте режим Sensors-only и Shared Memory Support.");
+            else WriteFailure("Область Shared Memory открылась, но поддерживаемых показаний нет; " + DescribeSession(executable),
+                "В Shared Memory HWiNFO нет поддерживаемых датчиков.");
             return snapshot;
         }
-        catch (Exception ex) when (ex is Win32Exception or IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
-        { WriteFailure(ex.GetType().Name + ": " + ex.Message); return null; }
+        catch (Exception ex) when (ex is Win32Exception or IOException or InvalidDataException or UnauthorizedAccessException or JsonException or InvalidOperationException)
+        {
+            if (ex is InvalidDataException)
+            {
+                staleSourceReads++;
+                var details = $"чтение отклонено: {ex.Message}; пропуски подряд={staleSourceReads}; {DescribeSession(executable)}";
+                if (HwInfoRecoveryPolicy.ShouldRestartStaleSource(staleSourceReads, DateTimeOffset.UtcNow, nextRecoveryUtc))
+                {
+                    nextRecoveryUtc = DateTimeOffset.UtcNow + HwInfoRecoveryPolicy.MinimumRestartInterval;
+                    ResetSession();
+                    WriteFailure("HWiNFO Shared Memory несколько циклов подряд была просрочена или повреждена; сеанс перезапущен. " + details,
+                        "Повреждена или не обновляется Shared Memory HWiNFO.");
+                }
+                else WriteFailure("HWiNFO Shared Memory просрочена или повреждена. " + details,
+                    "Повреждена или не обновляется Shared Memory HWiNFO.");
+                return null;
+            }
+            WriteFailure($"{ex.GetType().FullName}: {ex.Message}; {DescribeSession(executable)}",
+                "Ошибка запуска или чтения процесса HWiNFO.");
+            return null;
+        }
     }
 
     public static HwInfoSnapshot? ReadCached(TimeSpan maximumAge)
@@ -123,8 +214,15 @@ public static class HwInfoReader
         try
         {
             if (!File.Exists(CachePath) || DateTime.UtcNow - File.GetLastWriteTimeUtc(CachePath) > maximumAge) return null;
-            var snapshot=JsonSerializer.Deserialize<HwInfoSnapshot>(File.ReadAllText(CachePath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            if(snapshot?.Sensors is null || snapshot.Sensors.Any(sensor=>sensor is null || !double.IsFinite(sensor.Value)))return null;
+            var snapshot=JsonSerializer.Deserialize<HwInfoSnapshot>(File.ReadAllText(CachePath), CacheJsonOptions);
+            if (snapshot?.Sensors is null) return null;
+            var valid = snapshot.Sensors.Where(sensor => sensor is not null &&
+                (HwInfoSensorPolicy.Classify(sensor.Name, sensor.Unit) == sensor.Category &&
+                 HwInfoSensorPolicy.IsValidValue(sensor.Category, sensor.Value) ||
+                 sensor.Category == "Other" && (sensor.IsCritical || sensor.IsWarning) &&
+                 Numeric.IsFinite(sensor.Value) && Math.Abs(sensor.Value) <= 1_000_000)).ToArray();
+            if (valid.Length == 0) return null;
+            snapshot = snapshot with { Sensors = valid };
             var age=DateTimeOffset.UtcNow-snapshot.CapturedAtUtc;
             return age>=TimeSpan.FromSeconds(-60)&&age<=maximumAge?snapshot:null;
         }
@@ -163,7 +261,7 @@ public static class HwInfoReader
                 var unitMatch = Regex.Match(name, @"\[(?<unit>[^\]]+)\]\s*$", RegexOptions.CultureInvariant);
                 var unit = unitMatch.Success ? unitMatch.Groups["unit"].Value : "";
                 var category = Classify(name, unit);
-                if (category is not null) readings.Add(new(name, value, unit, category));
+                if (category is not null && HwInfoSensorPolicy.IsValidValue(category, value)) readings.Add(new(name, value, unit, category));
             }
         }
         if (readings.Count == 0) return null;
@@ -199,50 +297,88 @@ public static class HwInfoReader
         return fields;
     }
 
-    private static string ShortMessage(params string[] values) =>
-        string.Join(" ", values.Where(value => !string.IsNullOrWhiteSpace(value))).ReplaceLineEndings(" ").Trim() is { Length: > 300 } text
-            ? text[..300] : string.Join(" ", values.Where(value => !string.IsNullOrWhiteSpace(value))).ReplaceLineEndings(" ").Trim();
-
-    private static void WriteFailure(string message)
+    private static void WriteFailure(string message, string summary)
     {
-        ApplicationErrorStore.Record("HWiNFO", "Чтение датчиков", new InvalidOperationException(message));
+        if (summary == lastFailureMessage && DateTimeOffset.UtcNow < nextFailureWriteUtc) return;
+        lastFailureMessage = summary;
+        nextFailureWriteUtc = DateTimeOffset.UtcNow.AddMinutes(15);
+        ApplicationErrorStore.Record("HWiNFO", "Чтение датчиков", new InvalidOperationException(message), summary);
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(ErrorPath)!);
-            File.WriteAllText(ErrorPath, DateTimeOffset.Now.ToString("O") + Environment.NewLine + message);
+            File.WriteAllText(ErrorPath, DateTimeOffset.Now.ToString("O") + Environment.NewLine + summary + Environment.NewLine + message);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
+    private static string DescribeSession(string executable)
+    {
+        string version;
+        try { version = FileVersionInfo.GetVersionInfo(executable).FileVersion ?? "не определена"; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        { version = "ошибка чтения версии: " + ex.Message; }
+
+        var configPath = Path.Combine(Path.GetDirectoryName(executable)!, "HWiNFO32.INI");
+        var config = "ini рядом с exe отсутствует";
+        try
+        {
+            if (File.Exists(configPath))
+            {
+                var keys = new HashSet<string>(["SensorsOnly", "SensorsSM", "SensorsSM2", "SensorInterval"], StringComparer.OrdinalIgnoreCase);
+                var settings = File.ReadLines(configPath)
+                    .Select(line => line.Trim())
+                    .Where(line => line.Length > 0 && line[0] != '[')
+                    .Where(line => keys.Contains(line.Split('=', 2)[0].Trim()))
+                    .ToArray();
+                var file = new FileInfo(configPath);
+                config = $"ini={configPath}; размер={file.Length}; изменён={file.LastWriteTimeUtc:O}; " +
+                    $"параметры=[{string.Join("; ", settings)}]";
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { config = $"ini={configPath}; чтение завершилось ошибкой: {ex.GetType().Name}: {ex.Message}"; }
+
+        var process = sensorProcess;
+        if (process is null) return $"exe={executable}; version={version}; {config}; процесс=не запущен; " +
+            $"сеанс={sessionStartedUtc:O}; следующая попытка={nextStartAttemptUtc:O}; восстановление={nextRecoveryUtc:O}";
+        try
+        {
+            if (process.HasExited)
+                return $"exe={executable}; version={version}; {config}; pid={process.Id}; процесс завершён; код={process.ExitCode}; " +
+                    $"запуск={sensorProcessStartedUtc:O}; следующая попытка={nextStartAttemptUtc:O}; восстановление={nextRecoveryUtc:O}";
+            var uptime = sensorProcessStartedUtc == default ? "неизвестно" : (DateTimeOffset.UtcNow - sensorProcessStartedUtc).TotalSeconds.ToString("N0", CultureInfo.InvariantCulture) + " с";
+            var title = "";
+            try { title = process.MainWindowTitle; }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or UnauthorizedAccessException) { title = "недоступен: " + ex.Message; }
+            return $"exe={executable}; version={version}; {config}; pid={process.Id}; процесс=работает; uptime={uptime}; " +
+                $"окно=[{title}]; запуск={sensorProcessStartedUtc:O}; следующая попытка={nextStartAttemptUtc:O}; восстановление={nextRecoveryUtc:O}";
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or UnauthorizedAccessException)
+        {
+            return $"exe={executable}; version={version}; {config}; процесс недоступен: {ex.GetType().Name}: {ex.Message}; " +
+                $"запуск={sensorProcessStartedUtc:O}; следующая попытка={nextStartAttemptUtc:O}; восстановление={nextRecoveryUtc:O}";
+        }
+    }
+
     private static async Task WriteCacheAsync(HwInfoSnapshot snapshot, CancellationToken cancellationToken)
     {
+        var temporary = CachePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(CachePath)!);
-            var temporary = CachePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(new
             {
-                snapshot.Source,
-                snapshot.ToolVersion,
-                snapshot.CapturedAtUtc,
-                snapshot.CpuName,
-                snapshot.Motherboard,
-                snapshot.BiosVersion,
-                snapshot.MemoryType,
-                snapshot.Sensors,
-                snapshot.CpuTemperatureC,
-                snapshot.VrmTemperatureC,
-                snapshot.PchTemperatureC,
-                snapshot.Rail12V,
-                snapshot.Rail5V,
-                snapshot.Rail3V,
-                snapshot.CpuVoltageV,
-                snapshot.CpuLoadPercent
+                snapshot.Source, snapshot.ToolVersion, snapshot.Freshness, snapshot.CapturedAtUtc,
+                snapshot.CpuName, snapshot.Motherboard, snapshot.BiosVersion, snapshot.MemoryType,
+                snapshot.Sensors, snapshot.CpuTemperatureC, snapshot.VrmTemperatureC,
+                snapshot.PchTemperatureC, snapshot.Rail12V, snapshot.Rail5V,
+                snapshot.Rail3V, snapshot.CpuVoltageV, snapshot.CpuLoadPercent
             }), cancellationToken);
             File.Move(temporary, CachePath, true);
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
+        finally { try { File.Delete(temporary); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
     }
 
     private static string? FindExecutable()
@@ -275,15 +411,15 @@ public static class HwInfoReader
             {
                 var fullName = string.IsNullOrWhiteSpace(context) ? label : context + " / " + label;
                 var category = Classify(fullName, unit);
-                if (category is not null)
-                {
-                    var sensorStatus = ReadSensorStatus(element);
-                    var isCritical = ReadFlag(element, "critical", "isCritical", "criticalAlarm", "isCriticalAlarm")
-                        || IsCriticalStatus(sensorStatus);
-                    var isWarning = ReadFlag(element, "warning", "isWarning", "warningAlarm", "isWarningAlarm")
-                        || IsWarningStatus(sensorStatus);
+                var sensorStatus = ReadSensorStatus(element);
+                var isCritical = ReadFlag(element, "critical", "isCritical", "criticalAlarm", "isCriticalAlarm")
+                    || IsCriticalStatus(sensorStatus);
+                var isWarning = ReadFlag(element, "warning", "isWarning", "warningAlarm", "isWarningAlarm")
+                    || IsWarningStatus(sensorStatus);
+                if (category is not null && HwInfoSensorPolicy.IsValidValue(category, reading))
                     readings.Add(new(fullName, reading, unit, category, sensorStatus, isWarning, isCritical));
-                }
+                else if ((isCritical || isWarning) && Numeric.IsFinite(reading) && Math.Abs(reading) <= 1_000_000)
+                    readings.Add(new(fullName, reading, unit, "Other", sensorStatus, isWarning, isCritical));
             }
             foreach (var property in element.EnumerateObject())
             {
@@ -295,31 +431,42 @@ public static class HwInfoReader
             foreach (var item in element.EnumerateArray()) CollectSensors(item, context, readings);
     }
 
-    private static string? Classify(string name, string unit)
+    private static string? Classify(string name, string unit) => HwInfoSensorPolicy.Classify(name, unit);
+
+    // Does not launch HWiNFO, alter its session or write the service cache. Used for live verification.
+    public static HwInfoSnapshot? ReadSharedMemory()
     {
-        var lower = name.ToLowerInvariant();
-        if(lower.Contains("distance to") || lower.Contains("tjmax") || lower.Contains("thermal limit"))return null;
-        if(unit.Contains('%') && lower.Contains("physical memory load")) return "MemoryLoad";
-        if(lower.Contains("thermal throttling") || lower.Contains("critical temperature") || lower.Contains("thermal trip")) return "HardwareAlarm";
-        if (unit.Contains("%", StringComparison.Ordinal) && (lower.Contains("cpu") || lower.Contains("processor") || lower.Contains("процессор")) &&
-            (lower.Contains("load") || lower.Contains("usage") || lower.Contains("util") || lower.Contains("загруз") || lower.Contains("использ"))) return "CpuLoad";
-        if (unit.Contains("c", StringComparison.OrdinalIgnoreCase) || lower.Contains("temperature") || lower.Contains("temp") || lower.Contains("температур"))
+        var values = ITSeti.HwInfoBridge.SensorReader.Read();
+        var sourceTime = SourceTime(values);
+        if (HwInfoRecoveryPolicy.IsSourceTimestampStale(sourceTime, DateTimeOffset.UtcNow)) return null;
+        var readings = MapReadings(values);
+        if (readings.Length == 0) return null;
+        var executable = FindExecutable();
+        return new HwInfoSnapshot("HWiNFO Shared Memory", executable is null ? "" : FileVersionInfo.GetVersionInfo(executable).FileVersion ?? "",
+            sourceTime, null, null, null, null, readings, "SourceTimestampChecked");
+    }
+
+    private static DateTimeOffset SourceTime(ITSeti.HwInfoBridge.SensorValue[] values)
+    {
+        if (values.Length == 0) return DateTimeOffset.MinValue;
+        try { return DateTimeOffset.FromUnixTimeSeconds(values[0].SourceUnixTime); }
+        catch (ArgumentOutOfRangeException) { return DateTimeOffset.MinValue; }
+    }
+
+    internal static HwInfoSensorReading[] MapReadings(IEnumerable<ITSeti.HwInfoBridge.SensorValue> values)
+    {
+        var readings = new List<HwInfoSensorReading>();
+        var seen = new HashSet<HwInfoSensorReading>();
+        foreach (var value in values)
         {
-            if (lower.Contains("gpu") || lower.Contains("graphics") || lower.Contains("video")) return null;
-            if (lower.Contains("vrm") || lower.Contains("mos") || lower.Contains("vr loop")) return "VrmTemperature";
-            if (lower.Contains("pch") || lower.Contains("chipset") || lower.Contains("southbridge") || lower.Contains("platform controller") || lower.Contains("чипсет")) return "PchTemperature";
-            if (lower.Contains("cpu") || lower.Contains("processor") || lower.Contains("package") || lower.Contains("tctl") || lower.Contains("tdie") || lower.Contains("процессор")) return "CpuTemperature";
-            return null;
+            var category = Classify(value.Name, value.Unit);
+            if (category is null || !HwInfoSensorPolicy.IsValidValue(category, value.Value)) continue;
+            var reading = new HwInfoSensorReading(value.Name.Trim().TrimStart('/').Trim(), value.Value, value.Unit, category,
+                IsCritical: category == "HardwareAlarm" && value.Value == 1,
+                SensorId: value.SensorIndex + ":" + value.ReadingId);
+            if (seen.Add(reading)) readings.Add(reading);
         }
-        if (unit.Trim().Equals("V", StringComparison.OrdinalIgnoreCase) || lower.Contains("voltage") || lower.Contains(" vcore"))
-        {
-            if (Regex.IsMatch(lower, @"(?<![a-z0-9])\+?\s*3[.,]3\s*v(?![a-z0-9])", RegexOptions.CultureInvariant)) return "Rail3V";
-            if (Regex.IsMatch(lower, @"(?<![a-z0-9])\+?\s*12(?:[.,]0{1,2})?\s*v(?![a-z0-9])", RegexOptions.CultureInvariant)) return "Rail12V";
-            if (Regex.IsMatch(lower, @"(?<![a-z0-9])\+?\s*5(?:[.,]0{1,2})?\s*v(?:s\s*b)?(?![a-z0-9])", RegexOptions.CultureInvariant)) return "Rail5V";
-            if (lower.Contains("vcore") || lower.Contains("vsoc") || lower.Contains("vsc") || lower.Contains("cpu core")) return "CpuVoltage";
-            return "Voltage";
-        }
-        return null;
+        return readings.ToArray();
     }
 
     private static string? ReadText(JsonElement element, params string[] names)

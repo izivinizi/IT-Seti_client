@@ -6,7 +6,7 @@ $tools=Join-Path (Split-Path $PSScriptRoot -Parent) 'Tools'
 $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
 if($identity.User -and $identity.User.Value -eq 'S-1-5-18'){
     $passwordPolicy=Join-Path $PSScriptRoot 'Set-LocalPasswordsNeverExpire.ps1'
-    if(Test-Path -LiteralPath $passwordPolicy){try{& $passwordPolicy -LogPath (Join-Path $base 'local-password-policy.log')}catch{[IO.File]::AppendAllText((Join-Path $base 'local-password-policy.log'),([DateTimeOffset]::UtcNow.ToString('O')+' ERROR '+$_.Exception.GetType().Name+[Environment]::NewLine),[Text.Encoding]::UTF8)}}
+    if(Test-Path -LiteralPath $passwordPolicy){try{$null=& $passwordPolicy -LogPath (Join-Path $base 'local-password-policy.log')}catch{[IO.File]::AppendAllText((Join-Path $base 'local-password-policy.log'),([DateTimeOffset]::UtcNow.ToString('O')+' ERROR '+$_.Exception.GetType().Name+[Environment]::NewLine),[Text.Encoding]::UTF8)}}
 }
 . (Join-Path $PSScriptRoot 'ScheduledFull.ps1')
 if($StartRepair){
@@ -25,6 +25,13 @@ if($StartRepair){
     if(!$UserApproved -and (Get-Date).Hour -ge 8){exit 0}
 }
 if($StartRepair -and !(Test-ScheduledFullDue $base)){exit 0}
+$trigger=[string]$env:ITSETI_CHECK_TRIGGER
+if([string]::IsNullOrWhiteSpace($trigger)){
+    $trigger=if($StartRepair){'Задача Windows: плановая полная проверка раз в 10 дней'}
+        elseif($SmartOnly){'Фоновая быстрая проверка службы'}
+        else{'Запуск установленной диагностики'}
+    $env:ITSETI_CHECK_TRIGGER=$trigger
+}
 $run=Join-Path $runs ([guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $run -Force | Out-Null
 trap {
@@ -36,17 +43,17 @@ trap {
     exit 1
 }
 if($StartRepair){[IO.File]::WriteAllText((Join-Path $base 'scheduled-last-started.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII)}
+$latestName=if($SmartOnly){'latest-smart.txt'}elseif($StartRepair){'latest-auto-full.txt'}else{'latest-full.txt'}
+$pending=Join-Path $base ($latestName+'.pending')
+[IO.File]::WriteAllText($pending,$run,[Text.Encoding]::UTF8)
+Move-Item -LiteralPath $pending -Destination (Join-Path $base $latestName) -Force
+[IO.File]::WriteAllText((Join-Path $base 'latest.txt'),$run,[Text.Encoding]::UTF8)
 $cancelRequest=Join-Path $run 'cancel-request.txt'
 [IO.File]::WriteAllText($cancelRequest,'',[Text.Encoding]::ASCII)
 if(!$StartRepair){
     & icacls.exe $cancelRequest /grant '*S-1-5-32-545:M' | Out-Null
     if($LASTEXITCODE -ne 0){throw 'Could not allow the current user to stop the check.'}
 }
-$latestName=if($SmartOnly){'latest-smart.txt'}elseif($StartRepair){'latest-auto-full.txt'}else{'latest-full.txt'}
-$pending=Join-Path $base ($latestName+'.pending')
-[IO.File]::WriteAllText($pending,$run,[Text.Encoding]::UTF8)
-Move-Item -LiteralPath $pending -Destination (Join-Path $base $latestName) -Force
-[IO.File]::WriteAllText((Join-Path $base 'latest.txt'),$run,[Text.Encoding]::UTF8)
 function ConvertTo-UtcDateTimeOffset($Value) {
     if($Value -is [DateTimeOffset]){return $Value.ToUniversalTime()}
     if($Value -is [DateTime]){return [DateTimeOffset]$Value.ToUniversalTime()}
@@ -100,7 +107,7 @@ $worker=[scriptblock]::Create([IO.File]::ReadAllText((Join-Path $run 'FullCheckW
 if($SmartOnly){
     & $worker -RunRoot $run -ToolsRoot $tools -HeadlessDiskSpd -TrustedTools -SkipResourceSampling -SkipDiskBenchmark
 } else {
-    & $worker -RunRoot $run -ToolsRoot $tools -HeadlessDiskSpd -TrustedTools
+    & $worker -RunRoot $run -ToolsRoot $tools -HeadlessDiskSpd -TrustedTools -Scheduled:$StartRepair
 }
 Remove-Item Env:ITSETI_CPU_TEMPERATURE_FILE -ErrorAction SilentlyContinue
 if((Test-Path -LiteralPath $cancelRequest) -and [IO.File]::ReadAllText($cancelRequest).Trim() -eq 'cancel'){

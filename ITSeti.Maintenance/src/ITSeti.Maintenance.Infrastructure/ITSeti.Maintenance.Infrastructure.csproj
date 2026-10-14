@@ -11,6 +11,7 @@
   <ItemGroup>
     <Content Include="Backend\FullCheckWorker.ps1;Backend\InstalledOrganizationSetup.ps1;Backend\ScheduledFull.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\Set-WindowsAutomaticUpdates.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Backend\Set-WindowsDiagnosticData.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\WindowsDefender.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\Update-Application.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Backend\Upload-Reports.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

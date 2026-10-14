@@ -61,6 +61,7 @@ namespace ITSeti.Maintenance.App
             LaunchDiskMarkButton.IsEnabled = engineer && File.Exists(DiskMarkPath);
             WindowsDefenderToggleButton.Visibility = Visibility.Collapsed;
             WindowsDefenderInfoSection.Visibility = Visibility.Collapsed;
+            DiagnosticDataSection.Visibility = Visibility.Collapsed;
             CreateAdminAccountButton.IsEnabled = false;
         }
 
@@ -253,6 +254,8 @@ namespace ITSeti.Maintenance.App
         private async void CheckWindowsUpdates_Click(object sender, RoutedEventArgs e) { await RunActionAsync("Поиск обновлений Windows", "WindowsUpdateStatus", LegacyMaintenance.CheckWindowsUpdates); }
         private async void DisableWindowsUpdates_Click(object sender, RoutedEventArgs e) { if (engineer) await RunActionAsync("Отключение автообновлений", "WindowsUpdatePolicyStatus", LegacyMaintenance.DisableAutomaticUpdates); }
         private async void RestoreWindowsUpdates_Click(object sender, RoutedEventArgs e) { if (engineer) await RunActionAsync("Восстановление настройки", "WindowsUpdatePolicyStatus", LegacyMaintenance.RestoreAutomaticUpdates); }
+        private void MinimizeDiagnosticData_Click(object sender, RoutedEventArgs e) { view.Set("Status", "Управление диагностическими данными Windows 7 не поддерживается."); }
+        private void RestoreDiagnosticData_Click(object sender, RoutedEventArgs e) { view.Set("Status", "Управление диагностическими данными Windows 7 не поддерживается."); }
         private void ToggleWindowsDefender_Click(object sender, RoutedEventArgs e) { }
         private async void RunRepair_Click(object sender, RoutedEventArgs e)
         {
@@ -281,11 +284,12 @@ namespace ITSeti.Maintenance.App
                     else view.Set("StandaloneRepairStatus", timeout);
                     return;
                 }
-                var status = Win7MaintenanceServiceHost.ReadStatus();
+                var status = Win7MaintenanceServiceHost.ReadStatus(runId);
                 DateTime stamp;
-                var recent = status != null && (string.IsNullOrWhiteSpace(runId) || string.Equals(status.RunId, runId, StringComparison.OrdinalIgnoreCase)) &&
-                    DateTime.TryParse(status.StartedAtUtc, null, DateTimeStyles.RoundtripKind, out stamp) &&
-                    stamp.ToUniversalTime() >= started.AddSeconds(-2);
+                var recent = status != null && (!string.IsNullOrWhiteSpace(runId)
+                    ? string.Equals(status.RunId, runId, StringComparison.OrdinalIgnoreCase)
+                    : DateTime.TryParse(status.StartedAtUtc, null, DateTimeStyles.RoundtripKind, out stamp) &&
+                      stamp.ToUniversalTime() >= started.AddSeconds(-2));
                 if (recent && string.Equals(status.State, "Completed", StringComparison.OrdinalIgnoreCase))
                 {
                     var message = status.Message ?? (name + " завершено.");

@@ -69,7 +69,7 @@ namespace ITSeti.Maintenance.App
                 await EnsureSuccessAsync(response);
             device.companyId = companyId;
             device.siteId = siteId;
-            SaveDevice(device);
+            await SaveDeviceAsync(device);
         }
 
         internal async Task AllowProcessAsync(string name, string publisher, string signature)
@@ -136,14 +136,7 @@ namespace ITSeti.Maintenance.App
                 companyId = result.companyId,
                 siteId = result.siteId
             };
-            SaveDevice(device);
-            if (!string.IsNullOrWhiteSpace(result.supportKey))
-                File.WriteAllText(Path.Combine(Root, "server-support.json"), json.Serialize(new
-                {
-                    serverUrl = ServerUrl,
-                    deviceId = result.deviceId,
-                    supportKey = result.supportKey
-                }), new UTF8Encoding(false));
+            await SaveDeviceAsync(device);
         }
 
         private async Task EnsureSuccessAsync(HttpResponseMessage response)
@@ -175,13 +168,15 @@ namespace ITSeti.Maintenance.App
             catch { return null; }
         }
 
-        private void SaveDevice(DeviceRecord value)
+        private async Task SaveDeviceAsync(DeviceRecord value)
         {
-            Directory.CreateDirectory(Root);
-            var temporary = DevicePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            File.WriteAllText(temporary, json.Serialize(value), new UTF8Encoding(false));
-            if (File.Exists(DevicePath)) File.Delete(DevicePath);
-            File.Move(temporary, DevicePath);
+            var enrollment = new Dictionary<string, object> {
+                { "serverUrl", value.serverUrl }, { "deviceId", value.deviceId }, { "deviceKey", value.deviceKey },
+                { "supportKey", value.supportKey }, { "companyId", value.companyId }, { "siteId", value.siteId }
+            };
+            var result = await Win7MaintenanceServiceClient.SaveEnrollmentAsync(enrollment);
+            if (!result.Connected || !result.Accepted)
+                throw new IOException("Не удалось сохранить привязку ПК через службу Windows 7: " + result.Message);
         }
 
         private static string ReadInventory()

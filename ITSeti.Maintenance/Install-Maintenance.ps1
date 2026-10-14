@@ -9,6 +9,24 @@ function Write-InstallLog([string]$Message) {
         Add-Content -LiteralPath $installLog -Value ('[{0:yyyy-MM-dd HH:mm:ss}] {1}' -f (Get-Date),$Message) -Encoding UTF8
     } catch { }
 }
+function Set-InstallAcl([string]$Path,[string[]]$Arguments) {
+    if(!(Test-Path -LiteralPath $Path)){throw "Каталог или файл для настройки доступа не найден: $Path"}
+    $aclOutput=@(& icacls.exe $Path @Arguments 2>&1)
+    $aclExitCode=$LASTEXITCODE
+    if($aclExitCode -ne 0){
+        throw "Не удалось настроить доступ к $Path (код $aclExitCode): $($aclOutput -join ' ')"
+    }
+}
+function Grant-SystemTreeFullControl([string]$Path) {
+    $aclOutput=@(& icacls.exe $Path /grant '*S-1-5-18:(OI)(CI)F' /T /C 2>&1)
+    $aclExitCode=$LASTEXITCODE
+    if($aclExitCode -ne 0){
+        $diagnostic=($aclOutput | Select-Object -Last 8) -join ' '
+        throw "Не удалось восстановить доступ службы SYSTEM к существующим данным $Path (код $aclExitCode): $diagnostic"
+    }
+    $summary=($aclOutput | Select-Object -Last 2) -join ' '
+    Write-InstallLog "Права SYSTEM на файлах обслуживания проверены и восстановлены: $summary"
+}
 trap {
     $detail='Этап: '+$installStage+[Environment]::NewLine+$_.Exception.Message
     $technical=$_.Exception.ToString()+[Environment]::NewLine+$_.ScriptStackTrace
@@ -30,7 +48,6 @@ $installStage='Проверка файлов приложения и инстр�
 $sourceApp=if($PreinstalledApp){$InstallRoot}else{Join-Path $PackageRoot 'App'}
 $sourceTools=if($PreinstalledApp){Join-Path $InstallRoot 'Tools'}else{Join-Path $PackageRoot 'Tools'}
 $sourceService=if($PreinstalledApp){Join-Path $InstallRoot 'Service'}else{Join-Path $PackageRoot 'Service'}
-$sourceNotifier=if($PreinstalledApp){Join-Path $InstallRoot 'Notifier'}else{Join-Path $PackageRoot 'Notifier'}
 if(!(Test-Path -LiteralPath (Join-Path $sourceApp 'ITSeti.Maintenance.exe') -PathType Leaf)){throw 'Published application is missing.'}
 foreach($relative in @('CrystalDiskInfo9_6_3_Portable\DiskInfo64.exe','CrystalDiskMark9\CdmResource\DiskSpd\DiskSpd64.exe','PawnIO\PawnIO_setup.exe')){
     if(!(Test-Path -LiteralPath (Join-Path $sourceTools $relative) -PathType Leaf)){throw "Tool is missing: $relative"}
@@ -40,9 +57,11 @@ foreach($relative in @('Panel\DesktopInfo.ini','Panel\update-support-ids.ps1','P
 }
 $serviceExe=Join-Path $InstallRoot 'Service\ITSeti.Maintenance.Service.exe'
 if(!(Test-Path -LiteralPath (Join-Path $sourceService 'ITSeti.Maintenance.Service.exe') -PathType Leaf)){throw 'Maintenance service executable is missing.'}
-if(!(Test-Path -LiteralPath (Join-Path $sourceNotifier 'ITSeti.Maintenance.TicketNotifier.exe') -PathType Leaf)){throw 'Ticket notification helper is missing.'}
 $oldNotifier=Get-Process -Name 'ITSeti.Maintenance.TicketNotifier' -ErrorAction SilentlyContinue
 if($oldNotifier){$oldNotifier | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500}
+$runKey='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+Remove-ItemProperty -Path $runKey -Name 'ITSeti-Maintenance-Tickets' -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $InstallRoot 'Notifier') -Recurse -Force -ErrorAction SilentlyContinue
 $install=$InstallRoot
 $installStage='Создание каталогов и копирование файлов'
 New-Item -ItemType Directory -Path $install,$data,(Join-Path $data 'Runs'),(Join-Path $data 'Repairs'),(Join-Path $data 'Logs'),(Join-Path $data 'CleanupRequests'),(Join-Path $data 'CleanupRuns'),(Join-Path $data 'MonitoringQueue'),(Join-Path $data 'WindowsUpdate'),(Join-Path $data 'OrganizationSetupRequests'),(Join-Path $data 'OrganizationSetupRuns') -Force | Out-Null
@@ -55,9 +74,6 @@ if(!$PreinstalledApp){
     Get-ChildItem -LiteralPath $sourceService -Force | Copy-Item -Destination $serviceTarget -Recurse -Force
 }
 if(!$PreinstalledApp){
-    $notifierTarget=Join-Path $install 'Notifier'
-    New-Item -ItemType Directory -Path $notifierTarget -Force | Out-Null
-    Get-ChildItem -LiteralPath $sourceNotifier -Force | Copy-Item -Destination $notifierTarget -Recurse -Force
 }
 if(!$PreinstalledApp){
     foreach($folder in @('CrystalDiskInfo9_6_3_Portable','CrystalDiskMark9','TreeSize Free','PawnIO','HWiNFO')){
@@ -104,28 +120,26 @@ try {
 }
 $securityRoot=Join-Path $env:ProgramData 'ITSeti'
 $installStage='Настройка доступа к данным обслуживания'
-& icacls.exe $securityRoot /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
-if($LASTEXITCODE -ne 0){throw 'Could not secure ProgramData root.'}
+Set-InstallAcl $securityRoot @('/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F','*S-1-5-32-545:(OI)(CI)RX')
+# The root ACL is inherited by new files, but older files may carry protected
+# ACLs from previous installers or manual repairs. The SYSTEM service must be
+# able to atomically replace its cache and status files, so restore only its
+# full-control ACE recursively while preserving every other existing ACE.
+Grant-SystemTreeFullControl $securityRoot
 $enrollmentFile=Join-Path $data 'server-device.json'
 if(Test-Path -LiteralPath $enrollmentFile -PathType Leaf){
-    & icacls.exe $enrollmentFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:R' | Out-Null
-    if($LASTEXITCODE -ne 0){throw 'Could not preserve access to the existing server enrollment.'}
+    Set-InstallAcl $enrollmentFile @('/inheritance:r','/grant:r','*S-1-5-18:F','*S-1-5-32-544:F','*S-1-5-32-545:R')
 }
 $cleanupQueue=Join-Path $data 'CleanupRequests'
-& icacls.exe $cleanupQueue /grant:r '*S-1-5-32-545:(OI)(CI)M' | Out-Null
-if($LASTEXITCODE -ne 0){throw 'Could not allow cleanup requests.'}
+Set-InstallAcl $cleanupQueue @('/grant:r','*S-1-5-32-545:(OI)(CI)M')
 $applicationLogs=Join-Path $data 'Logs'
-& icacls.exe $applicationLogs /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)M' | Out-Null
-if($LASTEXITCODE -ne 0){throw 'Could not configure application error log access.'}
+Set-InstallAcl $applicationLogs @('/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F','*S-1-5-32-545:(OI)(CI)M')
 $cleanupRuns=Join-Path $data 'CleanupRuns'
-& icacls.exe $cleanupRuns /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
-if($LASTEXITCODE -ne 0){throw 'Could not secure cleanup results.'}
+Set-InstallAcl $cleanupRuns @('/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F','*S-1-5-32-545:(OI)(CI)RX')
 $organizationRequests=Join-Path $data 'OrganizationSetupRequests'
-& icacls.exe $organizationRequests /grant:r '*S-1-5-32-545:(OI)(CI)M' | Out-Null
-if($LASTEXITCODE -ne 0){throw 'Could not allow organization setup requests.'}
+Set-InstallAcl $organizationRequests @('/grant:r','*S-1-5-32-545:(OI)(CI)M')
 $organizationRuns=Join-Path $data 'OrganizationSetupRuns'
-& icacls.exe $organizationRuns /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
-if($LASTEXITCODE -ne 0){throw 'Could not secure organization setup results.'}
+Set-InstallAcl $organizationRuns @('/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F','*S-1-5-32-545:(OI)(CI)RX')
 $inventory=Join-Path $data 'inventory.txt'
 if(!(Test-Path -LiteralPath $inventory -PathType Leaf)){[IO.File]::WriteAllText($inventory,'',[Text.Encoding]::ASCII)}
 & icacls.exe $inventory /grant '*S-1-5-32-545:M' | Out-Null
@@ -153,6 +167,12 @@ try {
     $taskPrincipal=New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
     $powershell=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
     if(!(Test-Path -LiteralPath $powershell -PathType Leaf)){throw "PowerShell не найден: $powershell"}
+    $schedulerService=Get-Service -Name Schedule -ErrorAction Stop
+    if($schedulerService.Status -ne 'Running'){
+        try {Start-Service -Name Schedule -ErrorAction Stop}
+        catch {throw "Служба планировщика Windows не запущена: $($_.Exception.Message)"}
+    }
+    Write-InstallLog ('Планировщик Windows: '+(Get-Service -Name Schedule -ErrorAction Stop).Status)
     $scheduler=New-Object -ComObject Schedule.Service
     $scheduler.Connect()
     foreach($obsoleteQuickTask in @('ITSeti-Maintenance-QuickFull','ITSeti-Maintenance-AutoQuick')){
@@ -198,7 +218,10 @@ try {
                 }
             }
             if(!$task){throw "Task Scheduler did not expose registered task $name."}
-            $task.SetSecurityDescriptor('D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;BU)',0)
+            $engineerTask=$name -in @('ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair',
+                'ITSeti-Maintenance-OrganizationSetup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates')
+            $task.SetSecurityDescriptor($(if($engineerTask){'D:P(A;;FA;;;SY)(A;;FA;;;BA)'}
+                else{'D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;BU)'}),0)
             $registered=Get-ScheduledTask -TaskName $name -ErrorAction Stop
             $registeredSid=if($registered.Principal.UserId -eq 'S-1-5-18'){'S-1-5-18'}else{([Security.Principal.NTAccount]$registered.Principal.UserId).Translate([Security.Principal.SecurityIdentifier]).Value}
             if($registeredSid -ne 'S-1-5-18' -or $registered.Principal.LogonType -ne 'ServiceAccount' -or $registered.Principal.RunLevel -ne 'Highest'){
@@ -261,13 +284,13 @@ if($existingService){
         }
         if((Get-Service -Name $serviceName -ErrorAction Stop).Status -ne 'Stopped'){throw 'Служба не остановилась перед обновлением.'}
     }
-    & sc.exe config $serviceName binPath= ('"'+$serviceExe+'"') start= delayed-auto obj= LocalSystem DisplayName= 'ИТ-Сети: обслуживание ПК' | Out-Null
+    & sc.exe config $serviceName binPath= ('"'+$serviceExe+'"') start= auto obj= LocalSystem DisplayName= 'ИТ-Сети: обслуживание ПК' | Out-Null
     if($LASTEXITCODE -ne 0){throw 'Не удалось обновить регистрацию службы.'}
 }else{
     New-Service -Name $serviceName -BinaryPathName ('"'+$serviceExe+'"') -DisplayName 'ИТ-Сети: обслуживание ПК' -Description 'Диагностика, мониторинг и системные операции ИТ-Сети.' -StartupType Automatic -ErrorAction Stop | Out-Null
 }
-& sc.exe config $serviceName start= delayed-auto | Out-Null
-if($LASTEXITCODE -ne 0){throw 'Не удалось включить отложенный автоматический запуск службы.'}
+& sc.exe config $serviceName start= auto | Out-Null
+if($LASTEXITCODE -ne 0){throw 'Не удалось включить автоматический запуск службы.'}
 & sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Не удалось настроить восстановление службы.'}
 & sc.exe description $serviceName 'Диагностика, мониторинг и системные операции ИТ-Сети.' | Out-Null
@@ -279,7 +302,7 @@ for($attempt=0;$attempt -lt 120;$attempt++){
 }
 if((Get-Service -Name $serviceName -ErrorAction Stop).Status -ne 'Running'){throw 'Служба не перешла в состояние Running.'}
 $serviceCim=Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $serviceName) -ErrorAction Stop
-if($serviceCim.StartName -ne 'LocalSystem' -or $serviceCim.StartMode -notin @('Auto','Automatic')){throw 'Служба зарегистрирована не от LocalSystem или не имеет автоматического запуска.'}
+if($serviceCim.StartName -ne 'LocalSystem' -or $serviceCim.StartMode -notin @('Auto','Automatic') -or [bool]$serviceCim.DelayedAutoStart){throw 'Служба должна запускаться автоматически от LocalSystem без отложенного старта.'}
 if([string]$serviceCim.PathName -notmatch [regex]::Escape($serviceExe)){throw 'Служба указывает на другой исполняемый файл.'}
 Write-InstallLog ('Служба '+$serviceName+' зарегистрирована и запущена.')
 $installStage='Завершение установки'
@@ -288,7 +311,6 @@ if($legacyTask){Unregister-ScheduledTask -TaskName 'ITSeti-Maintenance-FullRepai
 $runKey='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
 Remove-ItemProperty -Path $runKey -Name 'ITSeti-Maintenance-Quick' -ErrorAction SilentlyContinue
 New-ItemProperty -Path $runKey -Name 'ITSeti-Maintenance-Status' -Value ('"'+(Join-Path $install 'ITSeti.Maintenance.exe')+'" --scheduled-quick') -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $runKey -Name 'ITSeti-Maintenance-Tickets' -Value ('"'+(Join-Path $install 'Notifier\ITSeti.Maintenance.TicketNotifier.exe')+'"') -PropertyType String -Force | Out-Null
 $legacyShortcuts=@((Join-Path $env:PUBLIC 'Desktop\ITSeti Maintenance.lnk'),(Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\ITSeti Maintenance.lnk'))
 if($PreinstalledApp){
     foreach($path in $legacyShortcuts){Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue}

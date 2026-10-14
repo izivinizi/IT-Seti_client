@@ -2,8 +2,25 @@ using System.Text.Json;
 using ITSeti.Server;
 using Microsoft.Extensions.Configuration;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using ITSeti.Maintenance.Core;
+
+if (args.Contains("--monitoring-performance"))
+{
+    MonitoringPerformanceContract.Run();
+    return;
+}
+
+if (args.Length == 2 && args[0] == "--win7-report-contract")
+{
+    using var document = JsonDocument.Parse(File.ReadAllText(args[1]));
+    var issues = Monitoring.CurrentIssues(document.RootElement);
+    if (issues.Count != 1 || issues[0].Severity != 1 || !issues[0].Title.Contains("температура"))
+        throw new Exception("Win7/net48 report disagrees with server/Core");
+    Console.WriteLine("PASS actual net48 serialized report -> server: identical critical CPU result");
+    return;
+}
 
 if (args.Contains("--okdesk-web-live") || args.Contains("--okdesk-ticket-live") || args.Contains("--okdesk-sync-live") || args.Contains("--okdesk-equipment-live"))
 {
@@ -79,6 +96,22 @@ static void Check(bool value, string caseName)
     Console.WriteLine("PASS " + caseName);
 }
 
+var sourceRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+var applicationErrorSchema = File.ReadAllText(Path.Combine(sourceRoot, "ITSeti.Server", "Database.cs"));
+var applicationErrorApi = File.ReadAllText(Path.Combine(sourceRoot, "ITSeti.Server", "Program.cs"));
+var applicationErrorPage = File.ReadAllText(Path.Combine(sourceRoot, "ITSeti.Server", "wwwroot", "index.html"));
+Check(applicationErrorSchema.Contains("CREATE TABLE IF NOT EXISTS application_errors") &&
+    applicationErrorSchema.Contains("PRIMARY KEY(device_id,error_id)"),
+    "application error journal has an idempotent per-device schema");
+Check(applicationErrorApi.Contains("app.MapPost(\"/api/v1/application-errors\"") &&
+    applicationErrorApi.Contains("admin.MapGet(\"/application-errors\"") &&
+    applicationErrorApi.Contains("DeviceDisplayFilter.SqlPredicate"),
+    "application error upload is device-authenticated and admin feed hides excluded computers");
+Check(applicationErrorPage.Contains("data-view=\"application-errors\"") &&
+    applicationErrorPage.Contains("id=\"app-errors-list\"") &&
+    applicationErrorPage.Contains("id=\"app-errors-company\""),
+    "admin UI exposes a filterable client application-error journal");
+
 Check(PackageVersionDetector.TryParse("FileVersion 2.3.3.0", out var detectedVersion) && detectedVersion == new Version(2, 3, 3, 0),
     "application package versions accept EXE FileVersion metadata");
 Check(PackageVersionDetector.TryParse("ProductVersion 7.7.3.0", out var productVersion) && productVersion == new Version(7, 7, 3, 0),
@@ -89,15 +122,25 @@ Check(PackageVersionDetector.DetectName("OCS Inventory NG Agent", "Setup", "agen
     PackageVersionDetector.DetectName("", "RMS Host Installer", "rms.exe") == "RMS Host Installer" &&
     PackageVersionDetector.DetectName("", "", "rms-host-7.7.3.exe") == "rms host",
     "package display name prefers product metadata and falls back to installer filename");
+var sharedSnapshot = new DiagnosticSnapshot(Guid.NewGuid(), DateTimeOffset.UtcNow, "SHARED", 20, 16UL << 30, 8UL << 30, [], [], CpuTemperatureC: 90);
+var sharedReport = JsonSerializer.SerializeToNode(sharedSnapshot)!.AsObject();
+sharedReport["DiagnosticResult"] = JsonSerializer.SerializeToNode(DiagnosticEngine.Evaluate(sharedSnapshot));
+sharedReport["DiagnosticIssues"] = JsonSerializer.SerializeToNode(Array.Empty<UserIssue>()); // stale client projection must not override raw inputs
+using (var sharedDocument = JsonDocument.Parse(sharedReport.ToJsonString()))
+    Check(Monitoring.CurrentIssues(sharedDocument.RootElement).Count == DiagnosticEngine.Evaluate(sharedSnapshot).Issues.Count,
+        "versioned reports are evaluated by the same client/server core from raw inputs");
+
 var workspaceRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
-foreach (var installer in new[]
+foreach (var (installer, expectedVersion) in new[]
          {
-             Path.Combine(workspaceRoot, "ITSeti.Maintenance", "dist", "ITSeti-Maintenance-Setup-2.3.9.exe"),
-             Path.Combine(workspaceRoot, "ITSeti.Maintenance", "dist", "Win7", "ITSeti-Maintenance-Win7-Setup-2.3.9.exe")
-         }.Where(File.Exists))
+             (Path.Combine(workspaceRoot, "ITSeti.Maintenance", "dist", "ITSeti-Maintenance-Setup-2.3.9.exe"), new Version(2, 3, 9)),
+             (Path.Combine(workspaceRoot, "ITSeti.Maintenance", "dist", "Win7", "ITSeti-Maintenance-Win7-Setup-2.3.9.exe"), new Version(2, 3, 9)),
+             (Path.Combine(workspaceRoot, "ITSeti.Maintenance", "dist", "ITSeti-Maintenance-Setup-2.4.1.exe"), new Version(2, 4, 1)),
+             (Path.Combine(workspaceRoot, "ITSeti.Maintenance", "dist", "Win7", "ITSeti-Maintenance-Win7-Setup-2.4.1.exe"), new Version(2, 4, 1))
+         }.Where(item => File.Exists(item.Item1)))
 {
     var metadata = PackageVersionDetector.Detect(installer, Path.GetFileName(installer));
-    Check(metadata.Name.StartsWith("ИТ-Сети Обслуживание ПК", StringComparison.Ordinal) && metadata.Version == new Version(2, 3, 7),
+    Check(metadata.Name.StartsWith("ИТ-Сети Обслуживание ПК", StringComparison.Ordinal) && metadata.Version == expectedVersion,
         "real setup metadata auto-detects product name and ProductVersion: " + Path.GetFileName(installer));
 }
 var testHostExecutable = Path.Combine(AppContext.BaseDirectory, "ITSeti.Server.Tests.exe");
@@ -173,10 +216,102 @@ Check(InventoryNumbers.Normalize("IT-00 2041") == "IT002041" && InventoryNumbers
 Check(InventoryNumbers.Normalize("PC01000004732") == InventoryNumbers.Normalize("4732") &&
     InventoryNumbers.Normalize("PC01000000000") is null,
     "Okdesk PC-prefixed inventory IDs match a short client inventory number without matching placeholders");
+Check(DeviceDisplayFilter.IsExcluded(" RT ") && DeviceDisplayFilter.IsExcluded("srv") &&
+    DeviceDisplayFilter.IsExcluded("SRV-01") && DeviceDisplayFilter.IsExcluded("SRV02000000484") &&
+    DeviceDisplayFilter.IsExcluded("RT01000000484") && !DeviceDisplayFilter.IsExcluded("RTR") &&
+    !DeviceDisplayFilter.IsExcluded("PC-RT"),
+    "server display filter hides RT/SRV computer and inventory prefixes without matching unrelated names");
 var serverProgram = File.ReadAllText(Path.Combine(workspaceRoot, "ITSeti.Server", "Program.cs"));
+var portalOperationsSource = File.ReadAllText(Path.Combine(workspaceRoot, "ITSeti.Server", "PortalOperations.cs"));
+var uploadReaderSource = File.ReadAllText(Path.Combine(workspaceRoot, "ITSeti.Server", "PackageUploadReader.cs"));
+var adminScriptSource = File.ReadAllText(Path.Combine(workspaceRoot, "ITSeti.Server", "wwwroot", "app.js"));
+var adminStylesSource = File.ReadAllText(Path.Combine(workspaceRoot, "ITSeti.Server", "wwwroot", "app.css"));
+var ticketCommentSync = File.ReadAllText(Path.Combine(workspaceRoot, "ITSeti.Server", "OkdeskCommentSyncService.cs"));
 Check(serverProgram.Contains("admin.MapGet(\"/computer-tree\"", StringComparison.Ordinal) &&
-    serverProgram.Contains("MultipartBodyLengthLimit = 1024L * 1024 * 1024", StringComparison.Ordinal),
-    "server exposes the computer tree used by the admin UI and configures package upload buffering");
+    !portalOperationsSource.Contains("MapGet(\"/computer-tree\"", StringComparison.Ordinal) &&
+    serverProgram.Contains("DeviceDisplayFilter.OkdeskEquipmentSqlPredicate", StringComparison.Ordinal) &&
+    serverProgram.Split("DeviceDisplayFilter.SqlPredicate", StringSplitOptions.None).Length - 1 >= 12 &&
+    portalOperationsSource.Split("DeviceDisplayFilter.SqlPredicate", StringSplitOptions.None).Length - 1 >= 3,
+    "server has one computer-tree route and excludes RT/SRV from lists, counts, tickets, conversations, runs and monitoring");
+Check(adminScriptSource.Contains("deviceTable.classList.add('tree-view')", StringComparison.Ordinal) &&
+    adminScriptSource.Contains("deviceTable.classList.add('computer-view')", StringComparison.Ordinal) &&
+    Enumerable.Range(1, 5).All(column => adminStylesSource.Contains($".device-table.computer-view th:nth-child({column})", StringComparison.Ordinal)) &&
+    Enumerable.Range(1, 3).All(column => adminStylesSource.Contains($".device-table.tree-view th:nth-child({column})", StringComparison.Ordinal)),
+    "computer table columns use explicit widths for both hierarchy and five-column device views");
+Check(serverProgram.Contains("admin.MapGet(\"/computer-tree\"", StringComparison.Ordinal) &&
+    serverProgram.Contains("PackageUploadReader.ReadAsync(context.Request, destination, MaxPackageBytes", StringComparison.Ordinal) &&
+    !serverProgram.Contains("context.Request.ReadFormAsync(context.RequestAborted)", StringComparison.Ordinal) &&
+    serverProgram.Contains("RequireRateLimiting(\"package-upload\")", StringComparison.Ordinal) &&
+    serverProgram.Contains("Failed to remove incomplete package upload", StringComparison.Ordinal) &&
+    uploadReaderSource.Contains("IncrementalHash.CreateHash(HashAlgorithmName.SHA256)", StringComparison.Ordinal) &&
+    uploadReaderSource.Contains("64 * 1024", StringComparison.Ordinal),
+    "server exposes the computer tree and streams package uploads with bounded memory and SHA-256");
+
+var uploadTestRoot = Path.Combine(Path.GetTempPath(), "itseti-package-upload-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(uploadTestRoot);
+try
+{
+    const string uploadBoundary = "itseti-upload-test-boundary";
+    static byte[] BuildMultipart(string boundary, params (string Name, string? FileName, string Value)[] parts)
+    {
+        var body = new StringBuilder();
+        foreach (var part in parts)
+        {
+            body.Append("--").Append(boundary).Append("\r\nContent-Disposition: form-data; name=\"").Append(part.Name).Append('"');
+            if (part.FileName is not null) body.Append("; filename=\"").Append(part.FileName).Append('"');
+            body.Append("\r\n\r\n").Append(part.Value).Append("\r\n");
+        }
+        body.Append("--").Append(boundary).Append("--\r\n");
+        return Encoding.UTF8.GetBytes(body.ToString());
+    }
+    static Microsoft.AspNetCore.Http.DefaultHttpContext MultipartContext(string boundary, byte[] body)
+    {
+        var context = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        context.Request.ContentType = $"multipart/form-data; boundary={boundary}";
+        context.Request.ContentLength = body.Length;
+        context.Request.Body = new MemoryStream(body, writable: false);
+        return context;
+    }
+
+    var validBody = BuildMultipart(uploadBoundary,
+        ("key", null, "application"), ("version", null, "2.4.1"), ("name", null, "ITSeti"),
+        ("platform", null, "windows"), ("file", @"C:\fakepath\setup.exe", "package-bytes"));
+    var validPath = Path.Combine(uploadTestRoot, "valid-package");
+    var uploaded = await PackageUploadReader.ReadAsync(MultipartContext(uploadBoundary, validBody).Request, validPath, 1024, CancellationToken.None);
+    Check(uploaded.Key == "application" && uploaded.Version == "2.4.1" && uploaded.Name == "ITSeti" && uploaded.Platform == "windows" &&
+        uploaded.FileName == "setup.exe" && uploaded.Length == Encoding.UTF8.GetByteCount("package-bytes") &&
+        uploaded.Sha256 == Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("package-bytes"))) &&
+        File.ReadAllText(validPath) == "package-bytes",
+        "streamed package upload preserves fields, strips client path, writes bytes and calculates SHA-256");
+
+    var oversizedPath = Path.Combine(uploadTestRoot, "oversized-package");
+    try
+    {
+        await PackageUploadReader.ReadAsync(MultipartContext(uploadBoundary, validBody).Request, oversizedPath, 4, CancellationToken.None);
+        throw new Exception("oversized package was accepted");
+    }
+    catch (InvalidDataException) { Check(!File.Exists(oversizedPath), "streamed package upload enforces the byte limit and removes partial files"); }
+
+    var duplicateBody = BuildMultipart(uploadBoundary, ("file", "one.bin", "a"), ("file", "two.bin", "b"));
+    var duplicatePath = Path.Combine(uploadTestRoot, "duplicate-package");
+    try
+    {
+        await PackageUploadReader.ReadAsync(MultipartContext(uploadBoundary, duplicateBody).Request, duplicatePath, 1024, CancellationToken.None);
+        throw new Exception("duplicate file fields were accepted");
+    }
+    catch (InvalidDataException) { Check(true, "streamed package upload rejects duplicate file parts"); }
+
+    var longFieldBody = BuildMultipart(uploadBoundary, ("key", null, new string('x', 1025)), ("file", "one.bin", "a"));
+    try
+    {
+        await PackageUploadReader.ReadAsync(MultipartContext(uploadBoundary, longFieldBody).Request, Path.Combine(uploadTestRoot, "long-field"), 1024, CancellationToken.None);
+        throw new Exception("oversized metadata field was accepted");
+    }
+    catch (InvalidDataException) { Check(true, "streamed package upload bounds multipart metadata fields"); }
+}
+finally { Directory.Delete(uploadTestRoot, true); }
+Check(ticketCommentSync.Contains("workflow_state NOT IN ('completed','cancelled','canceled','closed','resolved')", StringComparison.Ordinal),
+    "Okdesk comment sync excludes completed and closed tickets from periodic polling");
 using (var web = new OkdeskWebClient(new ConfigurationBuilder().Build()))
     Check(!web.CanSendTickets && !web.CanReadComments && !web.CanChangeStatus, "unverified web ticket actions stay queued and private comments cannot leak");
 var diagnosticRoot = Path.Combine(Path.GetTempPath(), "itseti-enrollment-" + Guid.NewGuid().ToString("N"));

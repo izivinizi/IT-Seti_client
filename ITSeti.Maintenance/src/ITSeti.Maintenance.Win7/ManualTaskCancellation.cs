@@ -15,8 +15,7 @@ namespace ITSeti.Maintenance.Win7
         {
             if (!File.Exists(PathFor(name)) || !File.Exists(StoppedPathFor(name)))
                 throw new InvalidOperationException("Системные задачи диагностики не настроены. Переустановите приложение.");
-            using (var process = Process.GetCurrentProcess())
-                File.WriteAllText(PathFor(name), "owner:" + process.Id + ":" + process.StartTime.ToUniversalTime().Ticks);
+            File.WriteAllText(PathFor(name), "");
             File.WriteAllText(StoppedPathFor(name), "");
         }
 
@@ -33,7 +32,7 @@ namespace ITSeti.Maintenance.Win7
             try { value = File.ReadAllText(path).Trim(); }
             catch (IOException) { return false; }
             if (value == "cancel") return true;
-            return OwnerGone(value);
+            return false;
         }
 
         internal static bool OwnerGone(string value)

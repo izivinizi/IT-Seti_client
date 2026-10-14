@@ -143,6 +143,21 @@ public static class Database
                 received_at timestamptz NOT NULL DEFAULT now()
             );
             CREATE INDEX IF NOT EXISTS ix_check_runs_device_started ON check_runs(device_id,started_at DESC);
+            CREATE TABLE IF NOT EXISTS application_errors (
+                device_id uuid NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                error_id uuid NOT NULL,
+                occurred_at timestamptz NOT NULL,
+                component text NOT NULL,
+                operation text NOT NULL,
+                summary text NOT NULL,
+                exception_type text NOT NULL,
+                technical_details text NOT NULL,
+                app_version text NOT NULL DEFAULT '',
+                received_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY(device_id,error_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_application_errors_recent ON application_errors(occurred_at DESC,received_at DESC);
+            CREATE INDEX IF NOT EXISTS ix_application_errors_device_recent ON application_errors(device_id,occurred_at DESC);
             CREATE TABLE IF NOT EXISTS monitor_alerts (
                 id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                 device_id uuid NOT NULL REFERENCES devices(id) ON DELETE CASCADE,

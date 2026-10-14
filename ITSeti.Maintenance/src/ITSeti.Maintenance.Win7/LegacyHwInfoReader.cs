@@ -28,7 +28,7 @@ namespace ITSeti.Maintenance.Win7
         public List<LegacyHwInfoAlert> Alerts { get; set; } = new List<LegacyHwInfoAlert>();
     }
 
-    internal sealed class LegacyHwInfoAlert
+    public sealed class LegacyHwInfoAlert
     {
         public string Name { get; set; }
         public double Value { get; set; }
@@ -42,18 +42,18 @@ namespace ITSeti.Maintenance.Win7
     {
         private static readonly Regex NumberPattern = new Regex(@"[-+]?\d+(?:[\.,]\d+)?", RegexOptions.Compiled);
         private static readonly object SessionGate = new object();
-        private static readonly TimeSpan CacheLifetime = TimeSpan.FromMinutes(2);
+        private static readonly TimeSpan CacheLifetime = TimeSpan.FromSeconds(90);
         private static readonly TimeSpan SessionLifetime = TimeSpan.FromHours(10);
         private static readonly TimeSpan ErrorLogInterval = TimeSpan.FromMinutes(5);
         private const int VoltageWindowSize = 7;
         private const int MinimumVoltageSamples = 3;
         private static readonly Dictionary<string, Queue<double>> VoltageSamples = new Dictionary<string, Queue<double>>(StringComparer.OrdinalIgnoreCase);
-        private static readonly Regex Rail12Pattern = new Regex(@"(?<![a-z0-9])\+?\s*12(?:[.,]0{1,2})?\s*v(?![a-z0-9])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        private static readonly Regex Rail5Pattern = new Regex(@"(?<![a-z0-9])\+?\s*5(?:[.,]0{1,2})?\s*v(?:s\s*b)?(?![a-z0-9])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        private static readonly Regex Rail3Pattern = new Regex(@"(?<![a-z0-9])\+?\s*3[.,]3\s*v(?![a-z0-9])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         private static DateTime sessionStartedUtc;
         private static Process sensorProcess;
         private static DateTime nextStartAttemptUtc;
+        private static DateTimeOffset nextRecoveryUtc;
+        private static int missingMemoryReads;
+        private static int staleSourceReads;
         private static DateTime nextErrorLogUtc;
 
         private static string CachePath
@@ -75,7 +75,7 @@ namespace ITSeti.Maintenance.Win7
             lock (SessionGate)
             {
                 if(sensorProcess != null){try {if(!sensorProcess.HasExited) sensorProcess.Kill();}catch(InvalidOperationException){} sensorProcess.Dispose();sensorProcess=null;}
-                sessionStartedUtc = default(DateTime); nextStartAttemptUtc=default(DateTime);
+                sessionStartedUtc = default(DateTime); nextStartAttemptUtc=default(DateTime); missingMemoryReads=0; staleSourceReads=0;
             }
             ClearVoltageSamples();
             try { File.Delete(CachePath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
@@ -105,35 +105,9 @@ namespace ITSeti.Maintenance.Win7
                 snapshot.CpuTemperatureC = data.CpuTemperatureC;
                 snapshot.CpuSource = "HWiNFO · служба SYSTEM";
             }
-            AddTemperatureFinding(snapshot, data.CpuTemperatureC, 75, 85, "CPU");
-            AddTemperatureFinding(snapshot, data.VrmTemperatureC, 80, 95, "VRM");
-            AddTemperatureFinding(snapshot, data.PchTemperatureC, 70, 80, "PCH");
-            AddRailFinding(snapshot, data.Rail12V, 11.4, 12.6, 10.8, 13.2, "+12 В");
-            AddRailFinding(snapshot, data.Rail5V, 4.75, 5.25, 4.5, 5.5, "+5 В");
-            AddRailFinding(snapshot, data.Rail3V, 3.135, 3.465, 2.97, 3.63, "+3,3 В");
-            foreach (var alert in data.Alerts ?? new List<LegacyHwInfoAlert>())
-            {
-                var level = alert.IsCritical ? "критично" : "предупреждение";
-                snapshot.Findings.Add("HWiNFO " + level + ": " + alert.Name + " " + alert.Value.ToString("N2") + " " + (alert.Unit ?? "") +
-                    (string.IsNullOrWhiteSpace(alert.Status) ? "" : " (" + alert.Status + ")."));
-            }
-        }
-
-        private static void AddTemperatureFinding(LegacySnapshot snapshot, double? value, double warning, double critical, string name)
-        {
-            if (!value.HasValue) return;
-            if (value.Value >= critical) snapshot.Findings.Add("HWiNFO критично: " + name + " " + value.Value.ToString("N0") + " °C.");
-            else if (value.Value >= warning) snapshot.Findings.Add("HWiNFO предупреждение: " + name + " " + value.Value.ToString("N0") + " °C.");
-        }
-
-        private static void AddRailFinding(LegacySnapshot snapshot, double? value, double warningMin, double warningMax,
-            double criticalMin, double criticalMax, string name)
-        {
-            if (!value.HasValue) return;
-            if (value.Value < criticalMin || value.Value > criticalMax)
-                snapshot.Findings.Add("HWiNFO критично: напряжение " + name + " " + value.Value.ToString("N2") + " В.");
-            else if (value.Value < warningMin || value.Value > warningMax)
-                snapshot.Findings.Add("HWiNFO предупреждение: напряжение " + name + " " + value.Value.ToString("N2") + " В.");
+            snapshot.HwInfoCapturedAtUtc = data.CapturedAtUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+            snapshot.HwInfoAlerts = data.Alerts ?? new List<LegacyHwInfoAlert>();
+            LegacyDiagnosticAdapter.Apply(snapshot);
         }
 
         private static LegacyHwInfoData Read()
@@ -160,15 +134,56 @@ namespace ITSeti.Maintenance.Win7
                 }
                 if(sensorProcess != null && !sensorProcess.HasExited) ITSeti.HwInfoBridge.SensorReader.StartSensors(sensorProcess.Id);
                 var values=ITSeti.HwInfoBridge.SensorReader.Read();
-                var data=new LegacyHwInfoData{Source="HWiNFO Shared Memory",ToolVersion=ReadFileVersion(executable),CapturedAtUtc=DateTime.UtcNow};
+                var sourceTime = DateTimeOffset.MinValue;
+                try { if(values.Length != 0) sourceTime=DateTimeOffset.FromUnixTimeSeconds(values[0].SourceUnixTime); }
+                catch (ArgumentOutOfRangeException) { }
+                if (ITSeti.Maintenance.Core.HwInfoRecoveryPolicy.IsSourceTimestampStale(sourceTime, DateTimeOffset.UtcNow))
+                {
+                    staleSourceReads++;
+                    if (ITSeti.Maintenance.Core.HwInfoRecoveryPolicy.ShouldRestartStaleSource(staleSourceReads, DateTimeOffset.UtcNow, nextRecoveryUtc))
+                    {
+                        nextRecoveryUtc=DateTimeOffset.UtcNow.Add(ITSeti.Maintenance.Core.HwInfoRecoveryPolicy.MinimumRestartInterval);
+                        ResetSession();
+                        RecordReadError(new InvalidOperationException("HWiNFO вернул устаревшие данные; сеанс перезапущен."));
+                    }
+                    else RecordReadError(new InvalidOperationException("HWiNFO вернул устаревшую метку измерения; старые показания не публикуются."));
+                    return ReadCached();
+                }
+                staleSourceReads=0;
+                var data=new LegacyHwInfoData{Source="HWiNFO Shared Memory",ToolVersion=ReadFileVersion(executable),CapturedAtUtc=sourceTime.UtcDateTime};
                 foreach(var value in values) ApplyCsvValue(data,value.Name,value.Unit,value.Value);
+                missingMemoryReads = 0;
                 StabilizeVoltages(data);
                 WriteCache(data);
                 return data;
             }
             catch (Exception ex) when (IsRecoverableSensorError(ex))
             {
-                RecordReadError(ex);
+                if (ex is FileNotFoundException)
+                {
+                    missingMemoryReads++;
+                    if (ITSeti.Maintenance.Core.HwInfoRecoveryPolicy.ShouldRestart(missingMemoryReads, DateTimeOffset.UtcNow, nextRecoveryUtc))
+                    {
+                        var state = sensorProcess != null && !sensorProcess.HasExited
+                            ? ITSeti.HwInfoBridge.SensorReader.StartupState(sensorProcess.Id) : "process exited";
+                        nextRecoveryUtc = DateTimeOffset.UtcNow + ITSeti.Maintenance.Core.HwInfoRecoveryPolicy.MinimumRestartInterval;
+                        ResetSession();
+                        RecordReadError(new IOException("HWiNFO не создал Shared Memory; сеанс перезапущен. " + state + " " + ex.Message, ex.HResult));
+                    }
+                    else RecordReadError(ex);
+                }
+                else if (ex is InvalidDataException)
+                {
+                    staleSourceReads++;
+                    if (ITSeti.Maintenance.Core.HwInfoRecoveryPolicy.ShouldRestartStaleSource(staleSourceReads, DateTimeOffset.UtcNow, nextRecoveryUtc))
+                    {
+                        nextRecoveryUtc = DateTimeOffset.UtcNow.Add(ITSeti.Maintenance.Core.HwInfoRecoveryPolicy.MinimumRestartInterval);
+                        ResetSession();
+                        RecordReadError(new InvalidDataException("HWiNFO Shared Memory несколько циклов подряд была просрочена или повреждена; сеанс перезапущен.", ex));
+                    }
+                    else RecordReadError(ex);
+                }
+                else RecordReadError(ex);
                 return ReadCached();
             }
         }
@@ -178,7 +193,10 @@ namespace ITSeti.Maintenance.Win7
             try
             {
                 if (!File.Exists(CachePath) || DateTime.UtcNow - File.GetLastWriteTimeUtc(CachePath) > CacheLifetime) return null;
-                return new JavaScriptSerializer().Deserialize<LegacyHwInfoData>(File.ReadAllText(CachePath));
+                var data = new JavaScriptSerializer().Deserialize<LegacyHwInfoData>(File.ReadAllText(CachePath));
+                if (data == null) return null;
+                var age = DateTime.UtcNow - data.CapturedAtUtc.ToUniversalTime();
+                return age >= TimeSpan.FromSeconds(-60) && age <= CacheLifetime ? data : null;
             }
             catch (Exception ex) when (IsRecoverableSensorError(ex))
             {
@@ -247,26 +265,20 @@ namespace ITSeti.Maintenance.Win7
 
         private static void ApplyCsvValue(LegacyHwInfoData result, string name, string unit, double value)
         {
-            var lower = name.ToLowerInvariant();
-            if(lower.Contains("distance to") || lower.Contains("tjmax") || lower.Contains("thermal limit"))return;
-            if(value>0 && !unit.Contains("C") && (lower.Contains("thermal throttling") || lower.Contains("thermal trip") || lower.Contains("critical temperature")))
-                result.Alerts.Add(new LegacyHwInfoAlert{Name=name,Value=value,Unit=unit,IsCritical=true});
-            if(unit.Contains("%") && lower.Contains("physical memory load")){result.MemoryLoadPercent=value;return;}
-            if (unit.Contains("%") && (lower.Contains("cpu") || lower.Contains("processor") || lower.Contains("процессор")) &&
-                (lower.Contains("load") || lower.Contains("usage") || lower.Contains("util") || lower.Contains("загруз") || lower.Contains("использ")))
-            {if(lower.Contains("total cpu usage") || !result.CpuLoadPercent.HasValue)result.CpuLoadPercent=value;}
-            else if ((unit.IndexOf("c", StringComparison.OrdinalIgnoreCase) >= 0 || lower.Contains("temperature") || lower.Contains("temp") || lower.Contains("температур")) &&
-                (lower.Contains("vrm") || lower.Contains("mos") || lower.Contains("vr loop"))) result.VrmTemperatureC = Max(result.VrmTemperatureC, value);
-            else if ((unit.IndexOf("c", StringComparison.OrdinalIgnoreCase) >= 0 || lower.Contains("temperature") || lower.Contains("temp") || lower.Contains("температур")) &&
-                (lower.Contains("pch") || lower.Contains("chipset") || lower.Contains("southbridge") || lower.Contains("platform controller") || lower.Contains("чипсет"))) result.PchTemperatureC = Max(result.PchTemperatureC, value);
-            else if ((unit.IndexOf("c", StringComparison.OrdinalIgnoreCase) >= 0 || lower.Contains("temperature") || lower.Contains("temp") || lower.Contains("температур")) &&
-                (lower.Contains("cpu") || lower.Contains("processor") || lower.Contains("package") || lower.Contains("tctl") || lower.Contains("tdie") || lower.Contains("процессор"))) result.CpuTemperatureC = Max(result.CpuTemperatureC, value);
-            else if (unit.Trim().Equals("V", StringComparison.OrdinalIgnoreCase) || lower.Contains("voltage") || lower.Contains(" vcore"))
+            var category = ITSeti.Maintenance.Core.HwInfoSensorPolicy.Classify(name, unit);
+            if (category == null || !ITSeti.Maintenance.Core.HwInfoSensorPolicy.IsValidValue(category, value)) return;
+            switch (category)
             {
-                if (Rail3Pattern.IsMatch(lower)) SetRail(result, "Rail3V", value);
-                else if (Rail12Pattern.IsMatch(lower)) SetRail(result, "Rail12V", value);
-                else if (Rail5Pattern.IsMatch(lower)) SetRail(result, "Rail5V", value);
-                else if (lower.Contains("vcore") || lower.Contains("vsoc") || lower.Contains("vsc") || lower.Contains("cpu core")) result.CpuVoltageV = value;
+                case "CpuLoad": result.CpuLoadPercent = value; break;
+                case "MemoryLoad": result.MemoryLoadPercent = value; break;
+                case "CpuTemperature": result.CpuTemperatureC = Max(result.CpuTemperatureC, value); break;
+                case "VrmTemperature": result.VrmTemperatureC = Max(result.VrmTemperatureC, value); break;
+                case "PchTemperature": result.PchTemperatureC = Max(result.PchTemperatureC, value); break;
+                case "CpuVoltage": result.CpuVoltageV = Max(result.CpuVoltageV, value); break;
+                case "Rail12V": case "Rail5V": case "Rail3V": SetRail(result, category, value); break;
+                case "HardwareAlarm":
+                    if (value == 1) result.Alerts.Add(new LegacyHwInfoAlert { Name = name, Value = value, Unit = unit, IsCritical = true });
+                    break;
             }
         }
 
@@ -314,27 +326,15 @@ namespace ITSeti.Maintenance.Win7
                 if (label != null && value.HasValue)
                 {
                     var name = string.IsNullOrWhiteSpace(context) ? label : context + " / " + label;
-                    var lower = name.ToLowerInvariant();
-                    var sensorStatus = Text(dictionary, "status", "state", "health", "condition", "severity", "alarm", "alert");
-                    var isCritical = Flag(dictionary, "critical", "isCritical", "criticalAlarm", "isCriticalAlarm") || IsCriticalStatus(sensorStatus);
-                    var isWarning = Flag(dictionary, "warning", "isWarning", "warningAlarm", "isWarningAlarm") || IsWarningStatus(sensorStatus);
-                    if (isCritical || isWarning)
-                        result.Alerts.Add(new LegacyHwInfoAlert { Name = name, Value = value.Value, Unit = unit, Status = sensorStatus, IsWarning = isWarning, IsCritical = isCritical });
-                    if ((unit.IndexOf("c", StringComparison.OrdinalIgnoreCase) >= 0 || lower.Contains("temperature") || lower.Contains("temp")) &&
-                        (lower.Contains("cpu") || lower.Contains("processor") || lower.Contains("package") || lower.Contains("tctl") || lower.Contains("tdie")))
-                        result.CpuTemperatureC = Max(result.CpuTemperatureC, value);
-                    else if ((unit.IndexOf("c", StringComparison.OrdinalIgnoreCase) >= 0 || lower.Contains("temperature") || lower.Contains("temp")) &&
-                        (lower.Contains("vrm") || lower.Contains("mos") || lower.Contains("vr loop")))
-                        result.VrmTemperatureC = Max(result.VrmTemperatureC, value);
-                    else if ((unit.IndexOf("c", StringComparison.OrdinalIgnoreCase) >= 0 || lower.Contains("temperature") || lower.Contains("temp")) &&
-                        (lower.Contains("pch") || lower.Contains("chipset") || lower.Contains("southbridge") || lower.Contains("platform controller")))
-                        result.PchTemperatureC = Max(result.PchTemperatureC, value);
-                    else if (unit.Trim().Equals("V", StringComparison.OrdinalIgnoreCase) || lower.Contains("voltage") || lower.Contains(" vcore"))
+                    var category = ITSeti.Maintenance.Core.HwInfoSensorPolicy.Classify(name, unit);
+                    if (category != null && ITSeti.Maintenance.Core.HwInfoSensorPolicy.IsValidValue(category, value.Value))
                     {
-                        if (Rail3Pattern.IsMatch(lower)) SetRail(result, "Rail3V", value.Value);
-                        else if (Rail12Pattern.IsMatch(lower)) SetRail(result, "Rail12V", value.Value);
-                        else if (Rail5Pattern.IsMatch(lower)) SetRail(result, "Rail5V", value.Value);
-                        else if (lower.Contains("vcore") || lower.Contains("vcc") || lower.Contains("vsoc") || lower.Contains("vsc") || lower.Contains("cpu core")) result.CpuVoltageV = value;
+                        ApplyCsvValue(result, name, unit, value.Value);
+                        var sensorStatus = Text(dictionary, "status", "state", "health", "condition", "severity", "alarm", "alert");
+                        var critical = Flag(dictionary, "critical", "isCritical", "criticalAlarm", "isCriticalAlarm") || IsCriticalStatus(sensorStatus);
+                        var warning = Flag(dictionary, "warning", "isWarning", "warningAlarm", "isWarningAlarm") || IsWarningStatus(sensorStatus);
+                        if ((critical || warning) && category != "HardwareAlarm")
+                            result.Alerts.Add(new LegacyHwInfoAlert { Name = name, Value = value.Value, Unit = unit, Status = sensorStatus, IsWarning = warning, IsCritical = critical });
                     }
                 }
                 foreach (var item in dictionary) Walk(item.Value, string.IsNullOrWhiteSpace(context) ? item.Key : context + " / " + item.Key, result);

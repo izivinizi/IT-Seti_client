@@ -74,7 +74,7 @@ namespace ITSeti.Maintenance.Win7
             RegisterTask(service, root, BenchmarkTaskRunner.TaskName, "--collect-benchmark", "PT5M", "Тест системного диска DiskSpd");
             RegisterTask(service, root, BenchmarkTaskRunner.ScheduledTaskName, "--collect-benchmark-scheduled", "PT5M", "Плановый тест системного диска DiskSpd");
             RegisterTask(service, root, SystemCleanupTaskRunner.TaskName, "--cleanup-system", "PT30M", "Очистка системных обновлений и пакетов драйверов");
-            RegisterTask(service, root, ScheduledCheckRunner.FullTaskName, "--scheduled-full", "PT2H", "Единая плановая полная проверка и SFC раз в 60 дней", 1);
+            RegisterTask(service, root, ScheduledCheckRunner.FullTaskName, "--scheduled-full", "PT2H", "Единая плановая полная проверка и SFC раз в 10 дней", 1);
             RegisterTask(service, root, "ITSeti-Maintenance-Win7-Upload", "--upload-reports", "PT2M", "Отправка диагностических отчётов на сервер");
             RegisterTask(service, root, "ITSeti-Maintenance-Win7-Update", "--update-application", "PT20M", "Фоновая проверка и установка обновления приложения");
             var probeToken=Guid.NewGuid().ToString("N");

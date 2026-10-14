@@ -15,23 +15,35 @@ public sealed class TicketUpdateMonitor : IDisposable
     private readonly string supportPath;
     private readonly string statePath;
     private readonly HttpClient http;
-    private readonly bool ownsClient;
+    private readonly TimeSpan requestTimeout;
+    private readonly Action<IReadOnlyList<TicketUpdateMessage>>? onIncomingMessages;
 
     public string StatePath => statePath;
 
-    public TicketUpdateMonitor(string? dataRoot = null, HttpMessageHandler? handler = null)
+    public TicketUpdateMonitor(string? dataRoot = null, HttpMessageHandler? handler = null, TimeSpan? requestTimeout = null,
+        Action<IReadOnlyList<TicketUpdateMessage>>? onIncomingMessages = null)
     {
         this.dataRoot = dataRoot ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance");
         supportPath = Path.Combine(this.dataRoot, "server-support.json");
         statePath = Path.Combine(this.dataRoot, "Service", "ticket-updates.json");
-        http = handler is null ? new HttpClient { Timeout = TimeSpan.FromSeconds(15) } : new HttpClient(handler, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(15) };
-        ownsClient = true;
+        this.requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(15);
+        this.onIncomingMessages = onIncomingMessages;
+        if (this.requestTimeout <= TimeSpan.Zero || this.requestTimeout.TotalMilliseconds > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(requestTimeout));
+        http = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
+        http.Timeout = Timeout.InfiniteTimeSpan;
     }
 
     public async Task<TimeSpan> PollAsync(CancellationToken cancellationToken = default)
     {
         var config = ReadSupportConfiguration();
         if (config is null) return Timeout.InfiniteTimeSpan;
+
+        // ResponseHeadersRead ends HttpClient's own timeout at the headers. Keep
+        // a deadline through body parsing so a stalled server cannot block polling forever.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(requestTimeout);
+        cancellationToken = deadline.Token;
 
         var state = ReadState(config.DeviceId);
         var url = new Uri(config.ServerUrl, "api/v1/ticket-updates");
@@ -62,6 +74,7 @@ public sealed class TicketUpdateMonitor : IDisposable
         var cursorId = root.GetProperty("cursorId").GetGuid();
         var messages = (state.Messages ?? []).TakeLast(500).ToList();
         var knownIds = messages.Select(message => message.Id).ToHashSet();
+        var incoming = new List<TicketUpdateMessage>();
 
         if (state.Cursor is not null)
         {
@@ -70,14 +83,17 @@ public sealed class TicketUpdateMonitor : IDisposable
                 var id = item.GetProperty("id").GetGuid();
                 if (!knownIds.Add(id)) continue;
                 var title = item.GetProperty("title").GetString();
-                messages.Add(new TicketUpdateMessage(id, string.IsNullOrWhiteSpace(title) ? "Заявка" : title.Trim(),
-                    item.GetProperty("createdAt").GetDateTimeOffset()));
+                var message = new TicketUpdateMessage(id, string.IsNullOrWhiteSpace(title) ? "Заявка" : title.Trim(),
+                    item.GetProperty("createdAt").GetDateTimeOffset());
+                messages.Add(message);
+                incoming.Add(message);
             }
         }
 
         var next = new TicketUpdateState(config.DeviceId, cursorValue, cursorId, activeCount,
             DateTimeOffset.UtcNow, messages.TakeLast(500).ToArray());
         await WriteStateAsync(next, cancellationToken);
+        if (incoming.Count > 0) onIncomingMessages?.Invoke(incoming);
         if (hasMore) return TimeSpan.FromSeconds(1);
         return activeCount > 0 ? TimeSpan.FromSeconds(30) : Timeout.InfiniteTimeSpan;
     }
@@ -136,10 +152,7 @@ public sealed class TicketUpdateMonitor : IDisposable
         }
     }
 
-    public void Dispose()
-    {
-        if (ownsClient) http.Dispose();
-    }
+    public void Dispose() => http.Dispose();
 
     private sealed record TicketSupportConfiguration(Uri ServerUrl, string DeviceId, string SupportKey);
 }

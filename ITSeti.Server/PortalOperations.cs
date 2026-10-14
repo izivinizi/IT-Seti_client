@@ -8,30 +8,17 @@ public static class PortalOperations
 {
     public static void Map(RouteGroupBuilder admin)
     {
-        admin.MapGet("/computer-tree", async (NpgsqlDataSource db, long? companyId) =>
-        {
-            await using var connection = await db.OpenConnectionAsync();
-            await using var query = new NpgsqlCommand(companyId.HasValue ? """
-                SELECT s.id,s.name,s.address,count(d.id) FROM service_objects s
-                LEFT JOIN devices d ON d.service_object_id=s.id AND d.company_id=@company
-                WHERE s.company_id=@company AND s.active GROUP BY s.id,s.name,s.address
-                UNION ALL SELECT NULL,'Без объекта',NULL,count(*) FROM devices WHERE company_id=@company AND service_object_id IS NULL HAVING count(*)>0
-                ORDER BY 2
-                """ : """
-                SELECT c.id,c.name,NULL::text,count(d.id) FROM companies c LEFT JOIN devices d ON d.company_id=c.id
-                WHERE c.active GROUP BY c.id,c.name ORDER BY c.name
-                """, connection);
-            if (companyId.HasValue) query.Parameters.AddWithValue("company", companyId.Value);
-            var items = new List<object>();
-            await using var reader = await query.ExecuteReaderAsync();
-            while (await reader.ReadAsync()) items.Add(new { id = reader.IsDBNull(0) ? (long?)null : reader.GetInt64(0),
-                name = reader.GetString(1), address = reader.IsDBNull(2) ? null : reader.GetString(2), computers = reader.GetInt64(3) });
-            return Results.Ok(new { level = companyId.HasValue ? "sites" : "companies", items });
-        });
         admin.MapGet("/tickets/{id:guid}/conversation", async (Guid id, NpgsqlDataSource db) =>
         {
             await using var connection = await db.OpenConnectionAsync();
-            await using var query = new NpgsqlCommand("SELECT id,content,is_public,state,created_at,last_error FROM ticket_messages WHERE request_id=@id ORDER BY created_at,id LIMIT 500", connection);
+            await using var query = new NpgsqlCommand($"""
+                SELECT m.id,m.content,m.is_public,m.state,m.created_at,m.last_error
+                FROM ticket_messages m
+                WHERE m.request_id=@id AND EXISTS(
+                    SELECT 1 FROM ticket_requests t JOIN devices d ON d.id=t.device_id
+                    WHERE t.request_id=m.request_id AND {DeviceDisplayFilter.SqlPredicate})
+                ORDER BY m.created_at,m.id LIMIT 500
+                """, connection);
             query.Parameters.AddWithValue("id", id);
             await using var reader = await query.ExecuteReaderAsync();
             var rows = new List<object>();
@@ -44,9 +31,11 @@ public static class PortalOperations
             if (body.Id == Guid.Empty || string.IsNullOrWhiteSpace(body.Content) || body.Content.Length > 5000)
                 return Results.BadRequest(new { error="Укажите текст ответа до 5000 символов." });
             await using var connection = await db.OpenConnectionAsync();
-            await using var query = new NpgsqlCommand("""
+            await using var query = new NpgsqlCommand($"""
                 INSERT INTO ticket_messages(id,request_id,direction,content,is_public,state)
-                SELECT @message,@id,'engineer',@text,@public,'queued' WHERE EXISTS(SELECT 1 FROM ticket_requests WHERE request_id=@id)
+                SELECT @message,@id,'engineer',@text,@public,'queued' WHERE EXISTS(
+                    SELECT 1 FROM ticket_requests t JOIN devices d ON d.id=t.device_id
+                    WHERE t.request_id=@id AND {DeviceDisplayFilter.SqlPredicate})
                 ON CONFLICT(id) DO NOTHING
                 """, connection);
             query.Parameters.AddWithValue("message", body.Id);
@@ -68,9 +57,10 @@ public static class PortalOperations
             if (body.Id == Guid.Empty || body.Target is not ("completed" or "cancelled")) return Results.BadRequest();
             await using var connection = await db.OpenConnectionAsync();
             await using var transaction = await connection.BeginTransactionAsync();
-            await using var query = new NpgsqlCommand("""
+            await using var query = new NpgsqlCommand($"""
                 INSERT INTO ticket_actions(id,request_id,target) SELECT @action,@id,@target
-                WHERE EXISTS(SELECT 1 FROM ticket_requests WHERE request_id=@id) ON CONFLICT(id) DO NOTHING
+                WHERE EXISTS(SELECT 1 FROM ticket_requests t JOIN devices d ON d.id=t.device_id
+                    WHERE t.request_id=@id AND {DeviceDisplayFilter.SqlPredicate}) ON CONFLICT(id) DO NOTHING
                 """, connection, transaction);
             query.Parameters.AddWithValue("action", body.Id);
             query.Parameters.AddWithValue("id", id);

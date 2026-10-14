@@ -3,6 +3,7 @@ $ErrorActionPreference='Stop'
 $connectSource=[IO.File]::ReadAllText((Join-Path $Root 'Connect-Server.ps1'),[Text.Encoding]::UTF8)
 $installSource=[IO.File]::ReadAllText((Join-Path $Root 'Install-Maintenance.ps1'),[Text.Encoding]::UTF8)
 $viewModelSource=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\MainViewModel.cs'),[Text.Encoding]::UTF8)
+$enrollmentClient=[IO.File]::ReadAllText((Join-Path $Root 'src\ITSeti.Maintenance.App\ServerEnrollmentClient.cs'),[Text.Encoding]::UTF8)
 if(!$connectSource.Contains("foreach (`$sidText in @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-32-545'))") -or
    !$connectSource.Contains("if (`$sidText -eq 'S-1-5-32-545')") -or
    !$connectSource.Contains('[Security.AccessControl.FileSystemRights]::Read')){
@@ -16,13 +17,19 @@ if($viewModelSource -notmatch 'public bool IsServerConnectionConfigured' -or
    $viewModelSource -notmatch 'ServerConnectionLabel => IsServerConnectionConfigured'){
     throw 'Server connection status is still coupled to company/site assignment.'
 }
+if(!$enrollmentClient.Contains('MaintenanceServiceClient.SaveEnrollmentAsync') -or
+   $enrollmentClient.Contains('File.WriteAllText(temporary, JsonSerializer.Serialize(value')) {
+    throw 'Enrollment keys must be persisted by the SYSTEM service, not written by the unprivileged app.'
+}
 $fixture=Join-Path ([IO.Path]::GetTempPath()) ('ITSeti-enrollment-'+[Guid]::NewGuid().ToString('N'))
 $directory=Join-Path $fixture 'ITSeti\Maintenance'
 [void][IO.Directory]::CreateDirectory($directory)
 try {
     [IO.File]::WriteAllText((Join-Path $directory 'server-device.json'),(@{serverUrl='https://it-seti.nylenz.ru';deviceId=[Guid]::NewGuid().ToString();deviceKey='fixture-not-a-secret'}|ConvertTo-Json))
     $start=New-Object Diagnostics.ProcessStartInfo
-    $start.FileName=Join-Path $PSHOME 'powershell.exe'
+    $windowsPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $portablePowerShell = Join-Path $PSHOME $(if ($PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' })
+    $start.FileName = if (Test-Path -LiteralPath $windowsPowerShell) { $windowsPowerShell } else { $portablePowerShell }
     $start.Arguments='-STA -NoProfile -ExecutionPolicy Bypass -File "'+(Join-Path (Resolve-Path $Root).Path 'Connect-Server.ps1')+'" -SkipIfConnected'
     $start.UseShellExecute=$false
     $start.CreateNoWindow=$true

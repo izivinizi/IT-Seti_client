@@ -117,7 +117,7 @@ function Initialize-LocalRuntime([string]$SourceRoot,[string]$SourceTools) {
     $session = New-LocalMaintenanceDirectory 'Sessions'
     $destination = Join-Path $session 'Service'
     New-Item -ItemType Directory -Path $destination | Out-Null
-    $files = @('Start.cmd','Start-Win7.cmd','Results.cmd','Results.ps1','Service.ps1','Service-Win7.ps1','Summary.ps1','DiskTools.ps1','Cleanup.ps1','Repair.ps1','Runtime.ps1','RepairWorker.ps1','AdminCredentials.ps1','UserCleanup.ps1','UserCleanupWorker.ps1','NativeDiskMark.cs','NativeUsb.cs','allowed-processes.json','allowed-processes-win7.txt','README.md','Set-WindowsAutomaticUpdates.ps1')
+    $files = @('Start.cmd','Start-Win7.cmd','Results.cmd','Results.ps1','Service.ps1','Service-Win7.ps1','Summary.ps1','DiskTools.ps1','Cleanup.ps1','Repair.ps1','Runtime.ps1','RepairWorker.ps1','AdminCredentials.ps1','UserCleanup.ps1','UserCleanupWorker.ps1','NativeDiskMark.cs','NativeUsb.cs','allowed-processes.json','allowed-processes-win7.txt','README.md','Set-WindowsAutomaticUpdates.ps1','Set-LocalPasswordsNeverExpire.ps1')
     $files += @('AdminBootstrap.ps1','EventWorker.ps1','Elevation.ps1','allowed-publishers.txt','DiskWorker.ps1','Start-Disks.cmd')
     foreach($file in $files) { Copy-Item -LiteralPath (Join-Path $SourceRoot $file) -Destination $destination -ErrorAction Stop }
     $localTools=Get-LocalToolCache $SourceTools

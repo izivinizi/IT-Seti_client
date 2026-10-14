@@ -27,8 +27,29 @@ try {
     if(!($confirmed | Where-Object { $_.SID -eq $account.SID })){
         throw "Не удалось подтвердить права администратора для $name."
     }
+    $machineSid=$account.SID.AccountDomainSid.Value
+    $builtInAdministratorSid=$machineSid+'-500'
+    $removed=@()
+    foreach($member in $confirmed){
+        $memberDomainSid=$member.SID.AccountDomainSid
+        if($member.ObjectClass -ne 'User' -or $null -eq $memberDomainSid -or
+           $memberDomainSid.Value -ne $machineSid -or $member.SID.Value -in @($account.SID.Value,$builtInAdministratorSid)) {continue}
+        Remove-LocalGroupMember -SID $groupSid -Member $member.SID.Value -ErrorAction Stop
+        $removed += $member.Name
+    }
+    $remaining=@(Get-LocalGroupMember -SID $groupSid -ErrorAction Stop)
+    if($remaining | Where-Object { $_.ObjectClass -eq 'User' -and $_.SID.AccountDomainSid -and
+        $_.SID.AccountDomainSid.Value -eq $machineSid -and
+        $_.SID.Value -notin @($account.SID.Value,$builtInAdministratorSid) }){
+        throw 'Не удалось удалить все остальные локальные пользовательские учётные записи из группы администраторов.'
+    }
+    $auditPath=Join-Path $env:ProgramData 'ITSeti\Maintenance\local-admin-cleanup.log'
+    $audit=New-Object 'System.Collections.Generic.List[string]'
+    $audit.Add(([DateTimeOffset]::UtcNow.ToString('O')+' KEPT '+$name))
+    foreach($removedName in $removed){$audit.Add(([DateTimeOffset]::UtcNow.ToString('O')+' REMOVED '+$removedName))}
+    [IO.File]::AppendAllLines($auditPath,$audit,[Text.Encoding]::UTF8)
     $note=if($created){'создана'}else{'уже была; пароль не менялся'}
-    [Console]::Out.WriteLine("Локальная учётная запись $env:COMPUTERNAME\$name $note, права администратора подтверждены.")
+    [Console]::Out.WriteLine("Локальная учётная запись $env:COMPUTERNAME\$name $note, права администратора подтверждены. Остальные локальные учётки удалены из группы; встроенный Administrator и доменные группы сохранены.")
 } catch {
     [Console]::Error.WriteLine($_.Exception.Message)
     exit 1

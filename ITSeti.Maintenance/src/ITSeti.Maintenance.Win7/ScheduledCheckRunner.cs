@@ -107,7 +107,7 @@ namespace ITSeti.Maintenance.Win7
             var path = Path.Combine(root,"full-check-baseline.txt");
             if (!File.Exists(path) || !DateTime.TryParse(File.ReadAllText(path), System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.RoundtripKind,out baseline)) return false;
-            return utcNow.ToUniversalTime() >= baseline.ToUniversalTime().AddDays(60);
+            return utcNow.ToUniversalTime() >= baseline.ToUniversalTime().AddDays(10);
         }
 
         internal static void SetFullBaseline(DateTime utcNow)

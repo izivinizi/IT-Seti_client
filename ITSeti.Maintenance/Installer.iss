@@ -3,7 +3,7 @@
 [Setup]
 AppId={{CFA7B53D-16A9-4D77-9D82-EE68369AB185}
 AppName=ИТ-Сети Обслуживание ПК
-AppVersion=2.3.9
+AppVersion=2.4.6
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance
 DefaultGroupName=ИТ-Сети
@@ -29,7 +29,6 @@ Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
 [Files]
 Source: "{#PackageRoot}\App\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PackageRoot}\Service\*"; DestDir: "{app}\Service"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#PackageRoot}\Notifier\*"; DestDir: "{app}\Notifier"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PackageRoot}\Tools\*"; DestDir: "{app}\Tools"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "Install-Maintenance.ps1"; DestDir: "{tmp}\ITSeti-Package"; Flags: ignoreversion deleteafterinstall
 Source: "Uninstall-Maintenance.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -176,6 +175,13 @@ var
   Code: Integer;
 begin
   Result := '';
+  if (not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-Process -Name ''ITSeti.Maintenance.TicketNotifier'' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; $deadline=(Get-Date).AddSeconds(10); do { if (-not (Get-Process -Name ''ITSeti.Maintenance.TicketNotifier'' -ErrorAction SilentlyContinue)) { exit 0 }; Start-Sleep -Milliseconds 200 } while ((Get-Date) -lt $deadline); exit 1"',
+    '', SW_HIDE, ewWaitUntilTerminated, Code)) or (Code <> 0) then
+  begin
+    Result := 'Не удалось закрыть уведомитель заявок перед обновлением. Закройте его и повторите установку.';
+    Exit;
+  end;
   if Exec(ExpandConstant('{sys}\sc.exe'), 'query ITSetiMaintenanceService', '', SW_HIDE,
     ewWaitUntilTerminated, Code) and (Code = 0) then
   begin

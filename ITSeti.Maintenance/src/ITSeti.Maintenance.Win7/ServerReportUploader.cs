@@ -37,7 +37,11 @@ namespace ITSeti.Maintenance.Win7
                 var errors=LegacyApplicationErrors.Read().Take(20).Select(error=>new {error.Id,error.OccurredAt,error.Component,error.Operation,error.Summary,error.ExceptionType}).ToArray();
                 report["HasApplicationErrors"]=errors.Length>0;
                 report["ApplicationErrors"]=errors;
-                if(snapshot.Kind=="Постоянный мониторинг")report["DiagnosticIssues"]=snapshot.Findings.Select(finding=>new {
+                if(snapshot.Kind != "Постоянный мониторинг")
+                {
+                    foreach (var field in LegacyDiagnosticAdapter.ReportFields(snapshot)) report[field.Key] = field.Value;
+                }
+                else report["DiagnosticIssues"]=snapshot.Findings.Select(finding=>new {
                     Title=System.Text.RegularExpressions.Regex.Replace(finding,@"\s+[-+]?\d+(?:[.,]\d+)?\s*(?:°C|%|В|ГБ)\.?\s*$",""),Detail=finding,Severity="Critical"
                 }).ToArray();
                 File.WriteAllText(temporary, serializer.Serialize(report), new UTF8Encoding(false));

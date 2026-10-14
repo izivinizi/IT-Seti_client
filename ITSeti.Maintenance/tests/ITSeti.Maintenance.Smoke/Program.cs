@@ -26,16 +26,18 @@ internal static class Program
     {
         Environment.SetEnvironmentVariable("ITSETI_ERROR_LOG_ROOT",Path.Combine(Path.GetTempPath(),"ITSeti-error-test-"+Guid.NewGuid().ToString("N")));
         Environment.SetEnvironmentVariable("ITSETI_DISABLE_REPORT_UPLOAD", "1");
+        if (args.Contains("--performance-contract")) return PerformanceContract.Run();
+        if (args.Contains("--refactor-contract")) return RefactorContract.Run();
         if (args.Contains("--installed-report-reader-contract")) return CheckInstalledReportReaderContract();
         if (args.Contains("--live-update-contract"))
         {
             var updateClient = new ServerApplicationUpdateClient();
             var release = updateClient.GetUpdateAsync(new Version(2, 3, 6)).GetAwaiter().GetResult();
-            if (release?.Version != new Version(2, 3, 7) || !release.DownloadUrl.StartsWith("https://it-seti.nylenz.ru/api/v1/packages/", StringComparison.Ordinal))
-                throw new Exception("Live server did not offer 2.3.9 for 2.3.6");
-            if (updateClient.GetUpdateAsync(new Version(2, 3, 7)).GetAwaiter().GetResult() is not null)
+            if (release?.Version != new Version(2, 4, 6) || !release.DownloadUrl.StartsWith("https://it-seti.nylenz.ru/api/v1/packages/", StringComparison.Ordinal))
+                throw new Exception("Live server did not offer 2.4.6 for 2.3.6");
+            if (updateClient.GetUpdateAsync(new Version(2, 4, 6)).GetAwaiter().GetResult() is not null)
                 throw new Exception("Live server offers reinstall of already-current version");
-            Console.WriteLine("PASS live server: 2.3.6 receives 2.3.9, 2.3.9 is current, authenticated package URL validated");
+            Console.WriteLine("PASS live server: 2.3.6 receives 2.4.6, 2.4.6 is current, authenticated package URL validated");
             return 0;
         }
         if (args.Contains("--service-concurrency-contract"))
@@ -43,6 +45,12 @@ internal static class Program
             var type = System.Reflection.Assembly.Load("ITSeti.Maintenance.Service")
                 .GetType("ITSeti.Maintenance.Service.MaintenanceServiceCoordinator")!;
             var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var groupMethod = type.GetMethod("OperationGroup", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+            var maintenanceGroups = new[] { MaintenanceServiceOperation.FullCheck, MaintenanceServiceOperation.Cleanup,
+                MaintenanceServiceOperation.Repair, MaintenanceServiceOperation.ScheduledFullCheck }
+                .Select(operation => (string)groupMethod.Invoke(null, [operation])!).Distinct(StringComparer.Ordinal).ToArray();
+            if (maintenanceGroups.Length != 1)
+                throw new Exception("Windows diagnostics, cleanup and repair must share one exclusive operation group");
             using var coordinator = (IDisposable)Activator.CreateInstance(type, [null, null, null])!;
             var active = (System.Collections.Concurrent.ConcurrentDictionary<MaintenanceServiceOperation, Process>)
                 type.GetField("running", flags)!.GetValue(coordinator)!;
@@ -55,14 +63,19 @@ internal static class Program
             try
             {
                 active.TryAdd(MaintenanceServiceOperation.ScheduledFullCheck, fixture);
+                var clientType = type.Assembly.GetType("ITSeti.Maintenance.Service.ServiceClientIdentity")!;
+                var clientIdentity = Activator.CreateInstance(clientType,
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic,
+                    null, [true, Environment.ProcessId, Process.GetCurrentProcess().SessionId], null)!;
                 object Call(string command) => type.GetMethod("HandleRequest", flags)!.Invoke(coordinator,
-                    [new MaintenanceServiceRequest(command, MaintenanceServiceOperation.FullCheck), false])!;
+                    [new MaintenanceServiceRequest(command, MaintenanceServiceOperation.FullCheck), clientIdentity])!;
                 var joined = Call("start");
                 if (!((string)joined.GetType().GetProperty("Message")!.GetValue(joined)!).Contains("Присоедин"))
                     throw new Exception("Running full check was queued instead of joined");
-                type.GetField("queuedDiagnostic", flags)!.SetValue(coordinator, MaintenanceServiceOperation.FullCheck);
+                var queue = (OperationQueue<MaintenanceServiceOperation>)type.GetField("operations", flags)!.GetValue(coordinator)!;
+                queue.Enqueue(MaintenanceServiceOperation.FullCheck, "diagnostics");
                 Call("stop");
-                if (!fixture.WaitForExit(3000) || type.GetField("queuedDiagnostic", flags)!.GetValue(coordinator) is not null)
+                if (!fixture.WaitForExit(3000) || queue.Pending.Count != 0)
                     throw new Exception("Stop did not terminate active scheduled check and clear queue");
                 if ((bool)type.GetMethod("HasRunningDiagnostic", flags)!.Invoke(coordinator, null)!)
                     throw new Exception("Exited process still blocks checks");
@@ -74,6 +87,86 @@ internal static class Program
                 active.Clear();
                 if (!fixture.HasExited) fixture.Kill(entireProcessTree: true);
             }
+        }
+        if (args.Contains("--interactive-package-contract"))
+        {
+            var assembly = System.Reflection.Assembly.Load("ITSeti.Maintenance.Service");
+            var type = assembly.GetType("ITSeti.Maintenance.Service.MaintenanceServiceCoordinator")!;
+            var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+            var validate = type.GetMethod("ValidateInteractivePackage", flags)!;
+            var valid = new ServerSoftwarePackage(Guid.NewGuid(), "custom_app", "1.0.0", "windows",
+                new string('A', 64), 123, "installer.exe", "Custom App");
+            if ((string)validate.Invoke(null, [valid])! != ".exe")
+                throw new Exception("Valid catalog installer was rejected");
+            foreach (var invalid in new[]
+            {
+                valid with { FileName = "..\\outside.exe" },
+                valid with { FileName = "installer.ps1" },
+                valid with { SizeBytes = 1_073_741_825 },
+                valid with { Sha256 = "bad" }
+            })
+            {
+                try { validate.Invoke(null, [invalid]); throw new Exception("Unsafe catalog installer metadata was accepted"); }
+                catch (System.Reflection.TargetInvocationException) { }
+            }
+            using var coordinator = (IDisposable)Activator.CreateInstance(type, [null, null, null])!;
+            var clientType = assembly.GetType("ITSeti.Maintenance.Service.ServiceClientIdentity")!;
+            var identity = Activator.CreateInstance(clientType,
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic,
+                null, [true, Environment.ProcessId, Process.GetCurrentProcess().SessionId], null)!;
+            var response = type.GetMethod("HandleRequest", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(coordinator, [new MaintenanceServiceRequest("install-package", MaintenanceServiceOperation.OpenServerPackage,
+                    Guid.NewGuid().ToString("D"), Guid.NewGuid().ToString("N"), Process.GetCurrentProcess().SessionId), identity])!;
+            if ((bool)response.GetType().GetProperty("Success")!.GetValue(response)!)
+                throw new Exception("Unauthenticated client launched a SYSTEM installer");
+            Console.WriteLine("PASS interactive installer validates catalog metadata and requires engineer authorization");
+            return 0;
+        }
+        if (args.Contains("--service-hwinfo-stall-contract"))
+        {
+            var type = System.Reflection.Assembly.Load("ITSeti.Maintenance.Service")
+                .GetType("ITSeti.Maintenance.Service.MaintenanceServiceCoordinator")!;
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            using var coordinator = (IDisposable)Activator.CreateInstance(type, [null, null, null])!;
+            var pending = new TaskCompletionSource<HwInfoSnapshot?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var readField = type.GetField("hwInfoReadTask", flags)!;
+            readField.SetValue(coordinator, pending.Task);
+            var readMethod = type.GetMethod("ReadHwInfoWithTimeoutAsync", flags)!;
+            var first = (Task<HwInfoSnapshot?>)readMethod.Invoke(coordinator, [CancellationToken.None])!;
+            var second = (Task<HwInfoSnapshot?>)readMethod.Invoke(coordinator, [CancellationToken.None])!;
+            if (!first.IsCompletedSuccessfully || !second.IsCompletedSuccessfully || first.Result is not null || second.Result is not null ||
+                !ReferenceEquals(readField.GetValue(coordinator), pending.Task))
+                throw new Exception("A stuck HWiNFO read blocked the service loop or spawned another read.");
+            Console.WriteLine("PASS a stalled HWiNFO read is non-blocking and does not create overlapping readers");
+            return 0;
+        }
+        if (args.Contains("--service-live-snapshot-stall-contract"))
+        {
+            var type = System.Reflection.Assembly.Load("ITSeti.Maintenance.Service")
+                .GetType("ITSeti.Maintenance.Service.MaintenanceServiceCoordinator")!;
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            using var coordinator = (IDisposable)Activator.CreateInstance(type, [null, null, null])!;
+            var pending = new TaskCompletionSource<DiagnosticSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var oldSnapshot = new DiagnosticSnapshot(Guid.NewGuid(), DateTimeOffset.UtcNow.AddMinutes(-1), "old", 1, 1, 1, [], []);
+            var currentSnapshot = new DiagnosticSnapshot(Guid.NewGuid(), DateTimeOffset.UtcNow, "fresh", 2, 2, 1, [], []);
+            type.GetField("liveSnapshotTimeout", flags)!.SetValue(coordinator, TimeSpan.FromMilliseconds(25));
+            var taskField = type.GetField("liveSnapshotTask", flags)!;
+            var lastField = type.GetField("lastLiveSnapshot", flags)!;
+            var timedOutField = type.GetField("liveSnapshotTimedOut", flags)!;
+            taskField.SetValue(coordinator, pending.Task);
+            lastField.SetValue(coordinator, oldSnapshot);
+            var read = type.GetMethod("ReadLiveSnapshotWithTimeoutAsync", flags)!;
+            var staleResult = ((Task<DiagnosticSnapshot?>)read.Invoke(coordinator, [CancellationToken.None])!).GetAwaiter().GetResult();
+            if (!ReferenceEquals(staleResult, oldSnapshot) || !ReferenceEquals(taskField.GetValue(coordinator), pending.Task) ||
+                !(bool)timedOutField.GetValue(coordinator)!)
+                throw new Exception("Timed-out system monitoring did not preserve the last snapshot and single in-flight read.");
+            pending.SetResult(currentSnapshot);
+            var freshResult = ((Task<DiagnosticSnapshot?>)read.Invoke(coordinator, [CancellationToken.None])!).GetAwaiter().GetResult();
+            if (!ReferenceEquals(freshResult, currentSnapshot) || taskField.GetValue(coordinator) is not null ||
+                (bool)timedOutField.GetValue(coordinator)!)
+                throw new Exception("System monitoring did not recover after a previously stalled snapshot completed.");
+            Console.WriteLine("PASS stalled system snapshot does not block the service loop, overlap readers, or prevent recovery");
+            return 0;
         }
         if (args.Contains("--system-tools-contract"))
         {
@@ -135,11 +228,37 @@ internal static class Program
             Console.WriteLine("PASS company/site selection, address, no-site, single-site, invalid search and Save state");
             return 0;
         }
+        if (args.Contains("--hwinfo-cache-replay"))
+        {
+            var cached = JsonSerializer.Deserialize<HwInfoSnapshot>(File.ReadAllText(HwInfoReader.CachePath))!;
+            var values = cached.Sensors.Select((s, i) => new ITSeti.HwInfoBridge.SensorValue { Name = s.Name, Unit = s.Unit, Value = s.RawValue ?? s.Value, ReadingId = (uint)i });
+            var selected = HwInfoReader.MapReadings(values);
+            var replay = cached with { Sensors = selected };
+            if (replay.CpuTemperatureC is not (>5 and <150) || replay.CpuLoadPercent is not (>=0 and <=100)) throw new Exception("Real sensor replay lost CPU readings");
+            if (selected.Any(s => s.Name.Contains("GPU", StringComparison.OrdinalIgnoreCase))) throw new Exception("GPU contaminated main sensor set");
+            Console.WriteLine($"PASS cache replay (not direct shared-memory read): {cached.Sensors.Count} -> {selected.Length} sensors; CPU {replay.CpuTemperatureC:N1} C, {replay.CpuLoadPercent:N1}%; 12V={replay.Rail12V:N3}; source cache time={cached.CapturedAtUtc:O}");
+            return 0;
+        }
         if(args.Contains("--hwinfo-live"))
         {
-            var snapshot=HwInfoReader.ReadCached(TimeSpan.FromSeconds(15)) ?? HwInfoReader.ReadAsync().GetAwaiter().GetResult() ?? throw new Exception("HWiNFO did not return live readings");
+            var snapshot=HwInfoReader.ReadSharedMemory() ?? throw new Exception("HWiNFO did not return live readings");
             if(snapshot.CpuTemperatureC is not (>5 and <120) || snapshot.CpuLoadPercent is not (>=0 and <=100))throw new Exception("CPU temperature/load missing from real HWiNFO reading");
             Console.WriteLine($"PASS live HWiNFO: CPU {snapshot.CpuTemperatureC:N0} C, load {snapshot.CpuLoadPercent:N0}%, VRM {snapshot.VrmTemperatureC:N0} C, PCH {snapshot.PchTemperatureC:N0} C, 12V {snapshot.Rail12V:N2}, 5V {snapshot.Rail5V:N2}, 3.3V {snapshot.Rail3V:N2}");
+            Console.WriteLine($"Source freshness: {snapshot.Freshness}; selected sensors: {snapshot.Sensors.Count}");
+            return 0;
+        }
+        if (args.Contains("--disk-latency-live"))
+        {
+            using var sampler = new DiskLatencySampler();
+            _ = sampler.Read();
+            Thread.Sleep(1500);
+            var sample = sampler.Read();
+            if (sample.ReadMs is null && sample.WriteMs is null)
+                throw new Exception("Windows did not return live PhysicalDisk average response counters");
+            if (sample.ReadMs is { } read && (!double.IsFinite(read) || read < 0 || read > 60000) ||
+                sample.WriteMs is { } write && (!double.IsFinite(write) || write < 0 || write > 60000))
+                throw new Exception("Windows returned an invalid disk response sample");
+            Console.WriteLine($"PASS live PDH disk response: read={sample.ReadMs?.ToString("N3") ?? "n/a"} ms; write={sample.WriteMs?.ToString("N3") ?? "n/a"} ms");
             return 0;
         }
         if(args.Contains("--error-log-contract"))
@@ -148,8 +267,17 @@ internal static class Program
             var duplicate=ApplicationErrorStore.Record("fixture","operation",new IOException("password=fixture-secret Authorization: Bearer fixture-token"));
             var entries=ApplicationErrorStore.ReadUnreported();
             if(error.Id!=duplicate.Id || entries.Count!=1 || entries[0].TechnicalDetails.Contains("fixture-secret") || entries[0].TechnicalDetails.Contains("fixture-token"))throw new Exception("Error deduplication/redaction failed");
+            var outboxFiles=Directory.GetFiles(ApplicationErrorStore.ServerOutboxPath,"*.json");
+            if(outboxFiles.Length!=1){throw new Exception("Application error was not queued for server delivery");}
+            var queued=File.ReadAllText(outboxFiles[0]);
+            if(!queued.Contains(error.Id.ToString()) || queued.Contains("fixture-secret") || queued.Contains("fixture-token"))throw new Exception("Server outbox entry is incomplete or contains a secret");
             ApplicationErrorStore.MarkReported(entries);
             if(ApplicationErrorStore.ReadUnreported().Count!=0)throw new Exception("Error report marker did not advance");
+            const string deniedPath = @"C:\ProgramData\ITSeti\Maintenance\fixture.json.tmp";
+            var denied = ApplicationErrorStore.Record("fixture", "access", new UnauthorizedAccessException($"Access to the path '{deniedPath}' is denied."));
+            if(!denied.Summary.Contains(deniedPath, StringComparison.Ordinal) ||
+                !ApplicationErrorStore.UserMessage(denied).Contains(deniedPath, StringComparison.Ordinal))
+                throw new Exception("The user-facing access-denied message hid the Windows path and reason");
             Console.WriteLine("PASS error log: details, redaction, duplicate suppression and report marker");return 0;
         }
         if (args.Contains("--ticket-polling"))
@@ -159,6 +287,7 @@ internal static class Program
             var device = Guid.NewGuid().ToString();
             var message = Guid.NewGuid();
             var handler = new TicketPollHandler();
+            var delivered = new List<TicketUpdateMessage>();
             Directory.CreateDirectory(rootPath);
             File.WriteAllText(supportPath, JsonSerializer.Serialize(new { serverUrl = "https://it-seti.nylenz.ru/", deviceId = device, supportKey = "fixture-support-key" }));
             string Batch(bool include, bool active = true, bool more = false) => JsonSerializer.Serialize(new {
@@ -168,12 +297,13 @@ internal static class Program
             try
             {
                 handler.Response = Batch(false);
-                using (var monitor = new TicketUpdateMonitor(rootPath, handler))
+                using (var monitor = new TicketUpdateMonitor(rootPath, handler, onIncomingMessages: updates => delivered.AddRange(updates)))
                 {
                     monitor.PollAsync().GetAwaiter().GetResult();
                     var baseline = JsonDocument.Parse(File.ReadAllText(monitor.StatePath)).RootElement;
                     if (baseline.GetProperty("activeCount").GetInt32() != 1 || baseline.GetProperty("messages").GetArrayLength() != 0)
                         throw new Exception("Initial poll did not establish a silent baseline");
+                    if (delivered.Count != 0) throw new Exception("Initial baseline emitted a user notification");
                     handler.Response = Batch(true);
                     monitor.PollAsync().GetAwaiter().GetResult();
                     monitor.PollAsync().GetAwaiter().GetResult();
@@ -181,6 +311,8 @@ internal static class Program
                     var queued = JsonDocument.Parse(savedState).RootElement.GetProperty("messages");
                     if (queued.GetArrayLength() != 1 || !handler.LastPath.Contains("since=") || !handler.LastPath.Contains("afterId="))
                         throw new Exception("New reply queueing or duplicate suppression failed");
+                    if (delivered.Count != 1 || delivered[0].Id != message)
+                        throw new Exception("New reply was not delivered exactly once to the notification callback");
                     handler.Response = "{}";
                     try { monitor.PollAsync().GetAwaiter().GetResult(); throw new Exception("Malformed poll unexpectedly succeeded"); }
                     catch (JsonException) { }
@@ -188,7 +320,7 @@ internal static class Program
                     handler.Response = Batch(true);
                     monitor.PollAsync().GetAwaiter().GetResult();
                     var afterRestart = JsonDocument.Parse(File.ReadAllText(monitor.StatePath)).RootElement.GetProperty("messages");
-                    if (afterRestart.GetArrayLength() != 1) throw new Exception("Restart repeated a queued notification");
+                    if (afterRestart.GetArrayLength() != 1 || delivered.Count != 1) throw new Exception("Restart repeated a queued notification");
                     handler.Response = Batch(false, false);
                     var delay = monitor.PollAsync().GetAwaiter().GetResult();
                     var completed = JsonDocument.Parse(File.ReadAllText(monitor.StatePath)).RootElement;
@@ -449,6 +581,48 @@ internal static class Program
             {
                 var userShell = (UIElement)window.FindName("UserShell")!;
                 var adminShell = (UIElement)window.FindName("AdminShell")!;
+                if (args.Contains("--readme-screenshots"))
+                {
+                    await Task.Delay(500);
+                    var now = DateTimeOffset.Now;
+                    var full = new FullDiagnosticDetails("Intel Core i7-13700", "NVIDIA GeForce RTX 4070", false,
+                        [new PhysicalDiskDetails("NVMe SSD", "SSD", "Healthy", 1280)],
+                        [new SmartDiskDetails("NVMe SSD", "Good", "C:", "SSD", "PCIe 4.0 x4", 1280)],
+                        [], [], 0, 0, false,
+                        new DiskBenchmark("C:", "NVMe", 1850, 1420, 2, "Completed", ""), "",
+                        ResourceSampling: new ResourceSampleSummary(7, 0, 0, 0, 0, 18, 31, 0, 0.2, 0.3, 400, 210, ""),
+                        MemoryType: "DDR5", CpuTemperatureC: 54);
+                    var demo = new DiagnosticSnapshot(Guid.NewGuid(), now, "DEMO-PC", 18,
+                        32UL * 1024 * 1024 * 1024, 22UL * 1024 * 1024 * 1024,
+                        [new DiskSnapshot("C:\\", 1_000_000_000_000, 530_000_000_000)], [], full,
+                        LastBootAt: now.AddHours(-7), WindowsEdition: "Windows 11 Pro", WindowsRelease: "24H2",
+                        WindowsBuild: 26100, CpuTemperatureC: 54, CpuTemperatureStatus: "HWiNFO · CPU Package",
+                        ActiveUptimeHours: 7, SystemDrive: "C:");
+                    window.ViewModel.Selected = demo;
+                    typeof(MainViewModel).GetField("identity", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                        .SetValue(window.ViewModel, new MachineIdentity("0042", "123-456-789-012", "123456789", ["192.168.1.50"]));
+                    typeof(MainViewModel).GetMethod("Notify", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                        .Invoke(window.ViewModel, [Array.Empty<string>()]);
+                    window.UpdateLayout();
+                    await Task.Delay(300);
+                    CapturePublicUserHome(window, Path.Combine(output, "user-home.png"));
+                    typeof(MainWindow).GetMethod("ConfigureEngineerShell",
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                        .Invoke(window, null);
+                    typeof(MainViewModel).GetField("serviceStatus", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                        .SetValue(window.ViewModel, "Служба работает · 2.4.6");
+                    typeof(MainViewModel).GetMethod("Notify", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                        .Invoke(window.ViewModel, [Array.Empty<string>()]);
+                    window.ViewModel.AdminInventoryInput = "0042";
+                    ((TextBlock)window.FindName("AdminComputerNameLabel")!).Text = "DEMO-PC";
+                    window.UpdateLayout();
+                    await Task.Delay(300);
+                    Capture(window, Path.Combine(output, "admin-overview.png"));
+                    Console.WriteLine("PASS README screenshots: synthetic computer data captured.");
+                    Console.WriteLine(output);
+                    window.Close();
+                    return;
+                }
                 if (userShell.Visibility != Visibility.Visible || adminShell.Visibility != Visibility.Collapsed)
                     throw new Exception("User mode is not the first screen");
                 if (((Grid)window.FindName("AdminUnlock")!).Visibility != Visibility.Collapsed)
@@ -626,8 +800,11 @@ internal static class Program
                     throw new Exception("Invalid Windows credentials did not produce an error");
                 if (adminShell.Visibility != Visibility.Collapsed || !window.IsVisible)
                     throw new Exception("Wrong admin password accepted or closed the user window");
-                password.Password="itseti";
-                Click(unlockButton);
+                // This UI fixture has no installed service. Password verification is covered by
+                // the service self-test; open the shell here to exercise its layout and bindings.
+                typeof(MainWindow).GetMethod("ConfigureEngineerShell",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .Invoke(window, null);
                 if (adminShell.Visibility != Visibility.Visible || userShell.Visibility != Visibility.Collapsed)
                     throw new Exception("Test engineer shell did not open");
                 if (window.FindName("ServerAssignmentButton") is not Button { IsEnabled: true })
@@ -723,7 +900,7 @@ internal static class Program
                 typeof(MainViewModel).GetField("identity", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                     .SetValue(window.ViewModel, new MachineIdentity("0042", "123-456-789-012", "123456789", []));
                 typeof(MainViewModel).GetMethod("Notify", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .Invoke(window.ViewModel, null);
+                    .Invoke(window.ViewModel, [Array.Empty<string>()]);
                 window.ViewModel.AdminInventoryInput = "0042";
                 ((TextBlock)window.FindName("AdminComputerNameLabel")!).Text = "DEMO-PC";
                 window.UpdateLayout();
@@ -887,9 +1064,9 @@ internal static class Program
               {"Name":"3.3 V Standby","Value":3.29,"Unit":"V"},
               {"Name":"CPU Core Voltage","Value":1.2,"Unit":"V"}]}
             """, "fixture");
-        if (duplicateRails?.Rail12V != 12.04 || duplicateRails.Rail5V != 5.02 || duplicateRails.Rail3V != 3.29 ||
+        if (duplicateRails?.Rail12V != 12.04 || duplicateRails.Rail5V != 0.73 || duplicateRails.Rail3V != 1.99 ||
             duplicateRails.Sensors.Any(sensor => sensor.Name == "CPU Core Voltage" && sensor.Category.StartsWith("Rail", StringComparison.Ordinal)))
-            throw new Exception("HWiNFO selected a non-nominal duplicate rail or classified CPU core voltage as a PSU rail");
+            throw new Exception("HWiNFO substituted a standby rail for a suspicious main rail or classified CPU core voltage as a PSU rail");
 
         HwInfoVoltageStabilizer.Reset();
         var voltageSample = new HwInfoSensorReading("+12V", 6.63, "V", "Rail12V");
@@ -933,6 +1110,10 @@ internal static class Program
         var current = new ServerApplicationUpdateClient(For(Payload("2.4.0", digest)), "https://unit.test/", "11111111-1111-1111-1111-111111111111", "device-key-test");
         if (await current.GetUpdateAsync(new Version(2, 4, 0, 0)) is not null)
             throw new Exception("Current server package was incorrectly offered as an update");
+
+        var revision = new ServerApplicationUpdateClient(For(Payload("7.7.7.3", digest)), "https://unit.test/", "11111111-1111-1111-1111-111111111111", "device-key-test");
+        if ((await revision.GetUpdateAsync(new Version(7, 7, 7)))?.Version != new Version(7, 7, 7, 3))
+            throw new Exception("The fourth version component must be compared (7.7.7.3 > 7.7.7.0)");
 
         var invalid = new ServerApplicationUpdateClient(For(Payload("2.4.0", "invalid")), "https://unit.test/", "11111111-1111-1111-1111-111111111111", "device-key-test");
         try
@@ -1087,6 +1268,15 @@ internal static class Program
             || !DiagnosticRules.GetFindings(snapshot with { Full = full with { Events = frequentKernelPower.ToList() } })
                 .Any(finding => finding.Contains("Критических событий в доступной выборке: 3", StringComparison.Ordinal)))
             throw new Exception("Three Kernel-Power 41 events with BugcheckCode 0 must be reported");
+        var smartFailure = new EventDetails("System", "Microsoft-Windows-DiskDiagnostic", 1, 1,
+            "2026-10-14T13:03:30.9905088+05:00", "Диагностика дисков Windows обнаружила ошибку S.M.A.R.T. на диске ST9320325AS (тома Z:\\).", 105);
+        var smartEventIssue = DiagnosticRules.GetUserIssues(snapshot with { Full = full with { Events = [smartFailure] } })
+            .Single(issue => issue.Title == "В журнале Windows найдены критические события");
+        if (!smartEventIssue.Detail.Contains("Microsoft-Windows-DiskDiagnostic", StringComparison.Ordinal)
+            || !smartEventIssue.Detail.Contains("№ 1", StringComparison.Ordinal)
+            || !smartEventIssue.Detail.Contains("+05:00", StringComparison.Ordinal)
+            || !smartEventIssue.Detail.Contains("ST9320325AS", StringComparison.Ordinal))
+            throw new Exception("Critical Windows event details must be visible in the user issue summary");
         if (DiagnosticRules.GetActionableEvents([kernelPowerNoise[0] with { Message = "BugcheckCode: 1" }]).Count != 1)
             throw new Exception("A nonzero Kernel-Power bugcheck must remain actionable");
         if (BugcheckCodeCatalog.All.Count < 379
@@ -1173,15 +1363,15 @@ internal static class Program
         if (!DiagnosticRules.GetUserIssues(cpu).Any(i => i.Title.Contains("Процессор"))) throw new Exception("Sustained CPU pressure missing");
         if (DiagnosticRules.GetUserIssues(cpu with { Full = full }).Any(i => i.Title.Contains("Процессор")))
             throw new Exception("One CPU sample flagged as sustained pressure");
-        var warmCpu = snapshot with { Full = full with { CpuTemperatureC = 75.1 } };
+        var warmCpu = snapshot with { Full = full with { CpuTemperatureC = 85.1 } };
         if (!DiagnosticRules.GetUserIssues(warmCpu).Any(issue => issue.Severity == "Warning" && issue.Title.Contains("температура"))
-            || DiagnosticRules.GetUserIssues(snapshot with { Full = full with { CpuTemperatureC = 74.9 } }).Any(issue => issue.Title.Contains("температура")))
+            || DiagnosticRules.GetUserIssues(snapshot with { Full = full with { CpuTemperatureC = 84.9 } }).Any(issue => issue.Title.Contains("температура")))
             throw new Exception("CPU temperature warning threshold failed");
-        var criticalCpu = snapshot with { Full = full with { CpuTemperatureC = 85 } };
+        var criticalCpu = snapshot with { Full = full with { CpuTemperatureC = 90 } };
         if (!DiagnosticRules.GetUserIssues(criticalCpu).Any(issue => issue.Severity == "Critical" && issue.Title.Contains("температура"))
-            || DiagnosticRules.GetUserIssues(snapshot with { Full = full with { CpuTemperatureC = 84.9 } }).Any(issue => issue.Severity == "Critical"))
+            || DiagnosticRules.GetUserIssues(snapshot with { Full = full with { CpuTemperatureC = 89.9 } }).Any(issue => issue.Severity == "Critical"))
             throw new Exception("CPU temperature critical threshold failed");
-        if (!DiagnosticRules.GetUserIssues(snapshot with { Full = null, CpuTemperatureC = 85 })
+        if (!DiagnosticRules.GetUserIssues(snapshot with { Full = null, CpuTemperatureC = 90 })
             .Any(issue => issue.Severity == "Critical" && issue.Title.Contains("температура")))
             throw new Exception("CPU temperature from the independent sensor reader was ignored");
         var pchWarning = snapshot with

@@ -25,6 +25,7 @@ public static class ApplicationErrorStore
         Environment.GetEnvironmentVariable("ITSETI_ERROR_LOG_ROOT") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance"), "Logs");
     public static readonly string JsonLogPath = Path.Combine(DirectoryPath, "application-errors.jsonl");
     public static readonly string TextLogPath = Path.Combine(DirectoryPath, "application-errors.log");
+    public static readonly string ServerOutboxPath = Path.Combine(DirectoryPath, "server-outbox");
     private static readonly string ReportMarkerPath = Path.Combine(DirectoryPath, "application-errors-report-marker.txt");
 
     public static ApplicationErrorEntry Record(string component, string operation, Exception exception, string? summary = null)
@@ -47,6 +48,7 @@ public static class ApplicationErrorStore
                 File.AppendAllText(TextLogPath,
                     $"[{entry.OccurredAt.ToLocalTime():yyyy-MM-dd HH:mm:ss}] {entry.Id:N} | {entry.Component} | {entry.Operation} | {entry.Summary}\r\n{entry.TechnicalDetails}\r\n\r\n",
                     new UTF8Encoding(false));
+                QueueForServer(entry);
                 TrimIfNeeded();
                 RecentDuplicates[key] = entry;
             }
@@ -105,10 +107,27 @@ public static class ApplicationErrorStore
         catch (JsonException) { return null; }
     }
 
+    private static void QueueForServer(ApplicationErrorEntry entry)
+    {
+        Directory.CreateDirectory(ServerOutboxPath);
+        var target = Path.Combine(ServerOutboxPath, entry.Id.ToString("N") + ".json");
+        var temporary = target + ".tmp";
+        try
+        {
+            File.WriteAllText(temporary, JsonSerializer.Serialize(entry, JsonOptions), new UTF8Encoding(false));
+            File.Move(temporary, target, true);
+        }
+        finally
+        {
+            try { File.Delete(temporary); } catch (IOException) { }
+        }
+    }
+
     private static string FriendlySummary(Exception exception) => exception switch
     {
         OperationCanceledException => "Операция была отменена.",
-        UnauthorizedAccessException => "Windows запретила доступ. Проверьте работу системной службы.",
+        UnauthorizedAccessException access => "Windows запретила доступ: " + access.Message +
+            " Проверьте права на указанную папку и системную службу обслуживания.",
         FileNotFoundException file => "Не найден обязательный файл" + (string.IsNullOrWhiteSpace(file.FileName) ? "." : $": {Path.GetFileName(file.FileName)}."),
         DirectoryNotFoundException => "Не найдена обязательная папка приложения.",
         System.Net.Http.HttpRequestException => "Не удалось получить ответ сервера.",

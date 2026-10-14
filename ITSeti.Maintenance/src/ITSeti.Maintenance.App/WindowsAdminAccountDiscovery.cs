@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using System.Management;
 
 namespace ITSeti.Maintenance.App;
 
@@ -8,6 +9,35 @@ internal sealed record AdminAccountAudit(string Status, IReadOnlyList<string> Un
 internal static class WindowsAdminAccountDiscovery
 {
     private const int ErrorMoreData = 234;
+
+    public static string ReadLocalPasswordExpiry()
+    {
+        try
+        {
+            using var search = new ManagementObjectSearcher("root\\cimv2",
+                "SELECT Name, PasswordExpires FROM Win32_UserAccount WHERE LocalAccount=TRUE AND (Name='Admin' OR Name='it-seti' OR Name='Administrator')");
+            using var accounts = search.Get();
+            var statuses = new List<string>();
+            foreach (ManagementObject account in accounts)
+            {
+                using (account)
+                {
+                    var name = Convert.ToString(account["Name"]);
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    var expires = account["PasswordExpires"];
+                    statuses.Add(name + ": " + (expires is bool value
+                        ? value ? "срок действия пароля ограничен" : "пароль бессрочный"
+                        : "срок действия пароля не определён"));
+                }
+            }
+            return statuses.Count == 0 ? "Локальная учётная запись администратора не найдена."
+                : "Пароль локального администратора: " + string.Join("; ", statuses);
+        }
+        catch (Exception ex) when (ex is ManagementException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return "Срок действия пароля администратора проверить не удалось: " + ex.Message;
+        }
+    }
 
     public static IReadOnlyList<string> FindCandidates() => ReadMembers()
         .Members.Where(member => member.SidUsage == 1 && !string.IsNullOrWhiteSpace(member.Name))
@@ -24,15 +54,22 @@ internal static class WindowsAdminAccountDiscovery
             return new($"Не удалось проверить состав локальной группы администраторов (код {result.Status}).", []);
 
         var unexpected = result.Members
-            .Where(member => member.SidUsage is 1 or 2 && !IsDesignatedAdminMember(member))
+            .Where(member => member.SidUsage is 1 or 2 && !IsDesignatedAdminMember(member) && !IsDomainMember(member.Name))
             .Select(member => member.Name)
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        var domainMembers = result.Members
+            .Where(member => member.SidUsage is 1 or 2 && IsDomainMember(member.Name))
+            .Select(member => member.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var domainStatus = domainMembers.Length == 0 ? "" : " Доменные участники группы: " + string.Join(", ", domainMembers) + ".";
         return new(unexpected.Length == 0
-            ? "Локальные администраторы: без замечаний."
-            : "Посторонние администраторы: " + string.Join(", ", unexpected), unexpected);
+            ? "Локальные администраторы: без замечаний." + domainStatus
+            : "Посторонние локальные администраторы: " + string.Join(", ", unexpected) + "." + domainStatus, unexpected);
     }
 
     public static bool IsCurrentAccountUnexpectedAdministrator()
@@ -40,6 +77,7 @@ internal static class WindowsAdminAccountDiscovery
         try
         {
             using var identity = WindowsIdentity.GetCurrent();
+            if (IsDomainMember(identity.Name)) return false;
             if (IsDesignatedLocalAdmin(identity.Name)) return false;
             var administratorsSid = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
             var principal = new WindowsPrincipal(identity);
@@ -52,6 +90,16 @@ internal static class WindowsAdminAccountDiscovery
 
     private static bool IsDesignatedLocalAdmin(string account)
         => IsDesignatedAdminMember(new Member(account, 1));
+
+    private static bool IsDomainMember(string account)
+    {
+        var separator = account.LastIndexOf('\\');
+        if (separator < 0) return false;
+        var authority = account[..separator];
+        return !authority.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase)
+            && !authority.Equals("BUILTIN", StringComparison.OrdinalIgnoreCase)
+            && !authority.Equals("NT AUTHORITY", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static bool IsDesignatedAdminMember(Member member)
     {

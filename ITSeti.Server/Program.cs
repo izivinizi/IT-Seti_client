@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading.RateLimiting;
 using ITSeti.Server;
 using Microsoft.AspNetCore.Authentication;
@@ -18,6 +19,8 @@ using Npgsql;
 using NpgsqlTypes;
 
 var builder = WebApplication.CreateBuilder(args);
+const long MaxPackageBytes = 1024L * 1024 * 1024;
+const long MaxPackageRequestBytes = MaxPackageBytes + 16L * 1024 * 1024;
 var connectionString = builder.Configuration.GetConnectionString("Database")
     ?? throw new InvalidOperationException("ConnectionStrings__Database is required.");
 var dataRoot = builder.Configuration["DataRoot"] ?? "/data";
@@ -55,10 +58,13 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
     options.AccessDeniedPath = "/login";
 });
 builder.Services.AddAuthorization();
-builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
-    options.MultipartBodyLengthLimit = 1024L * 1024 * 1024 + 16L * 1024 * 1024);
 builder.Services.AddRateLimiter(options =>
 {
+    options.AddConcurrencyLimiter("package-upload", limiter =>
+    {
+        limiter.PermitLimit = 1;
+        limiter.QueueLimit = 0;
+    });
     options.AddFixedWindowLimiter("login", limiter =>
     {
         limiter.PermitLimit = 5;
@@ -87,7 +93,7 @@ builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>
     options.KnownProxies.Clear();
     options.ForwardLimit = 1;
 });
-builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 1024L * 1024 * 1024 + 16L * 1024 * 1024);
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = MaxPackageRequestBytes);
 
 var app = builder.Build();
 await Database.InitializeAsync(dataSource, builder.Configuration, app.Services.GetRequiredService<PasswordHasher<PortalAdmin>>());
@@ -223,6 +229,8 @@ app.MapPost("/api/v1/enroll", async (HttpRequest request, EnrollRequest body, Np
             inventory_number=EXCLUDED.inventory_number,company_id=EXCLUDED.company_id,
             service_object_id=EXCLUDED.service_object_id,api_key_hash=EXCLUDED.api_key_hash,
             support_key_hash=EXCLUDED.support_key_hash,last_ip=EXCLUDED.last_ip,last_seen_at=now()
+        WHERE devices.company_id=EXCLUDED.company_id
+          AND devices.service_object_id IS NOT DISTINCT FROM EXCLUDED.service_object_id
         RETURNING id
         """, connection, transaction))
     {
@@ -236,7 +244,11 @@ app.MapPost("/api/v1/enroll", async (HttpRequest request, EnrollRequest body, Np
         insert.Parameters.AddWithValue("key", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))));
         insert.Parameters.AddWithValue("support", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(supportKey))));
         insert.Parameters.Add("ip", NpgsqlDbType.Text).Value = (object?)clientIp ?? DBNull.Value;
-        id = (Guid)(await insert.ExecuteScalarAsync())!;
+        var enrolledId = await insert.ExecuteScalarAsync();
+        if (enrolledId is not Guid existingOrNewId)
+            return diagnostics.Reject(request.HttpContext, 409, "manual_assignment_conflict",
+                "Компьютер уже привязан к другой компании или объекту. Измените привязку через администратора сервера.", body);
+        id = existingOrNewId;
     }
     await transaction.CommitAsync();
     diagnostics.Record(request.HttpContext, 200, "enrolled_or_existing_device_reused", body);
@@ -371,7 +383,7 @@ app.MapGet("/api/v1/assignment", async (HttpRequest request, NpgsqlDataSource db
     if (!await DeviceKeys.AuthenticateAsync(request, db) ||
         !Guid.TryParse(request.Headers[DeviceKeys.IdHeader].ToString(), out var deviceId)) return Results.Unauthorized();
     await using var connection = await db.OpenConnectionAsync();
-    await using var command = new NpgsqlCommand("""
+    await using var command = new NpgsqlCommand($"""
         SELECT d.company_id,d.service_object_id,c.name,s.name
         FROM devices d JOIN companies c ON c.id=d.company_id
         LEFT JOIN service_objects s ON s.id=d.service_object_id WHERE d.id=@id
@@ -812,7 +824,8 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
     var machine = JsonRead.String(report.RootElement, "ComputerName", "computerName") ?? "неизвестен";
     var os = JsonRead.String(report.RootElement, "WindowsEdition", "OsName", "osName");
     var version = JsonRead.String(report.RootElement, "WindowsRelease", "OsVersion", "osVersion");
-    var findings = Monitoring.CurrentIssues(report.RootElement).Where(i => i.Category == "finding")
+    var reportIssues = Monitoring.CurrentIssues(report.RootElement);
+    var findings = reportIssues.Where(i => i.Category == "finding")
         .Select(i => i.Detail).Distinct().ToArray();
     var inventory = JsonRead.String(report.RootElement, "InventoryNumber", "inventoryNumber");
     var rmsId = JsonRead.String(report.RootElement, "RmsId", "rmsId");
@@ -855,7 +868,8 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
         using var previousEvents = reader.IsDBNull(1) ? null : JsonDocument.Parse(reader.GetString(1));
         // The report keeps warnings for the detailed PC view. The monitoring feed
         // is intentionally reserved for newly detected critical issues.
-        newIssues = Monitoring.NewIssues(report.RootElement, previousReport?.RootElement, previousEvents?.RootElement, includeWarnings: false);
+        newIssues = Monitoring.NewIssues(report.RootElement, previousReport?.RootElement, previousEvents?.RootElement,
+            includeWarnings: false, currentIssues: reportIssues);
     }
     var currentRms = JsonRead.String(report.RootElement, "RmsId", "rmsId");
     if (!string.IsNullOrWhiteSpace(currentRms))
@@ -947,6 +961,70 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
     return Results.Ok(new { accepted = true, reportId = runId });
 });
 
+app.MapPost("/api/v1/application-errors", async (HttpRequest request, NpgsqlDataSource db) =>
+{
+    if (!await DeviceKeys.AuthenticateAsync(request, db)) return Results.Unauthorized();
+    if (request.ContentLength is > 2 * 1024 * 1024) return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+    using var payload = await JsonDocument.ParseAsync(request.Body, new JsonDocumentOptions { MaxDepth = 16 }, request.HttpContext.RequestAborted);
+    var errors = JsonRead.Property(payload.RootElement, "errors");
+    if (errors is not { ValueKind: JsonValueKind.Array } || errors.Value.GetArrayLength() is < 1 or > 100)
+        return Results.BadRequest(new { error = "Ожидается от 1 до 100 записей журнала." });
+    var parsed = new List<(Guid Id, DateTimeOffset OccurredAt, string Component, string Operation, string Summary, string ExceptionType, string Details, string Version)>();
+    foreach (var item in errors.Value.EnumerateArray())
+    {
+        var id = JsonRead.Guid(item, "id");
+        var occurred = JsonRead.Date(item, "occurredAt");
+        var component = JsonRead.String(item, "component")?.Trim();
+        var operation = JsonRead.String(item, "operation")?.Trim();
+        var summary = JsonRead.String(item, "summary")?.Trim();
+        var exceptionType = JsonRead.String(item, "exceptionType")?.Trim() ?? "";
+        var details = JsonRead.String(item, "technicalDetails") ?? "";
+        var version = JsonRead.String(item, "version")?.Trim() ?? "";
+        if (id is null || occurred is null || occurred > DateTimeOffset.UtcNow.AddHours(1) ||
+            string.IsNullOrWhiteSpace(component) || component.Length > 80 ||
+            string.IsNullOrWhiteSpace(operation) || operation.Length > 160 ||
+            string.IsNullOrWhiteSpace(summary) || summary.Length > 500 ||
+            exceptionType.Length > 256 || details.Length > 16000 || version.Length > 32)
+            return Results.BadRequest(new { error = "Одна из записей журнала повреждена или превышает допустимый размер." });
+        details = Regex.Replace(details, @"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+", "Bearer <скрыто>", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
+        details = Regex.Replace(details, "(?i)(password|пароль|authorization|device[-_ ]?key|token)([\\\"']?\\s*[:=]\\s*)(?:\\\"[^\\\"]*\\\"|'[^']*'|[^\\s,;]+)", "$1$2<скрыто>", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
+        details = Regex.Replace(details, @"(?i)(https?://)[^/@\s:]+:[^/@\s]+@", "$1<скрыто>@", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
+        parsed.Add((id.Value, occurred.Value.ToUniversalTime(), component, operation, summary, exceptionType, details, version));
+    }
+
+    var deviceId = Guid.Parse(request.Headers[DeviceKeys.IdHeader].ToString());
+    await using var connection = await db.OpenConnectionAsync(request.HttpContext.RequestAborted);
+    await using var transaction = await connection.BeginTransactionAsync(request.HttpContext.RequestAborted);
+    var inserted = 0;
+    foreach (var entry in parsed)
+    {
+        await using var command = new NpgsqlCommand("""
+            INSERT INTO application_errors(device_id,error_id,occurred_at,component,operation,summary,exception_type,technical_details,app_version)
+            VALUES(@device,@id,@occurred,@component,@operation,@summary,@exception,@details,@version)
+            ON CONFLICT(device_id,error_id) DO NOTHING
+            """, connection, transaction);
+        command.Parameters.AddWithValue("device", deviceId);
+        command.Parameters.AddWithValue("id", entry.Id);
+        command.Parameters.AddWithValue("occurred", entry.OccurredAt);
+        command.Parameters.AddWithValue("component", entry.Component);
+        command.Parameters.AddWithValue("operation", entry.Operation);
+        command.Parameters.AddWithValue("summary", entry.Summary);
+        command.Parameters.AddWithValue("exception", entry.ExceptionType);
+        command.Parameters.AddWithValue("details", entry.Details);
+        command.Parameters.AddWithValue("version", entry.Version);
+        inserted += await command.ExecuteNonQueryAsync(request.HttpContext.RequestAborted);
+    }
+    await using (var touch = new NpgsqlCommand("UPDATE devices SET last_seen_at=now(),last_ip=COALESCE(@ip::inet,last_ip) WHERE id=@id", connection, transaction))
+    {
+        touch.Parameters.AddWithValue("id", deviceId);
+        touch.Parameters.Add("ip", NpgsqlDbType.Text).Value =
+            (object?)AutomaticIpEnrollment.Normalize(request.HttpContext.Connection.RemoteIpAddress) ?? DBNull.Value;
+        await touch.ExecuteNonQueryAsync(request.HttpContext.RequestAborted);
+    }
+    await transaction.CommitAsync(request.HttpContext.RequestAborted);
+    return Results.Ok(new { accepted = inserted, received = parsed.Count });
+});
+
 app.MapGet("/api/v1/updates", async (HttpRequest request, NpgsqlDataSource db) =>
 {
     if (!await DeviceKeys.AuthenticateAsync(request, db)) return Results.Unauthorized();
@@ -1013,6 +1091,17 @@ admin.MapPut("/process-policy", async (ProcessPolicyDocument body, ProcessPolicy
     try { await policy.WriteAsync(body); return Results.Ok(policy.Read()); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
 });
+admin.MapPost("/process-policy/allow", async (AllowProcessRequest body, ProcessPolicy policy, HttpContext context, IAntiforgery csrf) =>
+{
+    await csrf.ValidateRequestAsync(context);
+    try
+    {
+        var result = await policy.AllowAsync(body.Name ?? "", body.Publisher,
+            string.Equals(body.Signature, "Valid", StringComparison.OrdinalIgnoreCase));
+        return Results.Ok(result);
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+});
 app.MapGet("/api/v1/process-policy", async (HttpRequest request, NpgsqlDataSource db, ProcessPolicy policy) =>
     await DeviceKeys.AuthenticateAsync(request, db) ? Results.Ok(policy.Read()) : Results.Unauthorized());
 app.MapPost("/api/v1/process-policy/allow", async (HttpRequest request, AllowProcessRequest body, NpgsqlDataSource db, ProcessPolicy policy) =>
@@ -1048,7 +1137,8 @@ admin.MapGet("/tickets", async (NpgsqlDataSource db, string? status, long? compa
         FROM ticket_requests t JOIN devices d ON d.id=t.device_id
         LEFT JOIN companies c ON c.id=t.company_id
         LEFT JOIN service_objects s ON s.id=t.service_object_id
-        WHERE (@status IS NULL OR t.state=@status) AND (@company IS NULL OR t.company_id=@company)
+        WHERE {DeviceDisplayFilter.SqlPredicate}
+          AND (@status IS NULL OR t.state=@status) AND (@company IS NULL OR t.company_id=@company)
           AND (@site IS NULL OR t.service_object_id=@site)
         ORDER BY t.created_at DESC,t.request_id DESC LIMIT 51 OFFSET @offset
         """, connection);
@@ -1074,13 +1164,13 @@ admin.MapGet("/tickets", async (NpgsqlDataSource db, string? status, long? compa
 admin.MapGet("/overview", async (NpgsqlDataSource db) =>
 {
     await using var connection = await db.OpenConnectionAsync();
-    await using var command = new NpgsqlCommand("""
-        SELECT (SELECT count(*) FROM devices),
-               (SELECT count(*) FROM devices WHERE last_seen_at > now()-interval '24 hours'),
-               (SELECT count(*) FROM check_runs WHERE NOT is_test AND started_at > now()-interval '24 hours' AND started_at<=now()),
+    await using var command = new NpgsqlCommand($"""
+        SELECT (SELECT count(*) FROM devices d WHERE {DeviceDisplayFilter.SqlPredicate}),
+               (SELECT count(*) FROM devices d WHERE {DeviceDisplayFilter.SqlPredicate} AND d.last_seen_at > now()-interval '24 hours'),
+               (SELECT count(*) FROM check_runs r JOIN devices d ON d.id=r.device_id WHERE {DeviceDisplayFilter.SqlPredicate} AND NOT r.is_test AND r.started_at > now()-interval '24 hours' AND r.started_at<=now()),
                (SELECT count(*) FROM companies WHERE active),
                (SELECT count(*) FROM service_objects WHERE active),
-               (SELECT count(*) FROM monitor_alerts WHERE visible AND severity=1 AND detected_at > now()-interval '7 days')
+               (SELECT count(*) FROM monitor_alerts a JOIN devices d ON d.id=a.device_id WHERE {DeviceDisplayFilter.SqlPredicate} AND a.visible AND a.severity=1 AND a.detected_at > now()-interval '7 days')
         """, connection);
     await using var reader = await command.ExecuteReaderAsync();
     await reader.ReadAsync();
@@ -1089,10 +1179,11 @@ admin.MapGet("/overview", async (NpgsqlDataSource db) =>
 admin.MapGet("/device-options", async (NpgsqlDataSource db, string? q, long? companyId, long? siteId) =>
 {
     await using var connection = await db.OpenConnectionAsync();
-    await using var command = new NpgsqlCommand("""
+    await using var command = new NpgsqlCommand($"""
         SELECT d.id,d.serial_number,d.inventory_number,d.os_name,d.company_id,d.service_object_id,c.name,s.name
         FROM devices d LEFT JOIN companies c ON c.id=d.company_id LEFT JOIN service_objects s ON s.id=d.service_object_id
-        WHERE (@q IS NULL OR coalesce(d.serial_number,'') ILIKE '%'||@q||'%' OR coalesce(d.inventory_number,'') ILIKE '%'||@q||'%' OR d.id::text ILIKE '%'||@q||'%')
+        WHERE {DeviceDisplayFilter.SqlPredicate}
+          AND (@q IS NULL OR coalesce(d.serial_number,'') ILIKE '%'||@q||'%' OR coalesce(d.inventory_number,'') ILIKE '%'||@q||'%' OR d.id::text ILIKE '%'||@q||'%')
           AND (@company IS NULL OR d.company_id=@company) AND (@site IS NULL OR d.service_object_id=@site)
         ORDER BY d.serial_number NULLS LAST,d.inventory_number NULLS LAST,d.id
         LIMIT 5001
@@ -1116,18 +1207,18 @@ admin.MapGet("/computer-tree", async (NpgsqlDataSource db, long? companyId) =>
 {
     await using var connection = await db.OpenConnectionAsync();
     await using var command = companyId is null
-        ? new NpgsqlCommand("""
+        ? new NpgsqlCommand($"""
             SELECT c.id,c.name,NULL::text,count(d.id)
-            FROM companies c LEFT JOIN devices d ON d.company_id=c.id
+            FROM companies c LEFT JOIN devices d ON d.company_id=c.id AND {DeviceDisplayFilter.SqlPredicate}
             WHERE c.active GROUP BY c.id,c.name ORDER BY c.name,c.id
             """, connection)
-        : new NpgsqlCommand("""
+        : new NpgsqlCommand($"""
             SELECT s.id,s.name,s.address,count(d.id)
-            FROM service_objects s LEFT JOIN devices d ON d.service_object_id=s.id AND d.company_id=s.company_id
+            FROM service_objects s LEFT JOIN devices d ON d.service_object_id=s.id AND d.company_id=s.company_id AND {DeviceDisplayFilter.SqlPredicate}
             WHERE s.active AND s.company_id=@company GROUP BY s.id,s.name,s.address
             UNION ALL
             SELECT NULL::bigint,'Без объекта',NULL,count(*)
-            FROM devices WHERE company_id=@company AND service_object_id IS NULL HAVING count(*)>0
+            FROM devices d WHERE d.company_id=@company AND d.service_object_id IS NULL AND {DeviceDisplayFilter.SqlPredicate} HAVING count(*)>0
             ORDER BY 2,1
             """, connection);
     if (companyId is not null) command.Parameters.Add("company", NpgsqlDbType.Bigint).Value = companyId.Value;
@@ -1158,6 +1249,7 @@ admin.MapGet("/devices", async (NpgsqlDataSource db, string? q, long? companyId,
                (SELECT e.service_object_id FROM okdesk_equipment e WHERE e.normalized_inventory_number={deviceInventory} ORDER BY e.id LIMIT 1)
         FROM devices d LEFT JOIN companies c ON c.id=d.company_id LEFT JOIN service_objects s ON s.id=d.service_object_id
         WHERE (@q IS NULL OR coalesce(d.serial_number,'') ILIKE '%'||@q||'%' OR coalesce(d.inventory_number,'') ILIKE '%'||@q||'%' OR d.id::text ILIKE '%'||@q||'%')
+          AND {DeviceDisplayFilter.SqlPredicate}
           AND (@company IS NULL OR d.company_id=@company) AND (@site IS NULL OR d.service_object_id=@site)
           AND (@device IS NULL OR d.id=@device)
           AND (NOT @unassigned OR d.service_object_id IS NULL)
@@ -1211,6 +1303,7 @@ admin.MapGet("/okdesk/unbound-equipment", async (NpgsqlDataSource db, string? q,
         LEFT JOIN service_objects s ON s.id=e.service_object_id
         WHERE (@company IS NULL OR e.company_id=@company) AND (@site IS NULL OR e.service_object_id=@site)
           AND (NOT @unassigned OR e.service_object_id IS NULL)
+          AND {DeviceDisplayFilter.OkdeskEquipmentSqlPredicate}
           AND (@q IS NULL OR coalesce(e.inventory_number,'') ILIKE '%'||@q||'%' OR coalesce(e.serial_number,'') ILIKE '%'||@q||'%')
           AND (e.normalized_inventory_number IS NULL OR NOT EXISTS(
               SELECT 1 FROM devices d WHERE {deviceInventory}=e.normalized_inventory_number))
@@ -1228,7 +1321,7 @@ admin.MapGet("/okdesk/unbound-equipment", async (NpgsqlDataSource db, string? q,
         id = (Guid?)null, okdeskEquipmentId = reader.GetInt64(0), equipmentOnly = true,
         inventory = reader.IsDBNull(1) ? null : reader.GetString(1), serial = reader.IsDBNull(2) ? null : reader.GetString(2),
         company = reader.IsDBNull(3) ? null : reader.GetString(3), site = reader.IsDBNull(4) ? null : reader.GetString(4),
-        companyId = reader.GetInt64(5), siteId = reader.IsDBNull(6) ? (long?)null : reader.GetInt64(6),
+        companyId = reader.IsDBNull(5) ? (long?)null : reader.GetInt64(5), siteId = reader.IsDBNull(6) ? (long?)null : reader.GetInt64(6),
         name = reader.IsDBNull(7) ? null : reader.GetString(7), okdeskStatus = "okdesk_only",
         health = "unknown", lastSeen = (DateTime?)null, lastCheck = (DateTime?)null, ticketsBlocked = false
     });
@@ -1253,12 +1346,12 @@ admin.MapGet("/monitoring", async (NpgsqlDataSource db, int? days, long? company
     if (category is not (null or "event" or "finding")) return Results.BadRequest(new { error = "Неизвестный тип события." });
     if (severity is not (null or 0 or 1 or 2)) return Results.BadRequest(new { error = "Неизвестная важность события." });
     await using var connection = await db.OpenConnectionAsync();
-    await using var command = new NpgsqlCommand("""
+    await using var command = new NpgsqlCommand($"""
         SELECT a.id,a.device_id,a.run_id,a.detected_at,a.category,a.title,a.detail,a.severity,
                d.serial_number,d.inventory_number,c.name,s.name
         FROM monitor_alerts a JOIN devices d ON d.id=a.device_id
         LEFT JOIN companies c ON c.id=d.company_id LEFT JOIN service_objects s ON s.id=d.service_object_id
-        WHERE a.visible AND (@severity=0 OR a.severity=@severity) AND a.detected_at>=@since AND (@company IS NULL OR d.company_id=@company)
+        WHERE {DeviceDisplayFilter.SqlPredicate} AND a.visible AND (@severity=0 OR a.severity=@severity) AND a.detected_at>=@since AND (@company IS NULL OR d.company_id=@company)
           AND (@site IS NULL OR d.service_object_id=@site) AND (@category IS NULL OR a.category=@category)
         ORDER BY a.detected_at DESC,a.id DESC LIMIT 101 OFFSET @offset
         """, connection);
@@ -1283,12 +1376,12 @@ admin.MapGet("/new-connections", async (NpgsqlDataSource db, int? days, long? co
 {
     var since = DateTime.UtcNow.AddDays(-Math.Clamp(days ?? 7, 1, 90));
     await using var connection = await db.OpenConnectionAsync();
-    await using var command = new NpgsqlCommand("""
+    await using var command = new NpgsqlCommand($"""
         SELECT d.id,d.created_at,d.serial_number,d.inventory_number,c.name,s.name,d.os_name,d.os_version
         FROM devices d
         LEFT JOIN companies c ON c.id=d.company_id
         LEFT JOIN service_objects s ON s.id=d.service_object_id
-        WHERE d.created_at>=@since AND (@company IS NULL OR d.company_id=@company)
+        WHERE {DeviceDisplayFilter.SqlPredicate} AND d.created_at>=@since AND (@company IS NULL OR d.company_id=@company)
           AND (@site IS NULL OR d.service_object_id=@site)
         ORDER BY d.created_at DESC,d.id LIMIT 100
         """, connection);
@@ -1309,10 +1402,41 @@ admin.MapGet("/new-connections", async (NpgsqlDataSource db, int? days, long? co
     });
     return Results.Ok(new { items = rows });
 });
+admin.MapGet("/application-errors", async (NpgsqlDataSource db, int? days, long? companyId, long? siteId, int? page) =>
+{
+    var since = DateTime.UtcNow.AddDays(-Math.Clamp(days ?? 7, 1, 90));
+    var offset = Math.Clamp(page ?? 0, 0, 10000) * 100;
+    await using var connection = await db.OpenConnectionAsync();
+    await using var command = new NpgsqlCommand($"""
+        SELECT e.error_id,e.occurred_at,e.component,e.operation,e.summary,e.exception_type,e.technical_details,e.app_version,
+               d.id,d.computer_name,d.inventory_number,d.serial_number,c.name,s.name
+        FROM application_errors e JOIN devices d ON d.id=e.device_id
+        LEFT JOIN companies c ON c.id=d.company_id LEFT JOIN service_objects s ON s.id=d.service_object_id
+        WHERE {DeviceDisplayFilter.SqlPredicate} AND e.occurred_at>=@since
+          AND (@company IS NULL OR d.company_id=@company) AND (@site IS NULL OR d.service_object_id=@site)
+        ORDER BY e.occurred_at DESC,e.received_at DESC,e.error_id LIMIT 101 OFFSET @offset
+        """, connection);
+    command.Parameters.AddWithValue("since", since);
+    command.Parameters.Add("company", NpgsqlDbType.Bigint).Value = (object?)companyId ?? DBNull.Value;
+    command.Parameters.Add("site", NpgsqlDbType.Bigint).Value = (object?)siteId ?? DBNull.Value;
+    command.Parameters.AddWithValue("offset", offset);
+    await using var reader = await command.ExecuteReaderAsync();
+    var rows = new List<object>();
+    while (await reader.ReadAsync()) rows.Add(new
+    {
+        id = reader.GetGuid(0), occurredAt = reader.GetDateTime(1), component = reader.GetString(2),
+        operation = reader.GetString(3), summary = reader.GetString(4), exceptionType = reader.GetString(5),
+        technicalDetails = reader.GetString(6), version = reader.GetString(7), deviceId = reader.GetGuid(8),
+        computer = reader.GetString(9), inventory = reader.IsDBNull(10) ? null : reader.GetString(10),
+        serial = reader.IsDBNull(11) ? null : reader.GetString(11), company = reader.IsDBNull(12) ? null : reader.GetString(12),
+        site = reader.IsDBNull(13) ? null : reader.GetString(13)
+    });
+    return Results.Ok(new { items = rows.Take(100), hasMore = rows.Count > 100, page = offset / 100 });
+});
 admin.MapGet("/devices/{id:guid}/runs", async (Guid id, NpgsqlDataSource db) =>
 {
     await using var connection = await db.OpenConnectionAsync();
-    await using var command = new NpgsqlCommand("SELECT id,started_at,kind,details FROM check_runs WHERE device_id=@id ORDER BY started_at DESC LIMIT 100", connection);
+    await using var command = new NpgsqlCommand($"SELECT r.id,r.started_at,r.kind,r.details FROM check_runs r JOIN devices d ON d.id=r.device_id WHERE r.device_id=@id AND {DeviceDisplayFilter.SqlPredicate} ORDER BY r.started_at DESC LIMIT 100", connection);
     command.Parameters.AddWithValue("id", id);
     await using var reader = await command.ExecuteReaderAsync();
     var rows = new List<object>();
@@ -1332,19 +1456,20 @@ admin.MapGet("/devices/{id:guid}/runs", async (Guid id, NpgsqlDataSource db) =>
 admin.MapGet("/runs/{id:guid}", async (Guid id, NpgsqlDataSource db, ProcessPolicy policy) =>
 {
     await using var connection = await db.OpenConnectionAsync();
-    await using var command = new NpgsqlCommand("""
+    await using var command = new NpgsqlCommand($"""
         SELECT r.device_id,r.started_at,r.kind,r.details,
           (SELECT p.details FROM check_runs p WHERE p.device_id=r.device_id AND p.started_at<r.started_at ORDER BY p.started_at DESC,p.received_at DESC LIMIT 1)
-        FROM check_runs r WHERE r.id=@id
+        FROM check_runs r JOIN devices d ON d.id=r.device_id WHERE r.id=@id AND {DeviceDisplayFilter.SqlPredicate}
         """, connection);
     command.Parameters.AddWithValue("id", id);
     await using var reader = await command.ExecuteReaderAsync();
     if (!await reader.ReadAsync()) return Results.NotFound();
     using var details = JsonDocument.Parse(reader.GetString(3));
+    using var previousDetails = reader.IsDBNull(4) ? null : JsonDocument.Parse(reader.GetString(4));
     var full = JsonRead.Property(details.RootElement, "Full");
     var processes = full is { ValueKind: JsonValueKind.Object } ? JsonRead.Property(full.Value, "Processes") : JsonRead.Property(details.RootElement, "Processes");
     var unknownProcesses = processes is { ValueKind: JsonValueKind.Array } ? processes.Value.EnumerateArray().Where(p => !policy.IsAllowed(p)).Select(p => p.Clone()).ToArray() : [];
-    return Results.Ok(new { deviceId = reader.GetGuid(0), startedAt = reader.GetDateTime(1), kind = reader.GetString(2), details = details.RootElement.Clone(), unknownProcesses, issues = Monitoring.CurrentIssues(details.RootElement), previous = reader.IsDBNull(4) ? (JsonElement?)null : JsonDocument.Parse(reader.GetString(4)).RootElement.Clone() });
+    return Results.Ok(new { deviceId = reader.GetGuid(0), startedAt = reader.GetDateTime(1), kind = reader.GetString(2), details = details.RootElement.Clone(), unknownProcesses, issues = Monitoring.CurrentIssues(details.RootElement), previous = previousDetails?.RootElement.Clone() });
 });
 admin.MapGet("/catalog", async (NpgsqlDataSource db) =>
 {
@@ -1514,48 +1639,44 @@ admin.MapDelete("/packages/{id:guid}", async (Guid id, HttpContext context, IAnt
 admin.MapPost("/packages", async (HttpContext context, IAntiforgery antiforgery, NpgsqlDataSource db) =>
 {
     if (!await SameOriginAsync(context)) return Results.BadRequest(new { error = "Недопустимый источник запроса." });
+    if (!context.Request.Headers.ContainsKey("X-CSRF-TOKEN")) return Results.BadRequest(new { error = "Отсутствует токен запроса." });
     await antiforgery.ValidateRequestAsync(context);
-    Microsoft.AspNetCore.Http.IFormCollection form;
-    try { form = await context.Request.ReadFormAsync(context.RequestAborted); }
-    catch (InvalidDataException)
-    {
-        return Results.BadRequest(new { error = "Форма загрузки повреждена или файл превышает лимит 1 ГБ." });
-    }
-    var key = form["key"].ToString().Trim().ToLowerInvariant();
-    var requestedVersion = form["version"].ToString().Trim();
-    var requestedName = form["name"].ToString().Trim();
-    var platform = form["platform"].ToString().Trim().ToLowerInvariant();
-    var file = form.Files.GetFile("file");
-    if (!System.Text.RegularExpressions.Regex.IsMatch(key, "^[a-zA-Z0-9._-]{1,64}$") ||
-        platform is not ("windows" or "win7" or "any") || file is null || file.Length == 0 || file.Length > 1024L*1024*1024)
-        return Results.BadRequest(new { error = "Проверьте ключ, версию, платформу и файл (до 1 ГБ)." });
-    if (key != "application" && !string.IsNullOrWhiteSpace(requestedVersion) && !System.Text.RegularExpressions.Regex.IsMatch(requestedVersion, "^[a-zA-Z0-9.+_-]{1,48}$"))
-        return Results.BadRequest(new { error = "Для программ каталога необходимо указать версию." });
-    if (key == "application" && platform is not ("windows" or "win7"))
-        return Results.BadRequest(new { error = "Приложение можно публиковать только для Windows 10/11 или Windows 7." });
-    if (key == "application" && !string.Equals(Path.GetExtension(file.FileName), ".exe", StringComparison.OrdinalIgnoreCase))
-        return Results.BadRequest(new { error = "Установщик приложения должен быть EXE-файлом." });
-    if (key=="application" && !string.IsNullOrWhiteSpace(requestedVersion) && !PackageVersionDetector.TryParse(requestedVersion, out _))
-        return Results.BadRequest(new { error = "Версия должна иметь формат major.minor.patch или определяться автоматически." });
-    if (requestedName.Length > 160) return Results.BadRequest(new { error = "Название ПО не должно превышать 160 символов." });
-    var uploadFileName = Path.GetFileName(file.FileName.Replace('\\', '/'));
-    if (string.IsNullOrWhiteSpace(uploadFileName)) uploadFileName = "package.bin";
     var id = Guid.NewGuid();
     var destination = Path.Combine(packageRoot, id.ToString("N"));
     var stored = false;
     try
     {
-    await using (var output = File.Create(destination)) await file.CopyToAsync(output, context.RequestAborted);
-    string hash;
-    await using (var stream = File.OpenRead(destination)) hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, context.RequestAborted));
+    var upload = await PackageUploadReader.ReadAsync(context.Request, destination, MaxPackageBytes, context.RequestAborted);
+    var key = upload.Key.Trim().ToLowerInvariant();
+    var requestedVersion = upload.Version.Trim();
+    var requestedName = upload.Name.Trim();
+    var platform = upload.Platform.Trim().ToLowerInvariant();
+    if (!System.Text.RegularExpressions.Regex.IsMatch(key, "^[a-zA-Z0-9._-]{1,64}$") ||
+        platform is not ("windows" or "win7" or "any") || upload.Length == 0 || upload.Length > MaxPackageBytes)
+        return Results.BadRequest(new { error = "Проверьте ключ, версию, платформу и файл (до 1 ГБ)." });
+    if (key != "application" && !string.IsNullOrWhiteSpace(requestedVersion) && !System.Text.RegularExpressions.Regex.IsMatch(requestedVersion, "^[a-zA-Z0-9.+_-]{1,48}$"))
+        return Results.BadRequest(new { error = "Для программ каталога необходимо указать версию." });
+    if (key == "application" && platform is not ("windows" or "win7"))
+        return Results.BadRequest(new { error = "Приложение можно публиковать только для Windows 10/11 или Windows 7." });
+    if (key == "application" && !string.Equals(Path.GetExtension(upload.FileName), ".exe", StringComparison.OrdinalIgnoreCase))
+        return Results.BadRequest(new { error = "Установщик приложения должен быть EXE-файлом." });
+    if (key == "application" && !string.IsNullOrWhiteSpace(requestedVersion) && !PackageVersionDetector.TryParse(requestedVersion, out _))
+        return Results.BadRequest(new { error = "Версия должна иметь формат major.minor.patch или определяться автоматически." });
+    if (requestedName.Length > 160) return Results.BadRequest(new { error = "Название ПО не должно превышать 160 символов." });
+    var uploadFileName = upload.FileName;
+    var hash = upload.Sha256;
     var metadata = PackageVersionDetector.Detect(destination, uploadFileName);
     var version = requestedVersion;
     if (string.IsNullOrWhiteSpace(version))
     {
         if (metadata.Version is null)
             return Results.BadRequest(new { error = "Не удалось определить версию по ProductVersion, FileVersion или имени файла. Введите версию вручную." });
-        version = metadata.Version.ToString(3);
+        version = new Version(metadata.Version.Major, metadata.Version.Minor,
+            Math.Max(metadata.Version.Build, 0), Math.Max(metadata.Version.Revision, 0)).ToString(4);
     }
+    if (key == "application" && PackageVersionDetector.TryParse(version, out var parsedVersion))
+        version = new Version(parsedVersion.Major, parsedVersion.Minor,
+            Math.Max(parsedVersion.Build, 0), Math.Max(parsedVersion.Revision, 0)).ToString(4);
     var productName = string.IsNullOrWhiteSpace(requestedName) ? metadata.Name : requestedName;
     productName = string.Join(' ', productName.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
     await using var connection = await db.OpenConnectionAsync(context.RequestAborted);
@@ -1580,28 +1701,42 @@ admin.MapPost("/packages", async (HttpContext context, IAntiforgery antiforgery,
     await using (var insert = new NpgsqlCommand("INSERT INTO packages(id,package_key,version,platform,sha256,size_bytes,product_name,download_name,storage_name,is_latest,created_at) VALUES(@id,@key,@version,@platform,@hash,@size,@product,@name,@storage,true,now())", connection, transaction))
     {
         insert.Parameters.AddWithValue("id",id); insert.Parameters.AddWithValue("key",key); insert.Parameters.AddWithValue("version",version);
-        insert.Parameters.AddWithValue("platform",platform); insert.Parameters.AddWithValue("hash",hash); insert.Parameters.AddWithValue("size",file.Length);
+        insert.Parameters.AddWithValue("platform",platform); insert.Parameters.AddWithValue("hash",hash); insert.Parameters.AddWithValue("size",upload.Length);
         insert.Parameters.AddWithValue("product",productName); insert.Parameters.AddWithValue("name",uploadFileName); insert.Parameters.AddWithValue("storage",id.ToString("N"));
         await insert.ExecuteNonQueryAsync(context.RequestAborted);
     }
     await transaction.CommitAsync(context.RequestAborted);
     stored = true;
-    return Results.Ok(new { id, key, name=productName, version, platform, sha256=hash, sizeBytes=file.Length });
+    return Results.Ok(new { id, key, name=productName, version, platform, sha256=hash, sizeBytes=upload.Length });
     }
     catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
     {
         return Results.Conflict(new { error="Такая версия уже загружена. Обновите список пакетов." });
     }
+    catch (InvalidDataException)
+    {
+        return Results.BadRequest(new { error = "Форма загрузки повреждена или файл превышает лимит 1 ГБ." });
+    }
     catch (IOException) when (!context.RequestAborted.IsCancellationRequested)
     {
-        return Results.Json(new { error = "Не удалось сохранить пакет: проверьте свободное место на сервере." },
+        return Results.Json(new { error = "Не удалось принять или сохранить пакет: проверьте свободное место на сервере." },
             statusCode: StatusCodes.Status507InsufficientStorage);
     }
     finally
     {
-        if (!stored && File.Exists(destination)) File.Delete(destination);
+        if (!stored)
+        {
+            try
+            {
+                if (File.Exists(destination)) File.Delete(destination);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                app.Logger.LogError(ex, "Failed to remove incomplete package upload {PackageId}", id);
+            }
+        }
     }
-});
+}).RequireRateLimiting("package-upload");
 
 app.Run();
 

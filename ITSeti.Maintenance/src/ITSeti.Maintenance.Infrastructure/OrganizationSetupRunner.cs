@@ -7,6 +7,8 @@ using System.Text.Json;
 
 namespace ITSeti.Maintenance.Infrastructure;
 
+public sealed class EngineerAuthorizationRequiredException(string message) : Exception(message);
+
 public static class OrganizationSetupRunner
 {
     private static readonly Guid GenericVerifyV2 = new("00AAC56B-CD44-11D0-8CC2-00C04FC295EE");
@@ -33,6 +35,8 @@ public static class OrganizationSetupRunner
         {
             var catalog = ServerSoftwareCatalog.Read();
             if (catalog.Count == 0) return ["Каталог ПО сервера ещё не получен. Выполните проверку ПК и повторите установку."];
+            if (component is not null && TryParseServerPackageKey(component, out var selectedId))
+                return catalog.Any(x => x.Id == selectedId) ? [] : ["Выбранного компонента нет в актуальном каталоге сервера."];
             if (component is not null && !catalog.Any(x => x.Key.Equals(component,StringComparison.OrdinalIgnoreCase)))
                 return ["Выбранного компонента нет в актуальном каталоге сервера."];
             return [];
@@ -157,6 +161,7 @@ public static class OrganizationSetupRunner
     private static extern uint WinVerifyTrust(IntPtr window, ref Guid actionId, IntPtr trustData);
 
     private const string InstallTask = "ITSeti-Maintenance-OrganizationSetup";
+    public const int InteractiveInstallerLaunched = -1;
     private static readonly string MaintenanceRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance");
 
@@ -164,7 +169,70 @@ public static class OrganizationSetupRunner
         => await RunAsync(null, "Install", progress);
 
     public static async Task<int> RunComponentAsync(string component, IProgress<string>? progress = null)
-        => await RunAsync(component, "Install", progress);
+    {
+        if (TryParseServerPackageKey(component, out var packageId))
+        {
+            await LaunchServerPackageAsync(packageId, progress);
+            return InteractiveInstallerLaunched;
+        }
+        return await RunAsync(component, "Install", progress);
+    }
+
+    public static async Task LaunchServerPackageForKeyAsync(string key, IProgress<string>? progress = null)
+    {
+        var package = ServerSoftwareCatalog.Read().FirstOrDefault(item =>
+            item.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+        if (package is null) throw new InvalidOperationException("Пакет отсутствует в актуальном каталоге сервера.");
+        await LaunchServerPackageAsync(package.Id, progress);
+    }
+
+    public static async Task LaunchServerPackageAsync(Guid packageId, IProgress<string>? progress = null)
+    {
+        if (!ServerSoftwareCatalog.IsConnected)
+            throw new InvalidOperationException("Для обычного запуска установщика требуется подключение к серверу.");
+        if (!ServerSoftwareCatalog.Read().Any(item => item.Id == packageId))
+            throw new InvalidOperationException("Пакет отсутствует в актуальном каталоге сервера.");
+
+        var requestId = Guid.NewGuid().ToString("N");
+        var service = await MaintenanceServiceClient.LaunchServerPackageAsync(packageId, requestId,
+            Process.GetCurrentProcess().SessionId);
+        if (!service.Connected || !service.Accepted)
+        {
+            var message = service.Message.Length > 0
+                ? service.Message
+                : "Служба обслуживания недоступна; интерактивный установщик не запущен.";
+            if (message.Contains("нужен пароль инженера", StringComparison.OrdinalIgnoreCase))
+                throw new EngineerAuthorizationRequiredException(message);
+            throw new InvalidOperationException(message);
+        }
+
+        var result = Path.Combine(MaintenanceRoot, "OrganizationSetupRuns", requestId, "result.txt");
+        var deadline = DateTime.UtcNow.AddMinutes(20);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (File.Exists(result))
+            {
+                var state = (await File.ReadAllTextAsync(result, Encoding.UTF8)).Trim();
+                if (state.StartsWith("RUNNING:", StringComparison.Ordinal))
+                {
+                    progress?.Report("Проверенный установщик открыт в текущем сеансе с системными правами. Завершите мастер установки, затем нажмите «Проверить ПО».");
+                    return;
+                }
+                if (state.StartsWith("ERROR:", StringComparison.Ordinal))
+                    throw new InvalidOperationException(state[6..]);
+                throw new InvalidDataException("Служба вернула неизвестный результат запуска установщика.");
+            }
+            await Task.Delay(500);
+        }
+        throw new TimeoutException("Служба не подготовила интерактивный установщик за 20 минут.");
+    }
+
+    private static bool TryParseServerPackageKey(string? value, out Guid packageId)
+    {
+        packageId = Guid.Empty;
+        return value is not null && value.StartsWith("ServerPackage:", StringComparison.Ordinal) &&
+            Guid.TryParse(value["ServerPackage:".Length..], out packageId) && packageId != Guid.Empty;
+    }
 
     public static async Task<int> RunUninstallComponentAsync(string component, IProgress<string>? progress = null)
         => await RunAsync(component, "Uninstall", progress);

@@ -13,35 +13,26 @@ namespace ITSeti.Maintenance.Infrastructure;
 
 public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
 {
-    public Task<DiagnosticSnapshot> RunAsync(CancellationToken cancellationToken = default) => CaptureAsync(true, true, cancellationToken);
+    public Task<DiagnosticSnapshot> RunAsync(CancellationToken cancellationToken = default) => CaptureAsync(true, true, null, cancellationToken);
 
-    public Task<DiagnosticSnapshot> RunLiveAsync(CancellationToken cancellationToken = default) => CaptureAsync(false, false, cancellationToken);
+    public Task<DiagnosticSnapshot> RunLiveAsync(CancellationToken cancellationToken = default) => CaptureAsync(false, false, null, cancellationToken);
 
-    private static Task<DiagnosticSnapshot> CaptureAsync(bool includeDiskHealth, bool readTemperature, CancellationToken cancellationToken) => Task.Run(async () =>
+    public Task<DiagnosticSnapshot> RunLiveAsync(DiskLatencySampler diskLatencySampler, CancellationToken cancellationToken = default) =>
+        CaptureAsync(false, false, diskLatencySampler, cancellationToken);
+
+    private static Task<DiagnosticSnapshot> CaptureAsync(bool includeDiskHealth, bool readTemperature,
+        DiskLatencySampler? diskLatencySampler, CancellationToken cancellationToken) => Task.Run(async () =>
     {
         var started = DateTimeOffset.Now;
         // The service owns HWiNFO. Prefer its fresh sensor cache for the
         // interactive status and only use the native Windows counter when the
         // cache is temporarily unavailable during startup.
         var hwInfo = HwInfoReader.ReadCached(TimeSpan.FromSeconds(90));
-        (ulong Idle, ulong Kernel, ulong User)? before = null;
-        try { before = ReadCpu(); } catch (Win32Exception) { }
-        await Task.Delay(1500, cancellationToken);
-        (ulong Idle, ulong Kernel, ulong User)? after = null;
-        try { after = ReadCpu(); } catch (Win32Exception) { }
-        double? nativeCpu = null;
-        if (before is { } first && after is { } second &&
-            second.Idle >= first.Idle && second.Kernel >= first.Kernel && second.User >= first.User)
-        {
-            var total = (second.Kernel - first.Kernel) + (second.User - first.User);
-            if (total > 0) nativeCpu = Math.Clamp(100.0 * (total - Math.Min(total, second.Idle - first.Idle)) / total, 0, 100);
-        }
-        var cpu = hwInfo?.CpuLoadPercent is >= 0 and <= 100
-            ? hwInfo.CpuLoadPercent.Value
-            : nativeCpu is > 0.5 and < 99.5
-                ? nativeCpu.Value : await ReadCpuFallbackAsync(cancellationToken) ?? nativeCpu ?? -1;
+        var cpuLoadCapturedAt = hwInfo?.CpuLoadPercent is >= 0 and <= 100 ? hwInfo.CapturedAtUtc : started;
+        var cpu = await ReadCpuPercentAsync(hwInfo?.CpuLoadPercent, includeDiskHealth, cancellationToken);
         var memory = new MemoryStatus { Length = (uint)Marshal.SizeOf<MemoryStatus>() };
         if (!GlobalMemoryStatusEx(ref memory)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        var memoryLoadCapturedAt = hwInfo?.MemoryLoadPercent is >= 0 and <= 100 ? hwInfo.CapturedAtUtc : started;
         if(hwInfo?.MemoryLoadPercent is >=0 and <=100)
             memory.AvailablePhysical=(ulong)Math.Round(memory.TotalPhysical*(100-hwInfo.MemoryLoadPercent.Value)/100);
         var disks = new List<DiskSnapshot>();
@@ -67,16 +58,41 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
         // HWiNFO is owned by the SYSTEM service; the interactive client only consumes its cache.
         if (hwInfo?.CpuTemperatureC is { } hwTemperature)
             temperature = new CpuTemperatureReading(hwTemperature, $"HWiNFO · {hwInfo.Source}", hwInfo.CapturedAtUtc);
-        var latency = await ReadDiskLatencyAsync(cancellationToken);
+        var diskLatency = diskLatencySampler?.Read();
         return new DiagnosticSnapshot(Guid.NewGuid(), started, Environment.MachineName, cpu,
             memory.TotalPhysical, memory.AvailablePhysical, disks, notes, QuickDisks: physicalDisks,
             LastBootAt: DateTimeOffset.Now - TimeSpan.FromMilliseconds(Environment.TickCount64),
             WindowsEdition: windows.Edition, WindowsRelease: windows.Release, WindowsBuild: windows.Build,
             CpuTemperatureC: temperature.TemperatureC, CpuTemperatureStatus: temperature.Status,
-            ActiveUptimeHours: ReadActiveUptimeHours(), DiskReadLatencyMs: latency.ReadMs,
-            DiskWriteLatencyMs: latency.WriteMs, HwInfo: hwInfo,
+            ActiveUptimeHours: ReadActiveUptimeHours(), DiskReadLatencyMs: diskLatency?.ReadMs,
+            DiskWriteLatencyMs: diskLatency?.WriteMs, HwInfo: hwInfo,
+            CpuTemperatureCapturedAtUtc: temperature.CapturedAtUtc,
+            CpuPercentCapturedAtUtc: cpuLoadCapturedAt,
+            MemoryUsedPercentCapturedAtUtc: memoryLoadCapturedAt,
             NetworkAdapters: ReadNetworkAdapters());
     }, cancellationToken);
+
+    internal static async Task<double> ReadCpuPercentAsync(double? hwInfoLoad, bool allowProcessFallback, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (hwInfoLoad is >= 0 and <= 100) return hwInfoLoad.Value;
+
+        (ulong Idle, ulong Kernel, ulong User)? before = null;
+        try { before = ReadCpu(); } catch (Win32Exception) { }
+        await Task.Delay(1500, cancellationToken);
+        (ulong Idle, ulong Kernel, ulong User)? after = null;
+        try { after = ReadCpu(); } catch (Win32Exception) { }
+        double? nativeCpu = null;
+        if (before is { } first && after is { } second &&
+            second.Idle >= first.Idle && second.Kernel >= first.Kernel && second.User >= first.User)
+        {
+            var total = (second.Kernel - first.Kernel) + (second.User - first.User);
+            if (total > 0) nativeCpu = Math.Clamp(100.0 * (total - Math.Min(total, second.Idle - first.Idle)) / total, 0, 100);
+        }
+        return nativeCpu is >= 0 and <= 100
+                ? nativeCpu.Value
+                : allowProcessFallback ? await ReadCpuFallbackAsync(cancellationToken) ?? -1 : -1;
+    }
 
     private static List<NetworkAdapterSnapshot> ReadNetworkAdapters()
     {
@@ -109,48 +125,6 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
         }
         catch (NetworkInformationException) { return []; }
         catch (SocketException) { return []; }
-    }
-
-    private static async Task<(double? ReadMs, double? WriteMs)> ReadDiskLatencyAsync(CancellationToken cancellationToken)
-    {
-        const string script = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
-            + "$row=Get-WmiObject Win32_PerfFormattedData_PerfDisk_PhysicalDisk -Filter \"Name='_Total'\" -ErrorAction Stop; "
-            + "if($null -eq $row){throw 'Не найден счётчик PhysicalDisk.'}; "
-            + "[pscustomobject]@{ReadMs=[double]$row.AvgDisksecPerRead*1000;WriteMs=[double]$row.AvgDisksecPerWrite*1000} | ConvertTo-Json -Compress";
-        try
-        {
-            var powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-                "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-            using var process = new Process { StartInfo = new ProcessStartInfo(powershell)
-            {
-                UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true,
-                RedirectStandardError = true, StandardOutputEncoding = Encoding.UTF8,
-                ArgumentList = { "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand",
-                    Convert.ToBase64String(Encoding.Unicode.GetBytes(script)) }
-            } };
-            if (!process.Start()) return default;
-            var output = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(6));
-            try { await process.WaitForExitAsync(timeout.Token); }
-            catch (OperationCanceledException)
-            {
-                try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-                if (cancellationToken.IsCancellationRequested) throw;
-                return default;
-            }
-            if (process.ExitCode != 0) return default;
-            using var json = JsonDocument.Parse(await output);
-            var root = json.RootElement;
-            var read = root.TryGetProperty("ReadMs", out var readElement) && readElement.TryGetDouble(out var readValue)
-                ? Math.Clamp(readValue, 0, 60_000) : (double?)null;
-            var write = root.TryGetProperty("WriteMs", out var writeElement) && writeElement.TryGetDouble(out var writeValue)
-                ? Math.Clamp(writeValue, 0, 60_000) : (double?)null;
-            return (read, write);
-        }
-        catch (Exception ex) when (ex is Win32Exception or IOException or JsonException or InvalidOperationException
-            or UnauthorizedAccessException)
-        { return default; }
     }
 
     private static async Task<List<PhysicalDiskDetails>> ReadDiskHealthAsync(CancellationToken cancellationToken)

@@ -60,6 +60,16 @@ function Complete-DiskToolsBackground {
     $script:DiskFailure=$data.Failure
     $script:Snapshot.Smart=@($data.Smart)
     $script:Snapshot.Notes+=@($data.Notes)
+    if($data.Result -and $script:ResourceSampling) {
+        $script:ResourceSampling.DiskReadLatencyMs=$data.Result.DiskReadLatencyMs
+        $script:ResourceSampling.DiskWriteLatencyMs=$data.Result.DiskWriteLatencyMs
+        $script:ResourceSampling.DiskReadOperations=[long]$data.Result.DiskReadOperations
+        $script:ResourceSampling.DiskWriteOperations=[long]$data.Result.DiskWriteOperations
+        if($data.LatencyError) {$script:Snapshot.Notes+=@('Задержка системного диска не измерена полностью: '+[string]$data.LatencyError)}
+        if(($null -eq $data.Result.DiskReadLatencyMs -or $null -eq $data.Result.DiskWriteLatencyMs) -and !$data.LatencyError) {
+            $script:Snapshot.Notes+=@('Задержка системного диска не измерена: счётчик не зарегистрировал подходящие операции во время DiskSpd.')
+        }
+    }
     foreach($item in $data.Owned){
         try {
             $p=Get-Process -Id $item.Id -ErrorAction Stop

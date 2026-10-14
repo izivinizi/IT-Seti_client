@@ -66,8 +66,6 @@ public partial class App : Application
                 return;
             }
 
-            StartTicketNotifier();
-
             var database = EngineerWindowLauncher.GetArgument(e.Args, "--history-db")
                 ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ITSeti", "Maintenance", "history.db");
             MainWindow = new MainWindow(database, engineerOnly: true,
@@ -118,7 +116,6 @@ public partial class App : Application
             finally { mutex.ReleaseMutex(); }
             return;
         }
-        StartTicketNotifier();
         if (MainWindow is null)
         {
             try
@@ -143,26 +140,6 @@ public partial class App : Application
         }
     }
 
-    private static void StartTicketNotifier()
-    {
-        if (Environment.GetEnvironmentVariable("ITSETI_DISABLE_REPORT_UPLOAD") == "1") return;
-        var notifier = Path.Combine(AppContext.BaseDirectory, "Notifier", "ITSeti.Maintenance.TicketNotifier.exe");
-        if (!File.Exists(notifier)) return;
-        try
-        {
-            Process.Start(new ProcessStartInfo(notifier)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = Path.GetDirectoryName(notifier)!
-            })?.Dispose();
-        }
-        catch (Exception ex) when (ex is Win32Exception or IOException or UnauthorizedAccessException or InvalidOperationException)
-        {
-            ApplicationErrorStore.Record("Заявки", "Запуск фоновых уведомлений", ex);
-        }
-    }
-
     private static string? GetPendingAutoFullMaintenance(string? systemDataOverride = null)
     {
         var data = systemDataOverride ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance");
@@ -170,7 +147,7 @@ public partial class App : Application
         if (!File.Exists(pending))
         {
             var baseline=Path.Combine(data,"last-full-run.txt");
-            return File.Exists(baseline) && DateTimeOffset.TryParse(File.ReadAllText(baseline),out var last) && DateTimeOffset.UtcNow-last.ToUniversalTime()>=TimeSpan.FromDays(60) && DateTime.Now.Hour>=8 && DateTime.Now.Hour<21 ? "overdue" : null;
+            return File.Exists(baseline) && DateTimeOffset.TryParse(File.ReadAllText(baseline),out var last) && DateTimeOffset.UtcNow-last.ToUniversalTime()>=TimeSpan.FromDays(10) && DateTime.Now.Hour>=8 && DateTime.Now.Hour<21 ? "overdue" : null;
         }
         var runId = File.ReadAllText(pending).Trim();
         if (!Guid.TryParseExact(runId, "N", out _)) return null;

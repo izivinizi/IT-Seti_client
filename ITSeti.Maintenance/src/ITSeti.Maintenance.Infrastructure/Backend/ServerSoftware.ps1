@@ -68,7 +68,7 @@ try {
         else { $locked = $mutex.WaitOne([TimeSpan]::FromMinutes(20)) }
     } catch [Threading.AbandonedMutexException] { $locked = $true }
     if (!$locked) {
-        if ($CatalogOnly) { exit 0 }
+        if ($CatalogOnly) { throw 'Каталог ПО занят другой операцией установки. Повторите обновление позже.' }
         throw 'Другая операция с ПО не завершилась за 20 минут. Запрос можно повторить позже.'
     }
     $request = New-DownloadRequest '/api/v1/updates'
@@ -191,7 +191,20 @@ try {
                     [IO.File]::WriteAllText($unknownMarker,[string]$process.Id,[Text.Encoding]::ASCII)
                     throw 'Silent installer exceeded 15 minutes; inspect its log before retrying.'
                 }
-                if (!$completedFromInstallMarker -and $process.ExitCode -notin @(0,3010)) { throw "Silent installer exited with code $($process.ExitCode)." }
+                if (!$completedFromInstallMarker -and $process.ExitCode -notin @(0,3010)) {
+                    $exitCode = $process.ExitCode
+                    $detail = "Silent installer exited with code $exitCode (0x{0:X8})." -f [uint32]$exitCode
+                    if ($key -eq 'rms') {
+                        $msiLog = Join-Path $root 'server-rms-install.log'
+                        if (Test-Path -LiteralPath $msiLog -PathType Leaf) {
+                            $logTail = @(Get-Content -LiteralPath $msiLog -Tail 80 -ErrorAction SilentlyContinue)
+                            if ($logTail.Count) {
+                                $detail += " MSI log: $msiLog" + [Environment]::NewLine + ($logTail -join [Environment]::NewLine)
+                            } else { $detail += " MSI log exists but its final 80 lines could not be read: $msiLog" }
+                        } else { $detail += " MSI log was not created: $msiLog" }
+                    }
+                    throw $detail
+                }
             } finally { $process.Dispose() }
             if (!(Find-InstalledFile $key)) { throw 'Installer returned success but the installed component was not found.' }
             if ($key -eq 'panel') {

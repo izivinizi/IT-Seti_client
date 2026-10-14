@@ -16,7 +16,7 @@ internal static class HwInfoVoltageStabilizer
             var allReadings = readings.ToArray();
             var stable = allReadings.Where(reading => !IsRail(reading.Category)).ToList();
             var rails = allReadings.Where(reading => IsRail(reading.Category) && double.IsFinite(reading.Value))
-                .GroupBy(reading => reading.Category + ":" + reading.Name.Trim(), StringComparer.OrdinalIgnoreCase);
+                .GroupBy(reading => reading.Category + ":" + (reading.SensorId ?? reading.Name.Trim()), StringComparer.OrdinalIgnoreCase);
             foreach (var group in rails)
             {
                 var reading = group.OrderBy(item => Math.Abs(item.Value - Nominal(item.Category))).First();
@@ -28,7 +28,7 @@ internal static class HwInfoVoltageStabilizer
                 if (samples.Count < MinimumSamples) continue;
 
                 var ordered = samples.OrderBy(value => value).ToArray();
-                stable.Add(reading with { Value = ordered[ordered.Length / 2] });
+                stable.Add(reading with { RawValue = reading.Value, Value = ordered[ordered.Length / 2] });
             }
             return stable;
         }

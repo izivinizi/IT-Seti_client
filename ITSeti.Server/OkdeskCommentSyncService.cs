@@ -26,6 +26,7 @@ public sealed class OkdeskCommentSyncService(NpgsqlDataSource database, IOkdeskC
         await using var query = new NpgsqlCommand("""
             SELECT request_id,okdesk_issue_id FROM ticket_requests
             WHERE state='created' AND okdesk_issue_id IS NOT NULL
+              AND workflow_state NOT IN ('completed','cancelled','canceled','closed','resolved')
               AND (workflow_state='opened' OR okdesk_synced_at IS NULL OR okdesk_synced_at < now()-interval '10 minutes')
             ORDER BY okdesk_synced_at NULLS FIRST,request_id LIMIT 100
             """, connection);

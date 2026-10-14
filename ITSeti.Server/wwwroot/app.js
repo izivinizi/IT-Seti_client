@@ -1,7 +1,7 @@
 const csrf = document.querySelector('meta[name="csrf-token"]').content;
 const $ = id => document.getElementById(id);
 const state = { companies: [], sites: [], devices: [], deviceOptions: [], selectedDevice: null, devicePage: 0,
-  monitorPage: 0, ticketPage: 0, deviceRequest: 0, deviceOptionsRequest: 0, monitorRequest: 0, ticketRequest: 0, runRequest: 0, selectionRequest: 0, view: 'computers' };
+  monitorPage: 0, applicationErrorPage: 0, applicationErrorRequest: 0, ticketPage: 0, deviceRequest: 0, deviceOptionsRequest: 0, monitorRequest: 0, ticketRequest: 0, runRequest: 0, selectionRequest: 0, view: 'computers' };
 
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
@@ -67,7 +67,7 @@ function short(value, max = 120) { const text = String(value ?? ''); return text
 
 function showView(view) {
   state.view = view;
-  $('page-title').textContent = { computers: 'Компьютеры', monitoring: 'Мониторинг', connections:'Новые подключения', tickets: 'Заявки', packages: 'ПО и обновления' }[view];
+  $('page-title').textContent = { computers: 'Компьютеры', monitoring: 'Мониторинг', connections:'Новые подключения', 'application-errors': 'Ошибки приложения', tickets: 'Заявки', packages: 'ПО и обновления' }[view];
   for (const item of document.querySelectorAll('.nav-item')) {
     const selected = item.dataset.view === view;
     item.classList.toggle('active', selected);
@@ -76,6 +76,7 @@ function showView(view) {
   for (const item of document.querySelectorAll('.view')) item.classList.toggle('active', item.id === 'view-' + view);
   if (view === 'monitoring') loadMonitoring();
   if (view === 'connections') loadConnections();
+  if (view === 'application-errors') loadApplicationErrors();
   if (view === 'tickets') loadTickets();
   if (view === 'packages') loadPackages();
 }
@@ -136,7 +137,7 @@ async function loadCatalog() {
   const catalog = await api('/api/admin/catalog');
   state.companies = catalog.companies || [];
   state.sites = catalog.sites || [];
-  for (const prefix of ['device', 'monitor', 'ticket']) {
+  for (const prefix of ['device', 'monitor', 'ticket', 'app-errors']) {
     fillCompanies(prefix + '-company');
     fillSites(prefix);
   }
@@ -174,6 +175,9 @@ async function loadDevices() {
     if (requestId !== state.deviceRequest) return;
     const showTree = !$('device-search').value.trim() && (!company || (!$('device-site').value && tree.items.length > 1));
     if (showTree) {
+      const deviceTable = document.querySelector('.device-table');
+      deviceTable.classList.add('tree-view');
+      deviceTable.classList.remove('computer-view');
       state.devices = [];
       $('computer-list-title').textContent = company ? 'Объекты' : 'Компании';
       $('computer-columns').replaceChildren(node('th', company ? 'Объект' : 'Компания'), node('th', 'Компьютеры'), node('th', ''));
@@ -200,6 +204,9 @@ async function loadDevices() {
       $('device-prev').disabled = true; $('device-next').disabled = true;
       status('device-status', ''); return;
     }
+    const deviceTable = document.querySelector('.device-table');
+    deviceTable.classList.add('computer-view');
+    deviceTable.classList.remove('tree-view');
     $('computer-list-title').textContent = 'Компьютеры';
     $('computer-columns').replaceChildren(node('th', 'Инв. №'), node('th', 'Состояние'), node('th', 'Привязка Okdesk'), node('th', 'Последняя проверка'),node('th','Последняя связь'));
     const result = await api('/api/admin/devices?' + deviceParameters());
@@ -292,12 +299,35 @@ async function selectRun(run) {
   catch (error) { if (requestId === state.runRequest) $('run-detail').replaceChildren(node('p', error.message, 'signal-error')); }
 }
 
+async function allowRunProcess(process, button) {
+  button.disabled = true;
+  button.title = 'Сохраняю правило…';
+  try {
+    await api('/api/admin/process-policy/allow', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: property(process, 'name', 'processName'),
+        publisher: property(process, 'publisher', 'signer'), signature: property(process, 'signature') }) });
+    button.textContent = '✓';
+    button.classList.add('allowed');
+    button.title = 'Процесс разрешён на сервере';
+    button.setAttribute('aria-label', button.title);
+  } catch (error) {
+    button.disabled = false;
+    button.title = 'Не удалось разрешить процесс: ' + error.message;
+    button.setAttribute('aria-label', button.title);
+    status('device-status', button.title, 'error');
+  }
+}
+
 
 function detailSection(root, title, values, emptyText, collapsed = false) {
   const container = collapsed ? node('details', undefined, 'report-section') : root;
   container.append(node(collapsed ? 'summary' : 'h3', title + (collapsed ? ' · ' + values.length : '')));
   if (!values.length) container.append(node('p', emptyText, 'detail-empty'));
-  else for (const value of values) container.append(node('div', value.text, value.className || 'detail-row'));
+  else for (const value of values) {
+    const row = node('div', value.element ? undefined : value.text, value.className || 'detail-row');
+    if (value.element) row.append(value.element);
+    container.append(row);
+  }
   if (collapsed) root.append(container);
 }
 
@@ -314,6 +344,13 @@ function renderRun(run) {
   const report = run.details || {}, full = property(report, 'full') || {};
   root.append(node('h3', 'Результат проверки'));
   root.append(node('span', date(run.startedAt) + ' · ' + run.kind, 'meta'));
+  if (property(report, 'trigger')) {
+    const origin = ['Источник запуска: ' + property(report, 'trigger'),
+      property(report, 'requestedByWindowsSessionId') != null ? 'запрос из сеанса Windows ' + property(report, 'requestedByWindowsSessionId') : '',
+      property(report, 'windowsSessionId') != null ? 'процесс проверки в сеансе Windows ' + property(report, 'windowsSessionId') : '']
+      .filter(Boolean).join(' · ');
+    root.append(node('span', origin, 'meta'));
+  }
   const identifiers = [property(report, 'inventoryNumber') && 'Инв. № ' + property(report, 'inventoryNumber'),
     property(report, 'rmsId') && 'RMS ' + property(report, 'rmsId'),
     property(report, 'anyDeskId') && 'AnyDesk ' + property(report, 'anyDeskId')].filter(Boolean);
@@ -382,10 +419,18 @@ function renderRun(run) {
   const processes = list(run.unknownProcesses || property(full, 'processes') || property(report, 'processes'));
   const oldProcesses = new Set(list(property(prevFull, 'processes') || property(previous, 'processes'))
     .map(process => [property(process, 'name', 'processName'), property(process, 'path')].join('|').toLowerCase()));
-  detailSection(root, 'Процессы', processes.slice(0, 100).map(process => ({
-    text: [property(process, 'name', 'processName'), property(process, 'publisher', 'description'), property(process, 'path')].filter(Boolean).join(' · '),
-    className: run.previous && !oldProcesses.has([property(process, 'name', 'processName'), property(process, 'path')].join('|').toLowerCase()) ? 'detail-row new-item' : 'detail-row'
-  })), 'Данные о процессах не переданы.', true);
+  detailSection(root, 'Процессы', processes.slice(0, 100).map(process => {
+    const name = property(process, 'name', 'processName') || '';
+    const path = property(process, 'path') || '';
+    const row = node('div', undefined, 'process-policy-row');
+    row.append(node('span', [name, property(process, 'publisher', 'description'), path].filter(Boolean).join(' · '), 'process-policy-text'));
+    const allow = node('button', '✓', 'process-allow-check');
+    allow.type = 'button'; allow.title = `Разрешить процесс ${name} на сервере`;
+    allow.setAttribute('aria-label', allow.title);
+    allow.addEventListener('click', () => allowRunProcess(process, allow));
+    row.append(allow);
+    return { element: row, className: run.previous && !oldProcesses.has([name, path].join('|').toLowerCase()) ? 'detail-row new-item' : 'detail-row' };
+  }), 'Данные о процессах не переданы.', true);
   const events = list(property(full, 'events') || property(report, 'events'));
   const previousEvents = property(prevFull, 'events') || property(previous, 'events');
   const oldEvents = new Set(list(previousEvents).map(eventIdentity));
@@ -436,6 +481,40 @@ async function loadConnections() {
     $('monitor-connections-empty').classList.toggle('hidden', !!connections.items?.length);
     status('connections-status','');
   } catch(error) {if(requestId===connectionsRequest)status('connections-status',error.message,'error');}
+}
+
+async function loadApplicationErrors() {
+  const requestId = ++state.applicationErrorRequest;
+  status('app-errors-status', 'Загружаю журнал…');
+  const params = new URLSearchParams({ days: $('app-errors-days').value, page: String(state.applicationErrorPage) });
+  if ($('app-errors-company').value) params.set('companyId', $('app-errors-company').value);
+  if ($('app-errors-site').value) params.set('siteId', $('app-errors-site').value);
+  try {
+    const result = await api('/api/admin/application-errors?' + params);
+    if (requestId !== state.applicationErrorRequest) return;
+    const container = $('app-errors-list');
+    container.replaceChildren();
+    for (const error of result.items || []) {
+      const row = node('article', undefined, 'application-error-row');
+      const heading = node('div', undefined, 'application-error-heading');
+      const machine = error.inventory ? `${error.computer || 'ПК'} · Инв. № ${error.inventory}` : error.computer || 'Компьютер';
+      heading.append(node('strong', machine), node('time', date(error.occurredAt), 'when'));
+      const context = node('div', [error.company, error.site, error.component, error.operation, error.version ? 'версия ' + error.version : ''].filter(Boolean).join(' · '), 'application-error-context');
+      const details = node('details', undefined, 'application-error-details');
+      details.append(node('summary', error.summary || 'Ошибка приложения'));
+      if (error.exceptionType) details.append(node('p', error.exceptionType, 'application-error-type'));
+      if (error.technicalDetails) details.append(node('pre', error.technicalDetails, 'application-error-technical'));
+      row.append(heading, context, details);
+      container.append(row);
+    }
+    $('app-errors-page').textContent = 'Страница ' + (state.applicationErrorPage + 1);
+    $('app-errors-prev').disabled = state.applicationErrorPage === 0;
+    $('app-errors-next').disabled = !result.hasMore;
+    $('app-errors-empty').classList.toggle('hidden', !!result.items?.length);
+    status('app-errors-status', result.items?.length ? `Записей: ${result.items.length}` : '');
+  } catch (error) {
+    if (requestId === state.applicationErrorRequest) status('app-errors-status', error.message, 'error');
+  }
 }
 
 async function loadMonitoring() {
@@ -681,6 +760,12 @@ $('refresh-devices').addEventListener('click', async () => { await loadOverview(
 $('refresh-monitoring').addEventListener('click', async () => { await loadOverview(); await loadMonitoring(); });
 $('refresh-connections').addEventListener('click',loadConnections);
 $('connections-days').addEventListener('change',loadConnections);
+$('refresh-application-errors').addEventListener('click',loadApplicationErrors);
+$('app-errors-days').addEventListener('change',() => { state.applicationErrorPage = 0; loadApplicationErrors(); });
+$('app-errors-company').addEventListener('change',() => { fillSites('app-errors', true); state.applicationErrorPage = 0; loadApplicationErrors(); });
+$('app-errors-site').addEventListener('change',() => { state.applicationErrorPage = 0; loadApplicationErrors(); });
+$('app-errors-prev').addEventListener('click',() => { state.applicationErrorPage = Math.max(0, state.applicationErrorPage - 1); loadApplicationErrors(); });
+$('app-errors-next').addEventListener('click',() => { state.applicationErrorPage++; loadApplicationErrors(); });
 $('refresh-tickets').addEventListener('click', loadTickets);
 $('ticket-block-toggle').addEventListener('click', async () => {
   const device = state.selectedDevice;

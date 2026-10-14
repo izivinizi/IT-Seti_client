@@ -57,9 +57,9 @@ New-Item -ItemType Directory -Path $dueRoot -Force | Out-Null
 $now = [DateTime]::UtcNow
 $dueArgs = [object[]]@($now.PSObject.BaseObject,$dueRoot.ToString())
 if($fullDue.Invoke($null,$dueArgs)){throw 'Missing baseline must not trigger immediate full maintenance.'}
-foreach($days in @(0,59,60)){
+foreach($days in @(0,9,10)){
     [IO.File]::WriteAllText((Join-Path $dueRoot 'full-check-baseline.txt'),$now.AddDays(-$days).ToString('o'))
-    if([bool]$fullDue.Invoke($null,$dueArgs) -ne ($days -ge 60)){throw 'Win7 60-day full maintenance gate failed.'}
+    if([bool]$fullDue.Invoke($null,$dueArgs) -ne ($days -ge 10)){throw 'Win7 10-day full maintenance gate failed.'}
 }
 [IO.File]::WriteAllText((Join-Path $dueRoot 'full-check-baseline.txt'),$now.ToString('o'))
 [IO.File]::WriteAllText((Join-Path $dueRoot 'scheduled-full-failure.txt'),'failure')
@@ -97,7 +97,7 @@ $updater = $assembly.GetType('ITSeti.Maintenance.App.Win7ServerUpdater', $true)
 $flags = [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic
 $parse = $updater.GetMethod('ParseServerPackage', $flags)
 if (!$parse) { throw 'Win7 server package parser is missing.' }
-$version = '2.3.9'
+$version = '2.4.6'
 $manifest = [string]([ordered]@{
     id = '11111111-1111-1111-1111-111111111111'; key = 'application'; platform = 'win7'; version = $version
     fileName = 'ITSeti-Maintenance-Win7-Setup.exe'; sizeBytes = 12345; sha256 = ('a' * 64)
@@ -106,6 +106,10 @@ $current = [version]'2.3.3'
 if ($PSVersionTable.PSEdition -eq 'Desktop') {
     if (!$parse.Invoke($null, @($manifest, $current, [uri]'https://unit.test/'))) { throw 'A newer Win7 server release was not offered.' }
     if ($parse.Invoke($null, @($manifest, [version]$version, [uri]'https://unit.test/'))) { throw 'The installed Win7 release was offered again.' }
+    $revisionManifest = $manifest.Replace('"2.4.6"', '"7.7.7.3"')
+    if (!$parse.Invoke($null, @($revisionManifest, [version]'7.7.7', [uri]'https://unit.test/'))) {
+        throw 'Win7 must compare the fourth component of an application version.'
+    }
     foreach ($bad in @($manifest.Replace('win7', 'windows'), $manifest.Replace(('a' * 64), 'invalid'))) {
         try {
             $null = $parse.Invoke($null, @($bad, $current, [uri]'https://unit.test/'))
@@ -137,7 +141,7 @@ if ($source -notmatch 'DeleteTask\(ScheduledCheckRunner\.TaskName' -or
     $source -notmatch 'StartWhenAvailable = true' -or
     $source -notmatch 'ITSeti-Maintenance-Win7-Upload[^\r\n]+--upload-reports' -or
     $source -notmatch 'ITSeti-Maintenance-Win7-Update[^\r\n]+--update-application') {
-    throw '14/60-day checks, report upload and application update tasks are not registered.'
+    throw '14/10-day checks, report upload and application update tasks are not registered.'
 }
 $portProject = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7.Port\ITSeti.Maintenance.Win7.Port.csproj') -Raw
 if ($portProject -match 'SupportDialog\.xaml|MyTicketsDialog\.xaml') { throw 'Ticket creation UI must remain excluded from Windows 7.' }

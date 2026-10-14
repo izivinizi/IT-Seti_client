@@ -19,17 +19,21 @@ public static class ServerReportQueue
         try
         {
             var report = JsonSerializer.SerializeToNode(snapshot)!.AsObject();
+            report["HwInfo"] = JsonSerializer.SerializeToNode(DiagnosticReportProjection.HwInfo(snapshot.HwInfo));
             var applicationErrors = ApplicationErrorStore.ReadUnreported();
             report["HasApplicationErrors"] = applicationErrors.Count > 0;
             report["ApplicationErrors"] = JsonSerializer.SerializeToNode(applicationErrors.Select(error => new
             {
-                error.Id, error.OccurredAt, error.Component, error.Operation, error.Summary, error.ExceptionType
+                error.Id, error.OccurredAt, error.Component, error.Operation, error.Summary,
+                error.ExceptionType, error.TechnicalDetails, error.Version
             }));
             report["Notes"] = JsonSerializer.SerializeToNode(snapshot.Notes.Where(note =>
                 !note.StartsWith("Ограничение интерфейса", StringComparison.OrdinalIgnoreCase) &&
                 !note.StartsWith("Без доступа к исполняемому файлу процессов", StringComparison.OrdinalIgnoreCase)));
-            report["Findings"] = JsonSerializer.SerializeToNode(DiagnosticRules.GetFindings(snapshot, includeDiskLinkWarnings: false));
-            report["DiagnosticIssues"] = JsonSerializer.SerializeToNode(DiagnosticRules.GetUserIssues(snapshot));
+            var evaluation = DiagnosticEngine.Evaluate(snapshot);
+            report["DiagnosticResult"] = JsonSerializer.SerializeToNode(evaluation);
+            report["Findings"] = JsonSerializer.SerializeToNode(evaluation.Findings);
+            report["DiagnosticIssues"] = JsonSerializer.SerializeToNode(evaluation.Issues);
             report["KindLabel"] = snapshot.KindLabel;
             report["MemoryUsedPercent"] = snapshot.MemoryUsedPercent;
             await File.WriteAllTextAsync(temporary, report.ToJsonString());

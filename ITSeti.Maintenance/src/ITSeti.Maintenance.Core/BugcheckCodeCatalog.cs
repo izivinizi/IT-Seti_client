@@ -436,7 +436,7 @@ public static class BugcheckCodeCatalog
         if (!match.Success) return false;
         var value = match.Groups["value"].Value;
         return value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
-            ? uint.TryParse(value.AsSpan(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out code)
+            ? uint.TryParse(value.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out code)
             : uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out code);
     }
 

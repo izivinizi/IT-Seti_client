@@ -6,6 +6,9 @@ namespace ITSeti.Maintenance.Infrastructure;
 public sealed record OrganizationComponent(string Name, string State, string Detail, string Package, bool NeedsAttention, string InstallKey)
 {
     public string ActionStatus { get; init; } = "";
+    public bool IsSelected { get; set; }
+    public bool CanSelectInstall => CanInstall && State != "Установлено" &&
+        (InstallKey is "AnyDesk" or "RMS" or "OCS" or "Panel" or "WinRAR" or "Yandex" || InstallKey.StartsWith("ServerPackage:", StringComparison.Ordinal));
     public bool CanInstall => !string.IsNullOrWhiteSpace(InstallKey) &&
         (State == "Установлено" || Package == "Файл есть" || Package == "На сервере");
     public string InstallLabel => State switch { "Установлено" => "Удалить", "Требует обновления" => "Обновить", _ => "Установить" };
@@ -35,7 +38,7 @@ public static class OrganizationSoftwareAudit
         var rows = new List<OrganizationComponent>
         {
             Evaluate("AnyDesk", "AnyDesk", anyDesk, HasService("AnyDesk"), bundledDirectory, "AnyDesk-installer.exe"),
-            Evaluate("RMS Host", "RMS", rms, HasService("RManService"), bundledDirectory, "Host-IT-SETI.RMS.7.7.3.0v3.msi", new Version(7, 7, 3, 0)),
+            Evaluate("RMS Host", "RMS", rms, IsRmsHostRunning(rms), bundledDirectory, "Host-IT-SETI.RMS.7.7.3.0v3.msi", new Version(7, 7, 3, 0)),
             Evaluate("OCS Inventory", "OCS", ocs, HasService("OCS Inventory Service"), bundledDirectory, "OCS-Agent-Installerv4.exe"),
             Evaluate("Панель ИТ-Сети", "Panel", File.Exists(desktop) ? desktop : null, File.Exists(panel), bundledDirectory, "DesktopInfo3230.exe", new Version(3, 23, 0)),
             EvaluateStandalone("WinRAR", "WinRAR", winRar, "winrar-x64-723ru.exe", new Version(7, 23, 0)),
@@ -50,7 +53,14 @@ public static class OrganizationSoftwareAudit
                 var row = rows.FirstOrDefault(x => x.InstallKey.Equals(package.Key,StringComparison.OrdinalIgnoreCase));
                 if (row is null)
                 {
-                    serverRows.Add(new(package.Key,"Требует настройки","Нет проверенного сценария тихой установки.","На сервере",false,""));
+                    var extension = Path.GetExtension(package.FileName);
+                    var canLaunch = extension.Equals(".exe", StringComparison.OrdinalIgnoreCase) ||
+                        extension.Equals(".msi", StringComparison.OrdinalIgnoreCase);
+                    serverRows.Add(new(package.Name ?? package.Key,"Требует настройки",
+                        canLaunch
+                            ? "Нет проверенного сценария тихой установки. Обычный установщик будет открыт вручную."
+                            : "Нет проверенного тихого сценария; интерактивный запуск поддерживает только EXE и MSI.",
+                        "На сервере",true,canLaunch ? "ServerPackage:" + package.Id.ToString("D") : "") { IsSelected = canLaunch });
                     continue;
                 }
                 var executable = row.InstallKey switch
@@ -58,13 +68,21 @@ public static class OrganizationSoftwareAudit
                     "AnyDesk" => anyDesk, "RMS" => rms, "OCS" => Existing(programFiles,programFiles86,"OCS Inventory Agent","OcsService.exe"),
                     "Panel" => Existing(programFiles,programFiles86,"Desktop Info","DesktopInfo.exe"), "WinRAR" => winRar, "Yandex" => yandex, _ => null
                 };
-                var installed = executable is not null;
+                var installed = IsOperationallyInstalled(executable,
+                    row.InstallKey switch
+                    {
+                        "AnyDesk" => HasService("AnyDesk"),
+                        "RMS" => IsRmsHostRunning(executable),
+                        "OCS" => HasService("OCS Inventory Service"),
+                        "Panel" => File.Exists(panel),
+                        _ => true
+                    });
                 var currentText = installed ? FileVersionInfo.GetVersionInfo(executable!).FileVersion?.Split(' ').FirstOrDefault() : null;
                 var versionKnown = Version.TryParse(currentText,out var current);
                 var requiredKnown = Version.TryParse(package.Version,out var required);
                 var outdated = installed && versionKnown && requiredKnown && current! < required!;
                 var state = !installed ? "Не найдено" : outdated ? "Требует обновления" : "Установлено";
-                serverRows.Add(row with { State=state, Detail=$"На сервере: {package.Version}."+(installed ? $" На ПК: {currentText ?? "не определена"}." : " Программа не обнаружена."), Package="На сервере",NeedsAttention=state!="Установлено" });
+                serverRows.Add(row with { State=state, Detail=$"На сервере: {package.Version}."+(installed ? $" На ПК: {currentText ?? "не определена"}." : " Программа не обнаружена."), Package="На сервере",NeedsAttention=state!="Установлено", IsSelected=state!="Установлено" });
             }
             return serverRows;
         }
@@ -123,4 +141,17 @@ public static class OrganizationSoftwareAudit
         using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\" + name);
         return key is not null;
     }
+
+    private static bool IsRmsHostRunning(string? executable)
+    {
+        if (executable is null || !File.Exists(executable)) return false;
+        Process[] processes;
+        try { processes = Process.GetProcessesByName("rutserv"); }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { return false; }
+        try { return processes.Any(process => { try { return !process.HasExited; } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { return false; } }); }
+        finally { foreach (var process in processes) process.Dispose(); }
+    }
+
+    internal static bool IsOperationallyInstalled(string? executable, bool operationalMarker) =>
+        executable is not null && operationalMarker;
 }

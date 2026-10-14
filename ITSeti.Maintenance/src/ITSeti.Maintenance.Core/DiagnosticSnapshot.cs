@@ -1,70 +1,17 @@
 namespace ITSeti.Maintenance.Core;
 
-public sealed record DiskSnapshot(string Name, long TotalBytes, long FreeBytes, string VolumeId = "")
-{
-    public double UsedPercent => TotalBytes > 0 ? 100.0 * (TotalBytes - FreeBytes) / TotalBytes : 0;
-    public string Capacity => $"{FreeBytes / 1073741824.0:N1} из {TotalBytes / 1073741824.0:N1} ГБ свободно";
-    public string Usage => $"{UsedPercent:N0}%";
-    public string Status => FreeBytes < 5L * 1073741824 ? "Почти нет свободного места"
-        : FreeBytes < 15L * 1073741824 ? "Мало свободного места" : "Достаточно места";
-}
+public sealed partial record DiskSnapshot(string Name, long TotalBytes, long FreeBytes, string VolumeId = "");
 
-public sealed record DiagnosticSnapshot(
+public sealed partial record DiagnosticSnapshot(
     Guid Id, DateTimeOffset StartedAt, string ComputerName, double CpuPercent,
     ulong TotalMemoryBytes, ulong AvailableMemoryBytes, List<DiskSnapshot> Disks, List<string> Notes,
     FullDiagnosticDetails? Full = null, List<PhysicalDiskDetails>? QuickDisks = null,
     DateTimeOffset? LastBootAt = null, string? WindowsEdition = null, string? WindowsRelease = null,
     int? WindowsBuild = null, double? CpuTemperatureC = null, string? CpuTemperatureStatus = null,
     double? ActiveUptimeHours = null, double? DiskReadLatencyMs = null, double? DiskWriteLatencyMs = null,
-    HwInfoSnapshot? HwInfo = null, List<NetworkAdapterSnapshot>? NetworkAdapters = null)
-{
-    public double MemoryUsedPercent => TotalMemoryBytes > 0
-        ? 100.0 * (TotalMemoryBytes - AvailableMemoryBytes) / TotalMemoryBytes : 0;
-    public int AlertCount => DiagnosticRules.GetFindings(this, includeDiskLinkWarnings: false).Count;
-    public string DateLabel => StartedAt.LocalDateTime.ToString("dd.MM.yyyy HH:mm:ss");
-    public string CpuLabel => CpuPercent < 0 ? "Нет данных" : $"{CpuPercent:N0}%";
-    public string MemoryLabel => TotalMemoryBytes == 0 ? "Нет данных" : $"{MemoryUsedPercent:N0}%";
-    public bool IsQuickFull => Full?.Benchmark is { State: "Skipped", Error: var reason } &&
-        reason.Contains("Быстрая проверка", StringComparison.OrdinalIgnoreCase);
-    public string KindLabel => Full is null || IsQuickFull ? "Быстрая" : "Полная";
-    public string ResultLabel
-    {
-        get
-        {
-            var incomplete = Full is { } full && ((!IsQuickFull && full.Benchmark.State != "Completed") || full.SmartDisks.Count == 0);
-            var result = AlertCount > 0 ? $"Требует внимания: {AlertCount}" : "Замеренные показатели в норме";
-            return incomplete ? result + " · неполные данные" : result;
-        }
-    }
-
-    public string HistoryDetailLabel
-    {
-        get
-        {
-            var findings = DiagnosticRules.GetFindings(this, includeDiskLinkWarnings: false)
-                .Select(CondenseHistoryFact)
-                .Distinct(StringComparer.CurrentCultureIgnoreCase)
-                .ToArray();
-            var details = findings.Take(2).ToList();
-            if (Full is { } full)
-            {
-                details.AddRange(DiagnosticRules.GetActionableEvents(full.Events).Where(item => item.Level <= 2).OrderBy(item => item.Level)
-                    .Take(Math.Max(0, 3 - details.Count)).Select(item => $"Ошибка Windows: {item.Provider} #{item.Id}"));
-            }
-            if (details.Count < 3) details.AddRange(findings.Skip(details.Count).Take(3 - details.Count));
-
-            if (details.Count == 0) return ResultLabel;
-            var result = string.Join(" · ", details.Distinct(StringComparer.CurrentCultureIgnoreCase));
-            return result.Length <= 260 ? result : result[..257] + "...";
-        }
-    }
-
-    private static string CondenseHistoryFact(string finding)
-    {
-        var sentenceEnd = finding.IndexOf(". ", StringComparison.Ordinal);
-        return sentenceEnd < 0 ? finding : finding[..(sentenceEnd + 1)];
-    }
-}
+    HwInfoSnapshot? HwInfo = null, List<NetworkAdapterSnapshot>? NetworkAdapters = null, string SystemDrive = "C:",
+    DateTimeOffset? CpuTemperatureCapturedAtUtc = null, DateTimeOffset? CpuPercentCapturedAtUtc = null,
+    DateTimeOffset? MemoryUsedPercentCapturedAtUtc = null);
 
 public sealed record PhysicalDiskDetails(string Model, string MediaType, string Health, long? PowerOnHours = null);
 public sealed record NetworkAdapterSnapshot(string Name, string Type, string Status, string LinkSpeed,
@@ -73,91 +20,27 @@ public sealed record SmartDiskDetails(string Model, string Status, string Letter
 {
     public string SmartWarnings { get; init; } = "";
 }
-public static class DiskLifetime
-{
-    public const long WarningThresholdHours = 60_000;
-
-    public static bool ExceedsWarning(long? hours) => hours is > WarningThresholdHours;
-
-    public static string Format(long? hours)
-    {
-        if (hours is not long value || value < 0) return "";
-        var daysTotal = value / 24;
-        return $"{value:N0} ч (около {daysTotal / 365} г. {daysTotal % 365} дн.)";
-    }
-}
-public sealed record ProcessDetails(string Name, string Description, string Publisher, string Signature, string Path)
-{
-    public bool CanTrustPublisher => Signature.Equals("Valid", StringComparison.OrdinalIgnoreCase)
-        && !string.IsNullOrWhiteSpace(Publisher);
-}
-public sealed record MemoryProcessDetails(string DisplayName, string ProcessName, long WorkingSetBytes, string Publisher)
-{
-    public string MemoryLabel => $"{WorkingSetBytes / 1073741824.0:N1} ГБ";
-}
-public sealed record EventDetails(string Log, string Provider, int Id, int Level, string Time, string Message, long RecordId = 0)
-{
-    public string LevelLabel => Level switch { 1 => "Критическая", 2 => "Ошибка", 3 => "Предупреждение", _ => "Событие" };
-}
-public sealed record DiskBenchmark(string Drive, string MediaType, double? Read, double? Write, int Passes, string State, string Error, string Engine = "CrystalDiskMark", bool IsNvme = false)
-{
-    public string ReadLabel => Read.HasValue ? $"{Read:N1} МБ/с" : "Нет результата";
-    public string WriteLabel => Write.HasValue ? $"{Write:N1} МБ/с" : "Нет результата";
-}
+public sealed partial record ProcessDetails(string Name, string Description, string Publisher, string Signature, string Path);
+public sealed partial record MemoryProcessDetails(string DisplayName, string ProcessName, long WorkingSetBytes, string Publisher);
+public sealed partial record EventDetails(string Log, string Provider, int Id, int Level, string Time, string Message, long RecordId = 0);
+public sealed partial record DiskBenchmark(string Drive, string MediaType, double? Read, double? Write, int Passes, string State, string Error, string Engine = "CrystalDiskMark", bool IsNvme = false);
 public sealed record ResourceSampleSummary(int Samples, int CpuHighSamples, int MemoryHighSamples,
     int LowAvailableSamples, int PagingHighSamples, double CpuAverage, double MemoryAverage,
     double PagesOutputAverage, double? DiskReadLatencyMs, double? DiskWriteLatencyMs,
     long DiskReadOperations, long DiskWriteOperations, string Error,
     int CpuCriticalSamples = 0, int MemoryCriticalSamples = 0);
 public sealed record HwInfoSensorReading(string Name, double Value, string Unit, string Category,
-    string? Status = null, bool IsWarning = false, bool IsCritical = false);
-public sealed record HwInfoSnapshot(string Source, string ToolVersion, DateTimeOffset CapturedAtUtc,
+    string? Status = null, bool IsWarning = false, bool IsCritical = false,
+    double? RawValue = null, string Quality = "Unverified", string? SensorId = null);
+public sealed partial record HwInfoSnapshot(string Source, string ToolVersion, DateTimeOffset CapturedAtUtc,
     string? CpuName, string? Motherboard, string? BiosVersion, string? MemoryType,
-    IReadOnlyList<HwInfoSensorReading> Sensors)
-{
-    public double? CpuTemperatureC => Sensors.Where(item => item.Category == "CpuTemperature").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
-    public double? VrmTemperatureC => Sensors.Where(item => item.Category == "VrmTemperature").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
-    public double? PchTemperatureC => Sensors.Where(item => item.Category == "PchTemperature").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
-    public double? Rail12V => SelectRail("Rail12V", 12.0);
-    public double? Rail5V => SelectRail("Rail5V", 5.0);
-    public double? Rail3V => SelectRail("Rail3V", 3.3);
-    public double? MemoryLoadPercent => Sensors.FirstOrDefault(item => item.Category == "MemoryLoad")?.Value;
-    public double? CpuVoltageV => Sensors.Where(item => item.Category == "CpuVoltage").Select(item => (double?)item.Value).OrderByDescending(item => item).FirstOrDefault();
-    public double? CpuLoadPercent => Sensors.Where(item => item.Category == "CpuLoad")
-        .OrderByDescending(item => item.Name.Contains("total cpu usage",StringComparison.OrdinalIgnoreCase)?2:item.Name.Contains("total", StringComparison.OrdinalIgnoreCase) || item.Name.Contains("суммар", StringComparison.OrdinalIgnoreCase)?1:0)
-        .ThenByDescending(item=>item.Value)
-        .Select(item => (double?)item.Value).FirstOrDefault();
-    public IReadOnlyList<HwInfoSensorReading> AlertingSensors => Sensors.Where(item => item.IsWarning || item.IsCritical).ToArray();
-
-    private double? SelectRail(string category, double nominal) => Sensors
-        .Where(item => item.Category == category && double.IsFinite(item.Value))
-        .Select(item => (double?)item.Value)
-        .OrderBy(value => Math.Abs(value!.Value - nominal))
-        .FirstOrDefault();
-}
+    IReadOnlyList<HwInfoSensorReading> Sensors,
+    string Freshness = "SourceTimestampUnavailable");
 public sealed record FullDiagnosticDetails(string CpuName, string GpuName, bool Elevated,
     List<PhysicalDiskDetails> PhysicalDisks, List<SmartDiskDetails> SmartDisks,
     List<ProcessDetails> Processes, List<EventDetails> Events, int ProcessUnavailable, int EventUnavailable,
     bool EventLimited, DiskBenchmark Benchmark, string ReportDirectory, List<MemoryProcessDetails>? TopMemoryProcesses = null,
     ResourceSampleSummary? ResourceSampling = null, string? MemoryType = null, double? CpuTemperatureC = null);
 
-public sealed record DiagnosticProgress(string Stage, DiagnosticSnapshot? Snapshot = null, IReadOnlyList<string>? Messages = null);
-public interface IFullDiagnosticsRunner
-{
-    Task<DiagnosticSnapshot> RunAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default);
-    Task<DiagnosticSnapshot> RunUserAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default);
-    Task<DiagnosticSnapshot> RunQuickAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default);
-    Task<DiagnosticSnapshot> RunUserQuickAsync(IProgress<DiagnosticProgress> progress, CancellationToken cancellationToken = default);
-}
 
-public interface IDiagnosticsRunner
-{
-    Task<DiagnosticSnapshot> RunAsync(CancellationToken cancellationToken = default);
-}
-
-public interface IHistoryStore
-{
-    Task SaveAsync(DiagnosticSnapshot snapshot);
-    Task SaveManyAsync(IReadOnlyCollection<DiagnosticSnapshot> snapshots);
-    Task<IReadOnlyList<DiagnosticSnapshot>> GetRecentAsync(int limit = 25, int offset = 0);
-}
+public sealed partial record UserIssue(string Title, string Detail, string Severity);
