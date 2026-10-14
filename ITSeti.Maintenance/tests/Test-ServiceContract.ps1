@@ -20,7 +20,7 @@ $appStartup=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Ap
 $mainWindow=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml.cs') -Raw
 $organizationRunner=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\OrganizationSetupRunner.cs') -Raw
 $server=Get-Content -LiteralPath (Join-Path (Split-Path $Root -Parent) 'ITSeti.Server\Program.cs') -Raw
-if($serviceProject -notmatch '<Version>2\.4\.6</Version>' -or
+if($serviceProject -notmatch '<Version>2\.4\.7</Version>' -or
    !$protocol.Contains('ITSetiMaintenanceService') -or !$protocol.Contains('ITSeti.Maintenance.Service.v1') -or
    !$coordinator.Contains('BuiltinUsersSid') -or !$coordinator.Contains('PipeAccessRights.ReadWrite') -or
    !$coordinator.Contains('ResolveOperation') -or $coordinator.Contains('ProcessStartInfo(request') -or
@@ -82,7 +82,7 @@ if(!$coordinator.Contains('MaintenanceServiceOperation.Cleanup => (Folder: "Clea
     throw 'Cleanup requests arriving during an active service run must be picked up by a follow-up run.'
 }
 if($installedCheck.Contains("/Run /TN 'ITSeti-Maintenance-Upload'") -or
-   !$coordinator.Contains('StartOperation(MaintenanceServiceOperation.UploadReports);') -or
+   !$coordinator.Contains('TryStartReportUpload();') -or
    !$coordinator.Contains('operations.Enqueue(operation, OperationGroup(operation)')) {
     throw 'Check and cleanup reports must be uploaded through the service queue, without an overlapping scheduled-task launch.'
 }
@@ -106,7 +106,7 @@ if(!$coordinator.Contains('TicketUpdateMonitor') -or !$coordinator.Contains('Pol
 if(!$ticketMonitor.Contains('onIncomingMessages?.Invoke(incoming)') -or
    !$coordinator.Contains('new TicketUpdateMonitor(onIncomingMessages: WtsTicketNotification.Show)') -or
    !$wtsNotification.Contains('WTSEnumerateSessionsW') -or !$wtsNotification.Contains('WTSSendMessageW') -or
-   !$wtsNotification.Contains('WtsActive') -or !$wtsNotification.Contains('NotificationTimeoutSeconds = 15') -or
+   !$wtsNotification.Contains('WtsActive') -or !$wtsNotification.Contains('NotificationTimeoutSeconds = 30') -or
    !$wtsNotification.Contains('NotificationTimeoutSeconds, out _, false') -or
    !$ticketMonitor.Contains('TimeSpan.FromSeconds(30)') -or
    !$install.Contains("Remove-ItemProperty -Path `$runKey -Name 'ITSeti-Maintenance-Tickets'") -or

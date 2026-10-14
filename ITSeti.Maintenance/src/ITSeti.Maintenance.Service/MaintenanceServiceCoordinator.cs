@@ -44,9 +44,9 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     private DateTimeOffset nextLiveSnapshotErrorUtc = DateTimeOffset.MinValue;
     private DateTimeOffset nextTemperatureErrorUtc = DateTimeOffset.MinValue;
     private readonly object ticketPollGate = new();
+    private readonly object reportUploadGate = new();
     private DateTimeOffset lastTemperatureProbe = DateTimeOffset.MinValue;
     private DateTimeOffset lastUpload = DateTimeOffset.MinValue;
-    private DateTimeOffset lastCatalogRefresh = DateTimeOffset.MinValue;
     private DateTimeOffset nextTicketPoll = DateTimeOffset.MinValue;
     private bool ticketPollRunning;
     private bool ticketPollRequested;
@@ -370,6 +370,34 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             $"Windows identity={GetCurrentWindowsIdentity()}; каталог существует={Directory.Exists(directory)}; " +
             $"целевой файл существует={File.Exists(path)}; права каталога: {DescribeFileSystemSecurity(directory)}; " +
             $"права целевого файла: {DescribeFileSystemSecurity(path)}.", exception);
+    }
+
+    private bool TryStartReportUpload()
+    {
+        lock (reportUploadGate)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var attemptPath = Path.Combine(DataRoot, "report-upload-last-attempt.txt");
+            var persistedAttempt = DateTimeOffset.MinValue;
+            if (File.Exists(attemptPath))
+                DateTimeOffset.TryParse(File.ReadAllText(attemptPath), out persistedAttempt);
+            if (now - lastUpload < TimeSpan.FromHours(1) || now - persistedAttempt < TimeSpan.FromHours(1) ||
+                !File.Exists(Path.Combine(DataRoot, "server-device.json"))) return false;
+            // Record attempts, including failed requests, so an unavailable server cannot
+            // make the service retry every five seconds or immediately after a restart.
+            if (!StartOperation(MaintenanceServiceOperation.UploadReports)) return false;
+            lastUpload = now;
+            var temporary = attemptPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                Directory.CreateDirectory(DataRoot);
+                File.WriteAllText(temporary, now.ToString("O"), Encoding.ASCII);
+                if (File.Exists(attemptPath)) File.Replace(temporary, attemptPath, null);
+                else File.Move(temporary, attemptPath);
+            }
+            finally { try { File.Delete(temporary); } catch (IOException) { } }
+            return true;
+        }
     }
 
     private bool StartOperation(MaintenanceServiceOperation operation, string? trigger = null,
@@ -751,7 +779,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             if (operation == MaintenanceServiceOperation.OrganizationSetup) RequestTicketUpdatePoll();
             if (IsDiagnosticOperation(operation) || operation == MaintenanceServiceOperation.Cleanup)
             {
-                try { StartOperation(MaintenanceServiceOperation.UploadReports); }
+                try { TryStartReportUpload(); }
                 catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
                 { await WriteServiceErrorAsync(ex); }
             }
@@ -868,17 +896,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
                 await WriteStatusAsync(snapshot, state, cancellationToken, critical);
                 if (snapshot is not null && critical.Count > 0)
                     await QueueMonitoringReportAsync(snapshot, critical, cancellationToken);
-                var connected = File.Exists(Path.Combine(DataRoot, "server-device.json"));
-                if (connected && DateTimeOffset.UtcNow - lastUpload >= TimeSpan.FromMinutes(5))
-                {
-                    StartOperation(MaintenanceServiceOperation.UploadReports);
-                    lastUpload = DateTimeOffset.UtcNow;
-                }
-                if (connected && DateTimeOffset.UtcNow - lastCatalogRefresh >= TimeSpan.FromMinutes(15))
-                {
-                    StartOperation(MaintenanceServiceOperation.RefreshSoftwareCatalog);
-                    lastCatalogRefresh = DateTimeOffset.UtcNow;
-                }
+                TryStartReportUpload();
                 if (DateTimeOffset.UtcNow >= nextTicketPoll) StartTicketUpdatePoll(cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
@@ -1201,7 +1219,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     }
 
     private static string GetVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.4.6";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.4.7";
 
     private void StopChildren()
     {

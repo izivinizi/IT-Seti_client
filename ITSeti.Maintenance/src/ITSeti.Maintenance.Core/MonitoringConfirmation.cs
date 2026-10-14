@@ -3,14 +3,15 @@ namespace ITSeti.Maintenance.Core;
 /// <summary>Confirms fresh monitoring samples and repeated short events by issue type.</summary>
 public sealed class MonitoringConfirmation
 {
-    private static readonly TimeSpan MaximumSampleGap = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan ConfirmationWindow = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan MaximumSampleGap = ConfirmationWindow;
     private static readonly TimeSpan RecurrenceWindow = TimeSpan.FromHours(1);
     private readonly Dictionary<string, Observation> observations = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<DateTimeOffset>> recentOccurrences = new(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset lastObservationAtUtc;
 
     private sealed record Observation(CriticalMonitoringIssue Issue, DateTimeOffset FirstAtUtc,
-        DateTimeOffset LastSampleAtUtc, int Samples, bool Reported);
+        DateTimeOffset LastSampleAtUtc, DateTimeOffset[] SampleTimes, bool Reported);
 
     private sealed record Policy(int RequiredSamples, TimeSpan RequiredDuration,
         int RequiredOccurrences = 0, TimeSpan MinimumOccurrenceDuration = default);
@@ -50,7 +51,7 @@ public sealed class MonitoringConfirmation
                     observedAtUtc > lastObservationAtUtc && observedAtUtc - lastObservationAtUtc <= MaximumSampleGap &&
                     lastObservationAtUtc < sampleAtUtc
                         ? lastObservationAtUtc : sampleAtUtc;
-                var currentObservation = new Observation(issue, firstAtUtc, sampleAtUtc, 1, false);
+                var currentObservation = new Observation(issue, firstAtUtc, sampleAtUtc, [sampleAtUtc], false);
                 var confirmedNewObservation = IsConfirmed(issue, currentObservation, rule);
                 observations[issue.Identity] = currentObservation with { Reported = confirmedNewObservation };
                 if (confirmedNewObservation) ready.Add(issue);
@@ -64,14 +65,18 @@ public sealed class MonitoringConfirmation
             if (gap > MaximumSampleGap)
             {
                 FinishEpisode(issue.Identity, prior);
-                var currentObservation = new Observation(issue, sampleAtUtc, sampleAtUtc, 1, false);
+                var currentObservation = new Observation(issue, sampleAtUtc, sampleAtUtc, [sampleAtUtc], false);
                 var confirmedAfterGap = IsConfirmed(issue, currentObservation, rule);
                 observations[issue.Identity] = currentObservation with { Reported = confirmedAfterGap };
                 if (confirmedAfterGap) ready.Add(issue);
                 continue;
             }
 
-            var updated = new Observation(issue, prior.FirstAtUtc, sampleAtUtc, prior.Samples + 1, prior.Reported);
+            var sampleTimes = prior.SampleTimes
+                .Where(at => sampleAtUtc - at <= ConfirmationWindow)
+                .Append(sampleAtUtc)
+                .ToArray();
+            var updated = new Observation(issue, prior.FirstAtUtc, sampleAtUtc, sampleTimes, prior.Reported);
             var confirmed = IsConfirmed(issue, updated, rule);
             observations[issue.Identity] = updated with { Reported = prior.Reported || confirmed };
             if (confirmed && !prior.Reported) ready.Add(issue);
@@ -84,7 +89,7 @@ public sealed class MonitoringConfirmation
     private bool IsConfirmed(CriticalMonitoringIssue issue, Observation observation, Policy rule)
     {
         var duration = observation.LastSampleAtUtc - observation.FirstAtUtc;
-        var sustained = observation.Samples >= rule.RequiredSamples && duration >= rule.RequiredDuration;
+        var sustained = observation.SampleTimes.Length >= rule.RequiredSamples && duration >= rule.RequiredDuration;
         if (sustained) return true;
         if (rule.RequiredOccurrences <= 0 || duration < rule.MinimumOccurrenceDuration) return false;
         var previous = recentOccurrences.TryGetValue(issue.Identity, out var events) ? events.Count : 0;
@@ -113,9 +118,9 @@ public sealed class MonitoringConfirmation
 
     private static Policy GetPolicy(MonitoringIssueType type) => type switch
     {
-        MonitoringIssueType.Voltage => new(3, TimeSpan.FromSeconds(15), 3),
-        MonitoringIssueType.Temperature => new(6, TimeSpan.FromSeconds(30), 2, TimeSpan.FromSeconds(15)),
-        MonitoringIssueType.ResourceLoad => new(12, TimeSpan.FromSeconds(60)),
+        MonitoringIssueType.Voltage => new(3, TimeSpan.Zero, 3),
+        MonitoringIssueType.Temperature => new(6, TimeSpan.Zero, 2, TimeSpan.FromSeconds(15)),
+        MonitoringIssueType.ResourceLoad => new(8, TimeSpan.Zero),
         MonitoringIssueType.OtherHwInfoCritical => new(2, TimeSpan.Zero),
         _ => new(6, TimeSpan.FromSeconds(30))
     };

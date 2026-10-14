@@ -9,7 +9,7 @@ internal static class WtsTicketNotification
     private const int WtsActive = 0;
     private const int InformationIcon = 0x00000040;
     private const int TopMost = 0x00040000;
-    private const uint NotificationTimeoutSeconds = 15;
+    private const uint NotificationTimeoutSeconds = 30;
 
     public static void Show(IReadOnlyList<TicketUpdateMessage> messages)
     {

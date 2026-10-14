@@ -33,11 +33,11 @@ internal static class Program
         {
             var updateClient = new ServerApplicationUpdateClient();
             var release = updateClient.GetUpdateAsync(new Version(2, 3, 6)).GetAwaiter().GetResult();
-            if (release?.Version != new Version(2, 4, 6) || !release.DownloadUrl.StartsWith("https://it-seti.nylenz.ru/api/v1/packages/", StringComparison.Ordinal))
-                throw new Exception("Live server did not offer 2.4.6 for 2.3.6");
-            if (updateClient.GetUpdateAsync(new Version(2, 4, 6)).GetAwaiter().GetResult() is not null)
+            if (release?.Version != new Version(2, 4, 7) || !release.DownloadUrl.StartsWith("https://it-seti.nylenz.ru/api/v1/packages/", StringComparison.Ordinal))
+                throw new Exception("Live server did not offer 2.4.7 for 2.3.6");
+            if (updateClient.GetUpdateAsync(new Version(2, 4, 7)).GetAwaiter().GetResult() is not null)
                 throw new Exception("Live server offers reinstall of already-current version");
-            Console.WriteLine("PASS live server: 2.3.6 receives 2.4.6, 2.4.6 is current, authenticated package URL validated");
+            Console.WriteLine("PASS live server: 2.3.6 receives 2.4.7, 2.4.7 is current, authenticated package URL validated");
             return 0;
         }
         if (args.Contains("--service-concurrency-contract"))
@@ -610,7 +610,7 @@ internal static class Program
                         System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                         .Invoke(window, null);
                     typeof(MainViewModel).GetField("serviceStatus", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                        .SetValue(window.ViewModel, "Служба работает · 2.4.6");
+                        .SetValue(window.ViewModel, "Служба работает · 2.4.7");
                     typeof(MainViewModel).GetMethod("Notify", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                         .Invoke(window.ViewModel, [Array.Empty<string>()]);
                     window.ViewModel.AdminInventoryInput = "0042";

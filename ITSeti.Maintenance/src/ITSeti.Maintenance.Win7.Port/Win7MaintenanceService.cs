@@ -115,6 +115,7 @@ namespace ITSeti.Maintenance.App
             private NamedPipeServerStream activePipe;
             private readonly MonitoringConfirmation monitoring = new MonitoringConfirmation();
             private DateTime nextSmartAttempt;
+            private DateTime nextReportUploadCheckUtc;
 
             public Win7MaintenanceService(string pipeNameOverride = null)
             {
@@ -524,6 +525,12 @@ namespace ITSeti.Maintenance.App
                         {
                             if(DateTime.UtcNow>=nextSmartAttempt){nextSmartAttempt=DateTime.UtcNow.AddHours(1);try { RunDailySmart(); } catch (Exception ex) { WriteError(ex); }}
                             try { CollectMonitoring(); } catch (Exception ex) { WriteError(ex); }
+                            if (DateTime.UtcNow >= nextReportUploadCheckUtc)
+                            {
+                                nextReportUploadCheckUtc = DateTime.UtcNow.AddMinutes(1);
+                                try { if (ServerReportUploader.IsUploadDue()) ServerReportUploader.Trigger(); }
+                                catch (Exception ex) { WriteError(ex); }
+                            }
                         }
                         await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
                     }

@@ -70,17 +70,17 @@ internal static class RefactorContract
             "Critical CPU or memory load was not included in continuous monitoring");
         var loadConfirmation = new MonitoringConfirmation();
         loadConfirmation.Observe([], monitoringStart.AddSeconds(-5));
-        for (var sample = 0; sample < 11; sample++)
+        for (var sample = 0; sample < 7; sample++)
         {
             var capturedAt = monitoringStart.AddSeconds(sample * 5);
             Check(loadConfirmation.Observe(loadIssuesAt(capturedAt), capturedAt).Count == 0,
-                "CPU/RAM load alert fired before 60 seconds");
+                "CPU/RAM load alert fired before eight readings within one minute");
         }
-        var loadConfirmationAt60 = monitoringStart.AddSeconds(55);
-        var confirmedLoads = loadConfirmation.Observe(loadIssuesAt(loadConfirmationAt60), loadConfirmationAt60);
+        var loadConfirmationAt35 = monitoringStart.AddSeconds(35);
+        var confirmedLoads = loadConfirmation.Observe(loadIssuesAt(loadConfirmationAt35), loadConfirmationAt35);
         Check(confirmedLoads.Count == 2 && confirmedLoads.Any(issue => issue.Identity == "cpu:load") &&
             confirmedLoads.Any(issue => issue.Identity == "memory:load"),
-            "CPU/RAM load alerts did not fire after 12 readings / 60 seconds");
+            "CPU/RAM load alerts did not fire after eight readings within one minute");
         var staleLoads = CriticalMonitoringEvaluator.Evaluate(overloaded with
         {
             StartedAt = monitoringStart.AddSeconds(20),
@@ -101,13 +101,12 @@ internal static class RefactorContract
         {
             var at = monitoringStart.AddSeconds(sample * 5);
             Check(voltageConfirmation.Observe(voltageIssueAt(at), at).Count == 0,
-                "Voltage alert fired before three readings / 15 seconds");
+                "Voltage alert fired before three readings within one minute");
         }
-        var voltageAt15 = monitoringStart.AddSeconds(10);
-        Check(voltageConfirmation.Observe(voltageIssueAt(voltageAt15), voltageAt15).Count == 1 &&
+        var voltageAt10 = monitoringStart.AddSeconds(10);
+        Check(voltageConfirmation.Observe(voltageIssueAt(voltageAt10), voltageAt10).Count == 1 &&
             voltageConfirmation.Observe(voltageIssueAt(monitoringStart.AddSeconds(15)), monitoringStart.AddSeconds(15)).Count == 0,
-            "Voltage alert did not confirm at 15 seconds exactly once");
-
+            "Voltage alert did not confirm on the third reading exactly once");
         var voltageRecurrence = new MonitoringConfirmation();
         var voltageEvents = new[] { 0, 10, 20 };
         var thirdVoltageConfirmed = false;
@@ -145,12 +144,11 @@ internal static class RefactorContract
         {
             var at = monitoringStart.AddSeconds(sample * 5);
             Check(temperatureConfirmation.Observe(temperatureIssueAt(at), at).Count == 0,
-                "Temperature alert fired before six readings / 30 seconds");
+                "Temperature alert fired before six readings within one minute");
         }
-        var temperatureAt30 = monitoringStart.AddSeconds(25);
-        Check(temperatureConfirmation.Observe(temperatureIssueAt(temperatureAt30), temperatureAt30).Count == 1,
-            "Temperature alert did not confirm at 30 seconds exactly");
-
+        var temperatureAt25 = monitoringStart.AddSeconds(25);
+        Check(temperatureConfirmation.Observe(temperatureIssueAt(temperatureAt25), temperatureAt25).Count == 1,
+            "Temperature alert did not confirm on the sixth reading");
         var temperatureRecurrence = new MonitoringConfirmation();
         temperatureRecurrence.Observe([], monitoringStart.AddSeconds(-5));
         for (var sample = 0; sample < 3; sample++)
@@ -196,15 +194,14 @@ internal static class RefactorContract
             Check(duplicateConfirmation.Observe(firstCachedLoad, monitoringStart.AddSeconds(tick * 5)).Count == 0,
                 "Repeated cached measurements advanced the confirmation interval");
         duplicateConfirmation.Observe([], monitoringStart.AddSeconds(100));
-        for (var sample = 0; sample < 11; sample++)
+        for (var sample = 0; sample < 7; sample++)
         {
             var at = monitoringStart.AddSeconds(105 + sample * 5);
             Check(duplicateConfirmation.Observe(loadIssuesAt(at), at).Count == 0,
-                "A gapped sequence triggered a resource alert before 60 seconds");
-        }
-        var loadConfirmationAfterGap = monitoringStart.AddSeconds(160);
+                "A gapped sequence triggered a resource alert before eight fresh readings");
+        }        var loadConfirmationAfterGap = monitoringStart.AddSeconds(140);
         Check(duplicateConfirmation.Observe(loadIssuesAt(loadConfirmationAfterGap), loadConfirmationAfterGap).Count == 2,
-            "Fresh resource readings did not trigger after 60 seconds following a cache gap");
+            "Eight fresh resource readings did not trigger following a cache gap");
 
         var hwiConfirmAt = monitoringStart.AddSeconds(1);
         var hwiCpuAndMemoryBelowThreshold = new HwInfoSnapshot("fixture", "8.54", hwiConfirmAt, null, null, null, null,
@@ -216,7 +213,7 @@ internal static class RefactorContract
             CpuPercentCapturedAtUtc = hwiConfirmAt, MemoryUsedPercentCapturedAtUtc = hwiConfirmAt
         });
         Check(osLoadWithHwi.Where(issue => issue.Identity is "cpu:load" or "memory:load")
-            .All(issue => issue.Detail.Contains("HWiNFO: не подтверждено", StringComparison.Ordinal)),
+            .All(issue => issue.Detail.Contains("Показание HWiNFO не превышает порог ИТ-Сети", StringComparison.Ordinal)),
             "CPU/RAM incidents omitted a negative HWiNFO confirmation");
         var confirmingHwi = new HwInfoSnapshot("fixture", "8.54", hwiConfirmAt, null, null, null, null,
             [new HwInfoSensorReading("Total CPU Usage", 99, "%", "CpuLoad"),
@@ -227,7 +224,7 @@ internal static class RefactorContract
             CpuPercentCapturedAtUtc = hwiConfirmAt, MemoryUsedPercentCapturedAtUtc = hwiConfirmAt
         });
         Check(confirmedLoadDetails.Where(issue => issue.Identity is "cpu:load" or "memory:load")
-            .All(issue => issue.Detail.Contains("HWiNFO: подтверждено", StringComparison.Ordinal)),
+            .All(issue => issue.Detail.Contains("Показание HWiNFO превышает порог ИТ-Сети", StringComparison.Ordinal)),
             "CPU/RAM incidents omitted a positive HWiNFO confirmation");
 
         var osTemperatureWithHwi = CriticalMonitoringEvaluator.Evaluate(new DiagnosticSnapshot(Guid.NewGuid(), hwiConfirmAt,
@@ -235,7 +232,7 @@ internal static class RefactorContract
                 hwiConfirmAt, null, null, null, null, [new HwInfoSensorReading("CPU Package", 70, "°C", "CpuTemperature")]),
             CpuTemperatureCapturedAtUtc: hwiConfirmAt));
         Check(osTemperatureWithHwi.Single(issue => issue.Identity == "cpu:temperature").Detail
-            .Contains("HWiNFO: не подтверждено", StringComparison.Ordinal),
+            .Contains("Показание HWiNFO не превышает порог ИТ-Сети", StringComparison.Ordinal),
             "Temperature incidents omitted a negative HWiNFO confirmation");
 
         var staleHwInfo = new HwInfoSnapshot("fixture", "8.54", monitoringStart.AddSeconds(-16), null, null, null, null,

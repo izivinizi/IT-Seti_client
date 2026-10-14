@@ -812,7 +812,26 @@ app.MapPost("/api/v1/tickets/{requestId:guid}/messages", async (Guid requestId, 
     return Results.Json(new { messageId = body.MessageId, status = "queued" }, statusCode: 202);
 }).RequireRateLimiting("ticket");
 
-app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument report, NpgsqlDataSource db) =>
+static async Task<IReadOnlyList<object>> ReadLatestSoftwareCatalogAsync(NpgsqlDataSource db,
+    CancellationToken cancellationToken = default)
+{
+    await using var connection = await db.OpenConnectionAsync(cancellationToken);
+    await using var command = new NpgsqlCommand("""
+        SELECT id,package_key,version,platform,sha256,size_bytes,download_name,product_name
+        FROM packages WHERE is_latest ORDER BY package_key,platform
+        """, connection);
+    await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+    var rows = new List<object>();
+    while (await reader.ReadAsync(cancellationToken)) rows.Add(new
+    {
+        id = reader.GetGuid(0), key = reader.GetString(1), version = reader.GetString(2),
+        platform = reader.GetString(3), sha256 = reader.GetString(4), sizeBytes = reader.GetInt64(5),
+        fileName = reader.GetString(6), name = reader.GetString(7)
+    });
+    return rows;
+}
+
+app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument report, NpgsqlDataSource db, bool includeCatalog = true) =>
 {
     if (!await DeviceKeys.AuthenticateAsync(request, db)) return Results.Unauthorized();
     if (Encoding.UTF8.GetByteCount(report.RootElement.GetRawText()) > 12 * 1024 * 1024)
@@ -958,7 +977,8 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
         await update.ExecuteNonQueryAsync();
     }
     await transaction.CommitAsync();
-    return Results.Ok(new { accepted = true, reportId = runId });
+    var softwareCatalog = includeCatalog ? await ReadLatestSoftwareCatalogAsync(db, request.HttpContext.RequestAborted) : null;
+    return Results.Ok(new { accepted = true, reportId = runId, softwareCatalog });
 });
 
 app.MapPost("/api/v1/application-errors", async (HttpRequest request, NpgsqlDataSource db) =>
@@ -1028,20 +1048,7 @@ app.MapPost("/api/v1/application-errors", async (HttpRequest request, NpgsqlData
 app.MapGet("/api/v1/updates", async (HttpRequest request, NpgsqlDataSource db) =>
 {
     if (!await DeviceKeys.AuthenticateAsync(request, db)) return Results.Unauthorized();
-    await using var connection = await db.OpenConnectionAsync();
-    await using var command = new NpgsqlCommand("""
-        SELECT id,package_key,version,platform,sha256,size_bytes,download_name,product_name
-        FROM packages WHERE is_latest ORDER BY package_key,platform
-        """, connection);
-    await using var reader = await command.ExecuteReaderAsync();
-    var rows = new List<object>();
-    while (await reader.ReadAsync()) rows.Add(new
-    {
-        id = reader.GetGuid(0), key = reader.GetString(1), version = reader.GetString(2),
-        platform = reader.GetString(3), sha256 = reader.GetString(4), sizeBytes = reader.GetInt64(5),
-        fileName = reader.GetString(6), name = reader.GetString(7)
-    });
-    return Results.Ok(rows);
+    return Results.Ok(await ReadLatestSoftwareCatalogAsync(db, request.HttpContext.RequestAborted));
 });
 
 app.MapGet("/api/v1/application-update", async (HttpRequest request, NpgsqlDataSource db, string? platform) =>

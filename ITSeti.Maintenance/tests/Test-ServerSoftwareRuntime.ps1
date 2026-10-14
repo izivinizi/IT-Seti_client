@@ -1,4 +1,4 @@
-param([string]$Root = (Split-Path $PSScriptRoot -Parent))
+﻿param([string]$Root = (Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference='Stop'
 $tokens=$null; $errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\Backend\ServerSoftware.ps1'),[ref]$tokens,[ref]$errors)
@@ -15,14 +15,15 @@ $worker=[scriptblock]::Create(($body | Select-Object -Last 1).Extent.Text)
 $fixture=Join-Path $env:TEMP ('ITSeti-software-fixture-'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null
 $root=$fixture
-$CatalogOnly=$false; $AutoUpdate=$false; $Component=' RMS Host '; $locked=$false
-$script:installCalls=0; $script:installed=$false
+$CatalogOnly=$false; $AutoUpdate=$false; $UseCachedCatalog=$false; $Component=' RMS Host '; $locked=$false
+$script:installCalls=0; $script:installed=$false; $script:catalogRequests=0
 $script:installerExitCode=0; $script:writeMsiLog=$false
 $script:packageBytes=[Text.Encoding]::UTF8.GetBytes('unsigned fixture never executed')
 $sha=[Security.Cryptography.SHA256]::Create()
 try{$hash=[BitConverter]::ToString($sha.ComputeHash($script:packageBytes)).Replace('-','')}finally{$sha.Dispose()}
 $package=@{id=[Guid]::NewGuid().ToString();key='rms';platform='windows';version='7.7.3';fileName='rms.msi';sizeBytes=$script:packageBytes.Length;sha256=$hash}
 function New-DownloadRequest([string]$Route){
+    if($Route -eq '/api/v1/updates'){$script:catalogRequests++}
     $bytes=if($Route -eq '/api/v1/updates'){[Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject @($script:package) -Compress))}else{$script:packageBytes}
     $response=New-Object PSObject -Property @{Buffer=$bytes}
     $response | Add-Member ScriptMethod GetResponseStream {return New-Object IO.MemoryStream -ArgumentList (,[byte[]]$this.Buffer)}
@@ -106,7 +107,21 @@ try {
     try{& $worker}catch{$rejected=$true}
     if(!$rejected -or $script:installCalls -ne 0){throw 'Corrupted package reached the installer.'}
     if(Get-ChildItem -LiteralPath (Join-Path $fixture 'ServerPackages') -Filter '*.pending'){throw 'Partial package survived rejection.'}
-    'PASS: runtime fixture downloads, verifies and installs through a mock; corrupt packages rejected and missing software never auto-installed. No system software changed.'
+    $package.key='rms'; $package.fileName='rms.msi'; $package.version='7.7.3'; $package.sha256=$hash
+    $script:package=$package; $UseCachedCatalog=$true; $AutoUpdate=$true; $mutex=New-FixtureMutex
+    $cachePath=Join-Path $fixture 'software-catalog.json'
+    [IO.File]::WriteAllText($cachePath,(ConvertTo-Json -InputObject @($package) -Compress),[Text.Encoding]::UTF8)
+    $catalogRequestsBeforeCache=$script:catalogRequests
+    & $worker
+    if($script:catalogRequests -ne $catalogRequestsBeforeCache){throw 'A fresh software catalog cache still triggered a server request.'}
+    [IO.File]::SetLastWriteTimeUtc($cachePath,[DateTime]::UtcNow.AddHours(-2))
+    $mutex=New-FixtureMutex
+    & $worker
+    if($script:catalogRequests -ne ($catalogRequestsBeforeCache+1) -or
+       [DateTime]::UtcNow.Subtract((Get-Item -LiteralPath $cachePath).LastWriteTimeUtc).TotalMinutes -gt 1){
+        throw 'A stale software catalog cache did not refresh from the server.'
+    }
+    'PASS: runtime fixture verifies and installs via mock; fresh catalog cache avoids a request, stale cache refreshes, corrupt packages rejected, and absent software is not installed.'
 } finally {
     if([IO.Path]::GetFullPath($fixture).StartsWith([IO.Path]::GetFullPath($env:TEMP).TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)){
         Remove-Item -LiteralPath $fixture -Recurse -Force

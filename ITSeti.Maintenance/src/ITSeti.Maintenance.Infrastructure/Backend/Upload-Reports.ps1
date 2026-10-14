@@ -72,7 +72,58 @@ function Get-Identity {
     return @{ InventoryNumber = $inventory; RmsId = $rms; AnyDeskId = $anyDesk; OcsPresent = $ocsPresent; AdminAccounts = $admins }
 }
 
-function Send-Report([string]$path, [hashtable]$identity) {
+function Save-SoftwareCatalogResponse($responseBody) {
+    $property = $responseBody.PSObject.Properties['softwareCatalog']
+    if ($null -eq $property -or $null -eq $property.Value) { return }
+    $catalog = @($property.Value)
+    foreach ($package in $catalog) {
+        $packageId = [Guid]::Empty
+        if (![Guid]::TryParse([string]$package.id,[ref]$packageId) -or $packageId -eq [Guid]::Empty -or
+            [string]::IsNullOrWhiteSpace([string]$package.key) -or
+            [string]$package.platform -notin @('windows','win7','any') -or
+            [string]$package.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or
+            [long]$package.sizeBytes -le 0 -or [long]$package.sizeBytes -gt 1GB -or
+            [IO.Path]::GetFileName([string]$package.fileName) -ne [string]$package.fileName) {
+            throw 'Сервер вернул некорректную запись каталога ПО.'
+        }
+    }
+    $json = ConvertTo-Json -InputObject ([object[]]$catalog) -Depth 8 -Compress
+    $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+    if ($bytes.Length -gt 2MB) { throw 'Каталог ПО в ответе сервера превышает 2 МБ.' }
+    $cache = Join-Path $root 'software-catalog.json'
+    $temporary = $cache + '.' + [Guid]::NewGuid().ToString('N') + '.pending'
+    try {
+        [IO.File]::WriteAllText($temporary,$json,(New-Object Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $temporary -Destination $cache -Force
+    } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
+}
+
+function Receive-SoftwareCatalog {
+    $request = [Net.HttpWebRequest][Net.WebRequest]::Create((New-ServerUri '/api/v1/updates'))
+    $request.AllowAutoRedirect = $false
+    $request.Timeout = 30000
+    $request.ReadWriteTimeout = 30000
+    $request.Headers.Add('X-Device-Id', [string]$device.deviceId)
+    $request.Headers.Add('X-Device-Key', [string]$device.deviceKey)
+    $response = [Net.HttpWebResponse]$request.GetResponse()
+    try {
+        if ($response.StatusCode -ne [Net.HttpStatusCode]::OK) { throw "Сервер вернул HTTP $([int]$response.StatusCode) при получении каталога ПО." }
+        if ($response.ContentLength -gt 2MB) { throw 'Каталог ПО из ответа сервера превышает 2 МБ.' }
+        $reader = New-Object IO.StreamReader($response.GetResponseStream(),[Text.Encoding]::UTF8)
+        try {
+            $text = New-Object Text.StringBuilder
+            $buffer = New-Object char[] 4096
+            while (($count = $reader.Read($buffer,0,$buffer.Length)) -gt 0) {
+                if ($text.Length + $count -gt 2MB) { throw 'Каталог ПО из ответа сервера превышает 2 МБ.' }
+                [void]$text.Append($buffer,0,$count)
+            }
+        } finally { $reader.Dispose() }
+        $catalog = ConvertFrom-Json -InputObject $text.ToString()
+        Save-SoftwareCatalogResponse ([pscustomobject]@{ softwareCatalog = @($catalog) })
+    } finally { $response.Dispose() }
+}
+
+function Send-Report([string]$path, [hashtable]$identity, [bool]$IncludeSoftwareCatalog = $true) {
     $report = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
     foreach ($name in $identity.Keys) {
         $report | Add-Member -NotePropertyName $name -NotePropertyValue $identity[$name] -Force
@@ -97,7 +148,8 @@ function Send-Report([string]$path, [hashtable]$identity) {
     $json = $report | ConvertTo-Json -Depth 30 -Compress
     $bytes = [Text.Encoding]::UTF8.GetBytes($json)
     if ($bytes.Length -gt 12MB) { throw 'Отчёт превышает лимит сервера 12 МБ.' }
-    $request = [Net.HttpWebRequest][Net.WebRequest]::Create((New-ServerUri '/api/v1/check-runs'))
+    $route = '/api/v1/check-runs?includeCatalog=' + $IncludeSoftwareCatalog.ToString().ToLowerInvariant()
+    $request = [Net.HttpWebRequest][Net.WebRequest]::Create((New-ServerUri $route))
     $request.Method = 'POST'
     $request.AllowAutoRedirect = $false
     $request.Timeout = 30000
@@ -111,6 +163,24 @@ function Send-Report([string]$path, [hashtable]$identity) {
     $response = [Net.HttpWebResponse]$request.GetResponse()
     try {
         if ($response.StatusCode -ne [Net.HttpStatusCode]::OK) { throw "Сервер вернул HTTP $([int]$response.StatusCode)." }
+        try {
+        if ($response.ContentLength -gt 2MB) { throw 'Ответ сервера с каталогом ПО превышает 2 МБ.' }
+        $reader = New-Object IO.StreamReader($response.GetResponseStream(),[Text.Encoding]::UTF8)
+        try {
+            $text = New-Object Text.StringBuilder
+            $buffer = New-Object char[] 4096
+            while (($count = $reader.Read($buffer,0,$buffer.Length)) -gt 0) {
+                if ($text.Length + $count -gt 2MB) { throw 'Ответ сервера с каталогом ПО превышает 2 МБ.' }
+                [void]$text.Append($buffer,0,$count)
+            }
+        } finally { $reader.Dispose() }
+        if ($text.Length -gt 0) {
+            $responseBody = ConvertFrom-Json -InputObject $text.ToString()
+            Save-SoftwareCatalogResponse $responseBody
+        }
+        } catch {
+            [IO.File]::WriteAllText((Join-Path $root 'server-software-error.txt'),$_.Exception.GetType().Name + ': ' + $_.Exception.Message,[Text.Encoding]::UTF8)
+        }
     } finally { $response.Dispose() }
 }
 
@@ -211,9 +281,11 @@ if (Test-Path -LiteralPath $runs -PathType Container) {
         Where-Object { !(Test-Path -LiteralPath (Join-Path $_.DirectoryName 'server-uploaded.txt')) } |
         Sort-Object LastWriteTimeUtc)
 }
+$reportIndex = 0
 foreach ($file in $pending | Select-Object -First 200) {
     try {
-        Send-Report $file.FullName $identity
+        Send-Report $file.FullName $identity ($reportIndex -eq 0)
+        $reportIndex++
         if ($file.DirectoryName -in @($queue, $monitoringQueue)) { Remove-Item -LiteralPath $file.FullName -Force }
         else { [IO.File]::WriteAllText((Join-Path $file.DirectoryName 'server-uploaded.txt'),[DateTimeOffset]::UtcNow.ToString('O'),[Text.Encoding]::ASCII) }
     } catch {
@@ -228,8 +300,12 @@ if ($failures.Count) {
 if (Test-Path -LiteralPath (Join-Path $root 'server-upload-error.txt')) {
     Remove-Item -LiteralPath (Join-Path $root 'server-upload-error.txt') -Force
 }
+if ($pending.Count -eq 0) {
+    try { Receive-SoftwareCatalog }
+    catch { [IO.File]::WriteAllText((Join-Path $root 'server-software-error.txt'),$_.Exception.GetType().Name + ': ' + $_.Exception.Message,[Text.Encoding]::UTF8) }
+}
 try {
-    & (Join-Path $PSScriptRoot 'ServerSoftware.ps1') -AutoUpdate
+    & (Join-Path $PSScriptRoot 'ServerSoftware.ps1') -AutoUpdate -UseCachedCatalog
 } catch {
     [IO.File]::WriteAllText((Join-Path $root 'server-software-error.txt'),$_.Exception.Message,[Text.Encoding]::UTF8)
 }

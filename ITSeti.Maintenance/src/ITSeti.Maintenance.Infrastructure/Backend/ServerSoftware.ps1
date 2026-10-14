@@ -1,4 +1,4 @@
-﻿param([string]$Component, [switch]$AutoUpdate, [switch]$CatalogOnly)
+﻿param([string]$Component, [switch]$AutoUpdate, [switch]$CatalogOnly, [switch]$UseCachedCatalog)
 $ErrorActionPreference = 'Stop'
 $requestedComponent = $Component
 function Normalize-ComponentKey([string]$Value) {
@@ -71,30 +71,51 @@ try {
         if ($CatalogOnly) { throw 'Каталог ПО занят другой операцией установки. Повторите обновление позже.' }
         throw 'Другая операция с ПО не завершилась за 20 минут. Запрос можно повторить позже.'
     }
-    $request = New-DownloadRequest '/api/v1/updates'
-    $response = $request.GetResponse()
-    try {
-        $reader = New-Object IO.StreamReader($response.GetResponseStream())
-        try {
-            $text = New-Object Text.StringBuilder
-            $buffer = New-Object char[] 4096
-            while (($count = $reader.Read($buffer,0,$buffer.Length)) -gt 0) {
-                if ($text.Length + $count -gt 2MB) { throw 'Software catalog exceeds 2 MB.' }
-                [void]$text.Append($buffer,0,$count)
-            }
-            $json = $text.ToString()
-        } finally { $reader.Dispose() }
-    } finally { $response.Dispose() }
-    # Windows PowerShell 5.1 collapses a JSON array when it is piped into
-    # ConvertFrom-Json, producing one object with array-valued properties.
-    # InputObject preserves one catalog entry per object.
-    $catalog = @((ConvertFrom-Json -InputObject $json))
     $cache = Join-Path $root 'software-catalog.json'
-    $temporary = $cache + '.' + [Guid]::NewGuid().ToString('N') + '.pending'
-    try {
-        [IO.File]::WriteAllText($temporary,$json,[Text.Encoding]::UTF8)
-        Move-Item -LiteralPath $temporary -Destination $cache -Force
-    } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
+    $catalog = $null
+    $catalogLoaded = $false
+    if ($UseCachedCatalog -and (Test-Path -LiteralPath $cache -PathType Leaf)) {
+        try {
+            $cacheInfo = Get-Item -LiteralPath $cache
+            if ($cacheInfo.Length -le 2MB -and $cacheInfo.LastWriteTimeUtc -ge [DateTime]::UtcNow.AddHours(-1)) {
+                $cachedJson = Get-Content -LiteralPath $cache -Raw -Encoding UTF8
+                if ($cachedJson.TrimStart().StartsWith('[')) {
+                    $catalog = @((ConvertFrom-Json -InputObject $cachedJson))
+                    $catalogLoaded = $true
+                }
+            }
+        } catch {
+            # A stale or damaged cache must not block the authenticated server refresh.
+            $catalog = $null
+            $catalogLoaded = $false
+        }
+    }
+    if (!$catalogLoaded) {
+        $request = New-DownloadRequest '/api/v1/updates'
+        $response = $request.GetResponse()
+        try {
+            if ($response.ContentLength -gt 2MB) { throw 'Software catalog exceeds 2 MB.' }
+            $reader = New-Object IO.StreamReader($response.GetResponseStream())
+            try {
+                $text = New-Object Text.StringBuilder
+                $buffer = New-Object char[] 4096
+                while (($count = $reader.Read($buffer,0,$buffer.Length)) -gt 0) {
+                    if ($text.Length + $count -gt 2MB) { throw 'Software catalog exceeds 2 MB.' }
+                    [void]$text.Append($buffer,0,$count)
+                }
+                $json = $text.ToString()
+            } finally { $reader.Dispose() }
+        } finally { $response.Dispose() }
+        # Windows PowerShell 5.1 collapses a JSON array when it is piped into
+        # ConvertFrom-Json, producing one object with array-valued properties.
+        # InputObject preserves one catalog entry per object.
+        $catalog = @((ConvertFrom-Json -InputObject $json))
+        $temporary = $cache + '.' + [Guid]::NewGuid().ToString('N') + '.pending'
+        try {
+            [IO.File]::WriteAllText($temporary,$json,[Text.Encoding]::UTF8)
+            Move-Item -LiteralPath $temporary -Destination $cache -Force
+        } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
+    }
     if ($CatalogOnly) { exit 0 }
     $selected = @(
         foreach ($entry in $catalog) {

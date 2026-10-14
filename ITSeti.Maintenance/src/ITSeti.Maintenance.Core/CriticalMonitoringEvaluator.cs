@@ -24,23 +24,23 @@ public static class CriticalMonitoringEvaluator
 
         if (hwInfoIsFresh && snapshot.HwInfo?.VrmTemperatureC is >= HwInfoThresholds.VrmCriticalC)
             issues.Add(new("hwinfo:vrm-temperature", "Критическая температура VRM",
-                $"Температура VRM достигла {snapshot.HwInfo.VrmTemperatureC:N0} °C. HWiNFO: подтверждено.",
+                $"Температура VRM достигла {snapshot.HwInfo.VrmTemperatureC:N0} °C. Показание HWiNFO превышает порог ИТ-Сети.",
                 hwInfoCapturedAt, MonitoringIssueType.Temperature));
         if (hwInfoIsFresh && snapshot.HwInfo?.PchTemperatureC is >= HwInfoThresholds.PchCriticalC)
             issues.Add(new("hwinfo:pch-temperature", "Критическая температура PCH",
-                $"Температура чипсета PCH достигла {snapshot.HwInfo.PchTemperatureC:N0} °C. HWiNFO: подтверждено.",
+                $"Температура чипсета PCH достигла {snapshot.HwInfo.PchTemperatureC:N0} °C. Показание HWiNFO превышает порог ИТ-Сети.",
                 hwInfoCapturedAt, MonitoringIssueType.Temperature));
         if (hwInfoIsFresh && snapshot.HwInfo?.Rail12V is { } rail12 &&
             (rail12 < HwInfoThresholds.Rail12CriticalMinV || rail12 > HwInfoThresholds.Rail12CriticalMaxV))
             issues.Add(new("hwinfo:rail-12v", "Критическое отклонение шины 12 В",
-                $"Напряжение шины 12 В: {rail12:N2} В. HWiNFO: подтверждено.", hwInfoCapturedAt, MonitoringIssueType.Voltage));
+                $"Напряжение шины 12 В: {rail12:N2} В. Показание HWiNFO превышает порог ИТ-Сети.", hwInfoCapturedAt, MonitoringIssueType.Voltage));
         if (hwInfoIsFresh && snapshot.HwInfo?.Rail5V is { } rail5 &&
             (rail5 < HwInfoThresholds.Rail5CriticalMinV || rail5 > HwInfoThresholds.Rail5CriticalMaxV))
             issues.Add(new("hwinfo:rail-5v", "Критическое отклонение шины 5 В",
-                $"Напряжение шины 5 В: {rail5:N2} В. HWiNFO: подтверждено.", hwInfoCapturedAt, MonitoringIssueType.Voltage));
+                $"Напряжение шины 5 В: {rail5:N2} В. Показание HWiNFO превышает порог ИТ-Сети.", hwInfoCapturedAt, MonitoringIssueType.Voltage));
         if (hwInfoIsFresh && snapshot.HwInfo?.Rail3V is { } rail3 && (rail3 < 2.97 || rail3 > 3.63))
             issues.Add(new("hwinfo:rail-3v", "Критическое отклонение шины 3,3 В",
-                $"Напряжение шины 3,3 В: {rail3:N2} В. HWiNFO: подтверждено.", hwInfoCapturedAt, MonitoringIssueType.Voltage));
+                $"Напряжение шины 3,3 В: {rail3:N2} В. Показание HWiNFO превышает порог ИТ-Сети.", hwInfoCapturedAt, MonitoringIssueType.Voltage));
 
         var cpuLoadCapturedAt = snapshot.CpuPercentCapturedAtUtc ?? snapshot.StartedAt;
         if (snapshot.CpuPercent is >= HwInfoThresholds.CpuLoadCriticalPercent and <= 100 &&
@@ -79,7 +79,7 @@ public static class CriticalMonitoringEvaluator
                 var type = GetIssueType(sensor.Category);
                 var severity = type == MonitoringIssueType.OtherHwInfoCritical ? "Warning" : "Critical";
                 var title = severity == "Warning" ? "Датчик HWiNFO требует проверки" : "HWiNFO сообщает критическое состояние";
-                var detail = $"{sensor.Name}: {sensor.Status ?? "критическое показание"} ({sensor.Value:N2} {sensor.Unit}); HWiNFO: подтверждено.";
+                var detail = $"{sensor.Name}: {sensor.Status ?? "критическое показание"} ({sensor.Value:N2} {sensor.Unit}); HWiNFO сообщил аппаратный критический статус.";
                 issues.Add(new(identity, title, detail, hwInfoCapturedAt, type, severity));
             }
         }
@@ -123,8 +123,9 @@ public static class CriticalMonitoringEvaluator
     };
 
     private static string HwInfoConfirmation(bool isFresh, bool? confirmed) =>
-        !isFresh || confirmed is null ? "HWiNFO: нет свежих данных, подтвердить показание не удалось." :
-        confirmed.Value ? "HWiNFO: подтверждено." : "HWiNFO: не подтверждено.";
+        !isFresh || confirmed is null ? "HWiNFO: нет свежего показания для проверки." :
+        confirmed.Value ? "Показание HWiNFO превышает порог ИТ-Сети." :
+            "Показание HWiNFO не превышает порог ИТ-Сети.";
 
     private static bool IsRecent(DateTimeOffset? capturedAtUtc, DateTimeOffset snapshotAt)
     {

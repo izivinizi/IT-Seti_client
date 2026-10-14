@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -8,6 +9,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Web.Script.Serialization;
 using System.Security.AccessControl;
+using System.Threading;
 
 namespace ITSeti.Maintenance.Win7
 {
@@ -107,6 +109,121 @@ namespace ITSeti.Maintenance.Win7
             finally { try { if (File.Exists(temporary)) File.Delete(temporary); } catch (IOException) { } }
         }
 
+        private static readonly string LastUploadAttemptPath = Path.Combine(SharedRoot, "report-upload-last-attempt.txt");
+        private static readonly string UploadMutexName = @"Global\ITSeti-Maintenance-ReportUpload";
+
+        public static bool HasPendingReports()
+        {
+            return Directory.Exists(QueueDirectory) && Directory.GetFiles(QueueDirectory, "*.json").Length > 0;
+        }
+
+        public static bool IsUploadDue()
+        {
+            DateTime lastAttempt;
+            return !DateTime.TryParse(File.Exists(LastUploadAttemptPath) ? File.ReadAllText(LastUploadAttemptPath) : null,
+                CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out lastAttempt) ||
+                DateTime.UtcNow - lastAttempt.ToUniversalTime() >= TimeSpan.FromHours(1);
+        }
+
+        private static bool TryClaimUploadWindow()
+        {
+            using (var mutex = new Mutex(false, UploadMutexName))
+            {
+                var locked = false;
+                try
+                {
+                    try { locked = mutex.WaitOne(TimeSpan.FromSeconds(5)); }
+                    catch (AbandonedMutexException) { locked = true; }
+                    if (!locked || !IsUploadDue()) return false;
+                    Directory.CreateDirectory(SharedRoot);
+                    var temporary = LastUploadAttemptPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                    try
+                    {
+                        File.WriteAllText(temporary, DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture), new UTF8Encoding(false));
+                        if (File.Exists(LastUploadAttemptPath)) File.Replace(temporary, LastUploadAttemptPath, null);
+                        else File.Move(temporary, LastUploadAttemptPath);
+                    }
+                    finally { if (File.Exists(temporary)) File.Delete(temporary); }
+                    return true;
+                }
+                finally { if (locked) mutex.ReleaseMutex(); }
+            }
+        }
+
+        private static void SaveSoftwareCatalogResponse(HttpWebResponse response, JavaScriptSerializer serializer, bool rawCatalog = false)
+        {
+            if (response.ContentLength > 2 * 1024 * 1024) throw new InvalidDataException("Каталог ПО из ответа сервера превышает 2 МБ.");
+            string json;
+            using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8, true))
+            {
+                var text = new StringBuilder();
+                var buffer = new char[4096];
+                int read;
+                while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    if (text.Length + read > 2 * 1024 * 1024) throw new InvalidDataException("Каталог ПО из ответа сервера превышает 2 МБ.");
+                    text.Append(buffer, 0, read);
+                }
+                json = text.ToString();
+            }
+            if (string.IsNullOrWhiteSpace(json)) return;
+            object value;
+            if (rawCatalog) value = serializer.DeserializeObject(json);
+            else
+            {
+                var payload = serializer.Deserialize<Dictionary<string, object>>(json);
+                if (payload == null || !payload.TryGetValue("softwareCatalog", out value) || value == null) return;
+            }
+            var items = value as object[];
+            if (items == null && value is System.Collections.ArrayList array) items = array.ToArray();
+            if (items == null) throw new InvalidDataException("Ответ сервера содержит некорректный каталог ПО.");
+            foreach (var item in items)
+            {
+                var package = item as Dictionary<string, object>;
+                if (package == null) throw new InvalidDataException("Ответ сервера содержит некорректную запись каталога ПО.");
+                object idValue, keyValue, platformValue, hashValue, sizeValue, fileValue;
+                if (!package.TryGetValue("id", out idValue) || !Guid.TryParse(Convert.ToString(idValue, CultureInfo.InvariantCulture), out var packageId) || packageId == Guid.Empty ||
+                    !package.TryGetValue("key", out keyValue) || string.IsNullOrWhiteSpace(Convert.ToString(keyValue, CultureInfo.InvariantCulture)) ||
+                    !package.TryGetValue("platform", out platformValue) || !new[] { "windows", "win7", "any" }.Contains(Convert.ToString(platformValue, CultureInfo.InvariantCulture)) ||
+                    !package.TryGetValue("sha256", out hashValue) || !System.Text.RegularExpressions.Regex.IsMatch(Convert.ToString(hashValue, CultureInfo.InvariantCulture), "^[a-fA-F0-9]{64}$") ||
+                    !package.TryGetValue("sizeBytes", out sizeValue) || !package.TryGetValue("fileName", out fileValue) ||
+                    string.IsNullOrWhiteSpace(Convert.ToString(fileValue, CultureInfo.InvariantCulture)) ||
+                    Path.GetFileName(Convert.ToString(fileValue, CultureInfo.InvariantCulture)) != Convert.ToString(fileValue, CultureInfo.InvariantCulture))
+                    throw new InvalidDataException("Ответ сервера содержит запись каталога ПО с недопустимыми полями.");
+                long sizeBytes;
+                try { sizeBytes = Convert.ToInt64(sizeValue, CultureInfo.InvariantCulture); }
+                catch (Exception) { throw new InvalidDataException("Размер записи каталога ПО некорректен."); }
+                if (sizeBytes <= 0 || sizeBytes > 1073741824L)
+                    throw new InvalidDataException("Размер записи каталога ПО выходит за допустимые пределы.");
+            }
+            var cache = Path.Combine(SharedRoot, "software-catalog.json");
+            var temporary = cache + "." + Guid.NewGuid().ToString("N") + ".pending";
+            try
+            {
+                File.WriteAllText(temporary, serializer.Serialize(items), new UTF8Encoding(false));
+                if (File.Exists(cache)) File.Replace(temporary, cache, null);
+                else File.Move(temporary, cache);
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
+
+        private static void RefreshSoftwareCatalog(Uri server, Dictionary<string, object> device, JavaScriptSerializer serializer)
+        {
+            var request = (HttpWebRequest)WebRequest.Create(new Uri(server, "/api/v1/updates"));
+            request.Method = "GET";
+            request.AllowAutoRedirect = false;
+            request.Timeout = 30000;
+            request.ReadWriteTimeout = 30000;
+            request.UserAgent = "ITSeti-Maintenance-Win7/2.4.7";
+            request.Headers.Add("X-Device-Id", Convert.ToString(device["deviceId"]));
+            request.Headers.Add("X-Device-Key", Convert.ToString(device["deviceKey"]));
+            using (var response = (HttpWebResponse)request.GetResponse())
+            {
+                if (response.StatusCode != HttpStatusCode.OK)
+                    throw new InvalidOperationException("Сервер ответил HTTP " + (int)response.StatusCode + " при получении каталога ПО.");
+                SaveSoftwareCatalogResponse(response, serializer, true);
+            }
+        }
         public static int Upload()
         {
             using (var identity = WindowsIdentity.GetCurrent())
@@ -122,15 +239,25 @@ namespace ITSeti.Maintenance.Win7
                 if (server.Scheme != Uri.UriSchemeHttps || !server.Host.Equals("it-seti.nylenz.ru", StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("Адрес сервера отчётов недействителен.");
                 ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
+                if (!TryClaimUploadWindow()) return 0;
+                if (!HasPendingReports())
+                {
+                    RefreshSoftwareCatalog(server, device, serializer);
+                    DeleteError();
+                    return 0;
+                }
                 RefreshProcessPolicy(server, device, serializer);
-                if (!Directory.Exists(QueueDirectory)) return 0;
+                var catalogRequested = false;
+                var catalogWarnings = new List<string>();
                 foreach (var path in Directory.GetFiles(QueueDirectory, "*.json"))
                 {
+                    var includeCatalog = !catalogRequested;
                     try
                     {
                         var bytes = File.ReadAllBytes(path);
                         if (bytes.Length > 12 * 1024 * 1024) throw new InvalidDataException("Отчёт превышает лимит сервера 12 МБ.");
-                        var request = (HttpWebRequest)WebRequest.Create(new Uri(server, "/api/v1/check-runs"));
+                        var route = includeCatalog ? "/api/v1/check-runs?includeCatalog=true" : "/api/v1/check-runs?includeCatalog=false";
+                        var request = (HttpWebRequest)WebRequest.Create(new Uri(server, route));
                         request.Method = "POST";
                         request.AllowAutoRedirect = false;
                         request.Timeout = 30000;
@@ -141,8 +268,13 @@ namespace ITSeti.Maintenance.Win7
                         request.ContentLength = bytes.Length;
                         using (var stream = request.GetRequestStream()) stream.Write(bytes, 0, bytes.Length);
                         using (var response = (HttpWebResponse)request.GetResponse())
+                        {
                             if (response.StatusCode != HttpStatusCode.OK)
                                 throw new InvalidOperationException("Сервер ответил HTTP " + (int)response.StatusCode + ".");
+                            catalogRequested = true;
+                            try { SaveSoftwareCatalogResponse(response, serializer); }
+                            catch (Exception ex) { catalogWarnings.Add(ex.GetType().Name + ": " + ex.Message); }
+                        }
                         File.Delete(path);
                     }
                     catch (WebException ex)
@@ -153,7 +285,8 @@ namespace ITSeti.Maintenance.Win7
                             : "Сервер отчётов ответил HTTP " + (int)response.StatusCode + ".", ex);
                     }
                 }
-                DeleteError();
+                if (catalogWarnings.Count > 0) WriteError("Отчёт принят, но каталог ПО не сохранён: " + string.Join("; ", catalogWarnings));
+                else DeleteError();
                 return 0;
             }
             catch (Exception ex)
