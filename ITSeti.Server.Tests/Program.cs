@@ -6,6 +6,12 @@ using System.Security.Cryptography;
 using System.Text;
 using ITSeti.Maintenance.Core;
 
+if (args.Contains("--feedback-database"))
+{
+    await FeedbackDatabaseChecks.RunAsync();
+    return;
+}
+
 if (args.Contains("--monitoring-performance"))
 {
     MonitoringPerformanceContract.Run();
@@ -202,11 +208,12 @@ using (var web = new OkdeskWebClient(new ConfigurationBuilder().AddInMemoryColle
     ["OkdeskLogin"]="fixture@example.test",["OkdeskPassword"]="fixture",["OkdeskWebTicketDeliveryEnabled"]="true"
 }).Build(), new HttpClient(webFixture)))
 {
-    Check(await web.CreateIssueAsync(TicketServices.Build("Fixture", "first\r\nsecond\n<third>", "525", 123, 456), CancellationToken.None) == 731,
+    Check(await web.CreateIssueAsync(TicketServices.Build("Fixture", "first\r\nsecond\n<third>", "525", 123, 456) with { EquipmentIds = [501] }, CancellationToken.None) == 731,
         "web transport creates a ticket after isolated authentication");
     Check(webFixture.Issue.GetProperty("company_id").GetInt64() == 123 && webFixture.Issue.GetProperty("maintenance_entity_id").GetInt64() == 456 &&
         webFixture.Issue.GetProperty("group_id").GetInt64() == 99 && webFixture.Issue.GetProperty("description").GetString() == "first<br />second<br />&lt;third&gt;",
         "web payload preserves assignment, service defaults, multiline text and HTML encoding");
+    Check(webFixture.Issue.GetProperty("equipment_ids")[0].GetInt64() == 501, "web ticket includes synchronized equipment");
     Check(await web.AddCommentAsync(731, "first\r\nsecond & <third>", [], CancellationToken.None) == 42 && webFixture.PublicReply &&
         webFixture.CommentContent == "first<br />second &amp; &lt;third&gt;",
         "web comment preserves multiline text and confirms public delivery");
@@ -509,10 +516,16 @@ var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<str
     ["OkdeskApiToken"] = "test-token", ["OkdeskBaseUrl"] = "https://it-seti.okdesk.ru"
 }).Build();
 var client = new OkdeskApiClient(config, new HttpClient(handler));
+ticket = ticket with { EquipmentIds = [501, 502] };
 Check(await client.CreateIssueAsync(ticket, CancellationToken.None) == 731, "Okdesk issue ID is read");
 Check(handler.Path == "/api/v1/issues/" && handler.Query.Contains("api_token=test-token") &&
     handler.Body.Contains("\"company_id\":12") && handler.Body.Contains("\"service_type\":\"525\"") &&
     !handler.Body.Contains("maintenance_entity_id"), "Okdesk API request has the expected fields");
+Check(JsonDocument.Parse(handler.Body).RootElement.GetProperty("issue").GetProperty("equipment_ids").EnumerateArray().Select(x => x.GetInt64()).SequenceEqual([501L,502L]),
+    "JSON API associates equipment with the ticket");
+await client.CreateIssueAsync(ticket, CancellationToken.None, [new TicketAttachment(Guid.NewGuid(), "fixture.txt", "text/plain", [1,2,3])]);
+Check(handler.Body.Contains("issue[equipment_ids][]") && handler.Body.Contains("501") && handler.Body.Contains("502"),
+    "multipart API preserves equipment when a ticket has files");
 
 sealed class TicketApiHandler : HttpMessageHandler
 {

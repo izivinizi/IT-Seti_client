@@ -2,6 +2,61 @@ const csrf = document.querySelector('meta[name="csrf-token"]').content;
 const $ = id => document.getElementById(id);
 const state = { companies: [], sites: [], devices: [], deviceOptions: [], selectedDevice: null, devicePage: 0,
   monitorPage: 0, applicationErrorPage: 0, applicationErrorRequest: 0, ticketPage: 0, deviceRequest: 0, deviceOptionsRequest: 0, monitorRequest: 0, ticketRequest: 0, runRequest: 0, selectionRequest: 0, view: 'computers' };
+const navigationFilters = ['device-search', 'device-company', 'device-site', 'monitor-days', 'monitor-company',
+  'monitor-site', 'monitor-severity', 'monitor-state', 'app-errors-days', 'app-errors-company', 'app-errors-site',
+  'ticket-status-filter', 'ticket-company', 'ticket-site', 'connections-days'];
+let navigationReady = false, restoringNavigation = false, navigationDialog = null, navigationRevision = 0;
+
+function navigationSnapshot() {
+  return { view: state.view, device: state.selectedDevice, runId: state.selectedRunId || null,
+    pages: [state.devicePage, state.monitorPage, state.applicationErrorPage, state.ticketPage],
+    filters: Object.fromEntries(navigationFilters.map(id => [id, $(id)?.value || ''])),
+    kinds: [...document.querySelectorAll('[data-monitor-kind]')].filter(item => item.checked).map(item => item.dataset.monitorKind),
+    dialog: navigationDialog };
+}
+
+function rememberNavigation(replace = false) {
+  if (!navigationReady || restoringNavigation || typeof window === 'undefined') return;
+  const next = navigationSnapshot(), current = window.history.state?.itseti;
+  if (JSON.stringify(next) === JSON.stringify(current)) return;
+  const url = '#' + next.view + (next.device && next.view === 'computers' ? '/pc/' + next.device.id : '');
+  if (replace) window.history.replaceState({ itseti: next }, '', url);
+  else window.history.pushState({ itseti: next }, '', url);
+}
+
+async function restoreNavigation(saved) {
+  if (!saved || !['computers', 'monitoring', 'connections', 'application-errors', 'tickets', 'packages'].includes(saved.view)) return;
+  const revision = ++navigationRevision;
+  restoringNavigation = true;
+  try {
+    for (const id of ['ticket-dialog', 'telemetry-dialog']) if ($(id).open) $(id).close();
+    navigationDialog = null;
+    clearDeviceSelection();
+    for (const id of navigationFilters.filter(id => !id.endsWith('-site'))) if ($(id)) $(id).value = saved.filters?.[id] || '';
+    for (const prefix of ['device', 'monitor', 'app-errors', 'ticket']) {
+      fillSites(prefix, true);
+      if ($(prefix + '-site')) $(prefix + '-site').value = saved.filters?.[prefix + '-site'] || '';
+    }
+    for (const item of document.querySelectorAll('[data-monitor-kind]')) item.checked = saved.kinds?.includes(item.dataset.monitorKind) ?? true;
+    [state.devicePage, state.monitorPage, state.applicationErrorPage, state.ticketPage] = (saved.pages || [0,0,0,0]).map(page => Math.max(0, Number(page) || 0));
+    for (const id of navigationFilters) if ($(id)?.tagName === 'SELECT') refreshSearchSelect($(id));
+    showView(saved.view, false);
+    if (saved.view === 'computers') {
+      await loadDevices();
+      if (revision !== navigationRevision) return;
+      if (saved.device) await selectDevice(saved.device, saved.runId, false);
+    }
+    if (revision !== navigationRevision) return;
+    if (saved.dialog?.kind === 'ticket') await openTicket(saved.dialog.ticket);
+    if (saved.dialog?.kind === 'telemetry') showTelemetryChart(saved.dialog.history, saved.dialog.category, saved.dialog.label);
+  } finally { if (revision === navigationRevision) restoringNavigation = false; }
+}
+
+function closeNavigationDialog(id) {
+  $(id).close(); navigationDialog = null;
+  if (typeof window !== 'undefined' && window.history.state?.itseti?.dialog) window.history.back();
+  else rememberNavigation(true);
+}
 
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
@@ -139,6 +194,7 @@ function showTelemetryChart(history, category, label) {
   $('telemetry-stats').replaceChildren(
     node('span', `Мин. ${min.toFixed(2)}${suffix}`), node('span', `Сред. ${average.toFixed(2)}${suffix}`), node('span', `Макс. ${max.toFixed(2)}${suffix}`));
   $('telemetry-dialog').showModal();
+  navigationDialog = { kind: 'telemetry', history, category, label }; rememberNavigation();
 }
 
 function telemetryButton(history, category, label) {
@@ -150,7 +206,7 @@ function telemetryButton(history, category, label) {
   return button;
 }
 
-function showView(view) {
+function showView(view, remember = true) {
   state.view = view;
   $('page-title').textContent = { computers: 'Компьютеры', monitoring: 'Мониторинг', connections:'Новые подключения', 'application-errors': 'Ошибки приложения', tickets: 'Заявки', packages: 'ПО и обновления' }[view];
   for (const item of document.querySelectorAll('.nav-item')) {
@@ -164,6 +220,7 @@ function showView(view) {
   if (view === 'application-errors') loadApplicationErrors();
   if (view === 'tickets') loadTickets();
   if (view === 'packages') loadPackages();
+  if (remember) rememberNavigation();
 }
 
 function fillCompanies(selectId) {
@@ -277,6 +334,7 @@ async function loadDevices() {
           if (company) $('device-site').value = item.id == null ? 'none' : String(item.id);
           else { $('device-company').value = String(item.id); fillSites('device', true); }
           refreshSearchSelect($('device-company')); refreshSearchSelect($('device-site'));
+          rememberNavigation();
           loadDevices();
         };
         row.addEventListener('click', open);
@@ -327,12 +385,14 @@ async function loadDevices() {
   } catch (error) { if (requestId === state.deviceRequest) status('device-status', error.message, 'error'); }
 }
 
-async function selectDevice(device, requestedRunId = null) {
+async function selectDevice(device, requestedRunId = null, remember = true) {
   if (!device || device.equipmentOnly || !device.id) return;
   const requestId = ++state.selectionRequest;
   ++state.runRequest;
   state.selectedDevice = device;
-  showView('computers');
+  state.selectedRunId = requestedRunId;
+  showView('computers', false);
+  if (remember) rememberNavigation();
   for (const row of $('device-rows').rows) row.classList.remove('selected');
   const selectedIndex = state.devices.findIndex(item => item.id === device.id);
   if (selectedIndex >= 0) $('device-rows').rows[selectedIndex].classList.add('selected');
@@ -355,7 +415,8 @@ async function selectDevice(device, requestedRunId = null) {
       button.addEventListener('click', () => selectRun(run));
       $('run-list').append(button);
     }
-    await selectRun(runs.find(run => run.id === requestedRunId) || runs[0]);
+    await selectRun(runs.find(run => run.id === requestedRunId) || runs[0], false);
+    if (requestId === state.selectionRequest) rememberNavigation(true);
   } catch (error) { if (requestId === state.selectionRequest) $('run-detail').replaceChildren(node('p', error.message, 'signal-error')); }
 }
 
@@ -363,6 +424,7 @@ function clearDeviceSelection() {
   ++state.selectionRequest;
   ++state.runRequest;
   state.selectedDevice = null;
+  state.selectedRunId = null;
   $('selected-title').textContent = 'Выберите ПК';
   $('selected-meta').textContent = '';
   $('ticket-block-toggle').disabled = true;
@@ -373,8 +435,10 @@ function clearDeviceSelection() {
   for (const row of $('device-rows').rows) row.classList.remove('selected');
 }
 
-async function selectRun(run) {
+async function selectRun(run, remember = true) {
   const requestId = ++state.runRequest;
+  state.selectedRunId = run.id;
+  if (remember) rememberNavigation();
   for (const button of $('run-list').children) button.classList.toggle('active', button.dataset.runId === run.id);
   $('run-detail').replaceChildren(node('p', 'Загружаю проверку…', 'detail-empty'));
   try {
@@ -581,9 +645,11 @@ function renderRun(run) {
 
 function monitoringParameters() {
   const params = new URLSearchParams({ page: String(state.monitorPage), days: $('monitor-days').value });
-  params.set('severity', $('monitor-severity').value || '1');
+  params.set('severity', $('monitor-severity').value || '0');
   params.set('state', $('monitor-state').value || 'open');
-  if ($('monitor-category').value) params.set('category', $('monitor-category').value);
+  const kinds = [...document.querySelectorAll('[data-monitor-kind]')];
+  const selected = kinds.filter(item => item.checked).map(item => item.dataset.monitorKind);
+  if (kinds.length && selected.length !== kinds.length) params.set('types', selected.join(',') || 'none');
   if ($('monitor-company').value) params.set('companyId', $('monitor-company').value);
   if ($('monitor-site').value) params.set('siteId', $('monitor-site').value);
   return params;
@@ -830,7 +896,8 @@ async function openTicket(ticket) {
   $('ticket-dialog-title').textContent = ticket.title;
   $('ticket-dialog-description').textContent = ticket.description;
   $('ticket-conversation').replaceChildren(); $('ticket-reply').value = ''; $('ticket-reply-public').checked = true;
-  status('ticket-action-status', ''); $('ticket-dialog').showModal(); await loadConversation();
+  status('ticket-action-status', ''); $('ticket-dialog').showModal();
+  navigationDialog = { kind: 'ticket', ticket }; rememberNavigation(); await loadConversation();
 }
 async function ticketAction(target) {
   if (!activeTicket || !confirm(target === 'completed' ? 'Отметить заявку выполненной и отправить статус в Okdesk?' : 'Отменить заявку и отправить статус в Okdesk?')) return;
@@ -952,10 +1019,10 @@ $('process-policy-form').addEventListener('submit', async event => {
   } catch (error) { status('process-policy-status', error.message, 'error'); }
   finally { if (button) button.disabled = false; }
 });
-$('ticket-dialog-close').addEventListener('click', () => $('ticket-dialog').close());
-$('telemetry-close').addEventListener('click', () => $('telemetry-dialog').close());
+$('ticket-dialog-close').addEventListener('click', () => closeNavigationDialog('ticket-dialog'));
+$('telemetry-close').addEventListener('click', () => closeNavigationDialog('telemetry-dialog'));
 $('telemetry-dialog').addEventListener('click', event => {
-  if (event.target === $('telemetry-dialog')) $('telemetry-dialog').close();
+  if (event.target === $('telemetry-dialog')) closeNavigationDialog('telemetry-dialog');
 });
 $('ticket-complete').addEventListener('click', () => ticketAction('completed'));
 $('ticket-cancel').addEventListener('click', () => ticketAction('cancelled'));
@@ -1002,13 +1069,14 @@ let searchTimer;
 $('device-search').addEventListener('input', () => {
   clearDeviceSelection();
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => { state.devicePage = 0; refreshDeviceLists(); }, 300);
+  searchTimer = setTimeout(() => { state.devicePage = 0; rememberNavigation(); refreshDeviceLists(); }, 300);
 });
 $('device-company').addEventListener('change', () => { fillSites('device', true); state.devicePage = 0; clearDeviceSelection(); refreshDeviceLists(); });
 $('device-site').addEventListener('change', () => { state.devicePage = 0; clearDeviceSelection(); refreshDeviceLists(); });
 $('device-prev').addEventListener('click', () => { state.devicePage--; loadDevices(); });
 $('device-next').addEventListener('click', () => { state.devicePage++; loadDevices(); });
-for (const id of ['monitor-days', 'monitor-category', 'monitor-site', 'monitor-severity', 'monitor-state']) $(id).addEventListener('change', () => { state.monitorPage = 0; loadMonitoring(); });
+for (const id of ['monitor-days', 'monitor-site', 'monitor-severity', 'monitor-state']) $(id).addEventListener('change', () => { state.monitorPage = 0; loadMonitoring(); });
+for (const item of document.querySelectorAll('[data-monitor-kind]')) item.addEventListener('change', () => { state.monitorPage = 0; rememberNavigation(); loadMonitoring(); });
 $('monitor-company').addEventListener('change', () => { fillSites('monitor', true); state.monitorPage = 0; loadMonitoring(); });
 $('monitor-prev').addEventListener('click', () => { state.monitorPage--; loadMonitoring(); });
 $('monitor-next').addEventListener('click', () => { state.monitorPage++; loadMonitoring(); });
@@ -1030,4 +1098,15 @@ $('sync-okdesk').addEventListener('click', async event => {
 });
 $('package-form').addEventListener('submit', uploadPackage);
 
-Promise.all([loadCatalog(), loadOverview()]).then(refreshDeviceLists).catch(error => status('device-status', error.message, 'error'));
+window.addEventListener('popstate', event => restoreNavigation(event.state?.itseti).catch(error => status('device-status', error.message, 'error')));
+for (const id of ['ticket-dialog', 'telemetry-dialog']) $(id).addEventListener('cancel', event => { event.preventDefault(); closeNavigationDialog(id); });
+document.addEventListener('change', event => { if (navigationFilters.includes(event.target.id)) rememberNavigation(); });
+document.addEventListener('click', event => {
+  if (['device-prev', 'device-next', 'monitor-prev', 'monitor-next', 'app-errors-prev', 'app-errors-next', 'ticket-prev', 'ticket-next'].includes(event.target.closest('button')?.id)) rememberNavigation();
+});
+Promise.all([loadCatalog(), loadOverview()]).then(async () => {
+  navigationReady = true;
+  const saved = window.history.state?.itseti;
+  if (saved) await restoreNavigation(saved);
+  else { await refreshDeviceLists(); rememberNavigation(true); }
+}).catch(error => status('device-status', error.message, 'error'));

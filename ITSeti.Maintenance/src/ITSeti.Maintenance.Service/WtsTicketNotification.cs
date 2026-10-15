@@ -11,9 +11,10 @@ internal static class WtsTicketNotification
     private const int TopMost = 0x00040000;
     private const uint NotificationTimeoutSeconds = 30;
 
-    public static void Show(IReadOnlyList<TicketUpdateMessage> messages)
+    public static bool Show(IReadOnlyList<TicketUpdateMessage> messages)
     {
-        if (messages.Count == 0 || !WTSEnumerateSessionsW(IntPtr.Zero, 0, 1, out var sessions, out var count)) return;
+        if (messages.Count == 0 || !WTSEnumerateSessionsW(IntPtr.Zero, 0, 1, out var sessions, out var count)) return false;
+        var delivered = false;
         try
         {
             const string title = "ИТ-Сети: ответ по заявке";
@@ -33,9 +34,11 @@ internal static class WtsTicketNotification
                     ApplicationErrorStore.Record("Заявки", "Показ уведомления в пользовательской сессии",
                         new Win32Exception(Marshal.GetLastWin32Error()));
                 }
+                else delivered = true;
             }
         }
         finally { WTSFreeMemory(sessions); }
+        return delivered;
     }
 
     private static string CleanTitle(string title)

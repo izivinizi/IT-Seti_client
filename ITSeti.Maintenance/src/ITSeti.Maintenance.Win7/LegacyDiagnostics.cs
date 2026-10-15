@@ -99,6 +99,7 @@ namespace ITSeti.Maintenance.Win7
         public string HwInfoVersion { get; set; }
         public string HwInfoCapturedAtUtc { get; set; }
         public List<LegacyHwInfoAlert> HwInfoAlerts { get; set; } = new List<LegacyHwInfoAlert>();
+        public List<LegacyHwInfoSensor> HwInfoSensors { get; set; } = new List<LegacyHwInfoSensor>();
         public double? VrmTemperatureC { get; set; }
         public double? PchTemperatureC { get; set; }
         public double? Rail12V { get; set; }

@@ -389,7 +389,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     private double? CurrentMemoryLoad => CurrentHwInfo?.MemoryLoadPercent ?? UserSnapshot?.MemoryUsedPercent;
     private double? CurrentCpuTemperature => UserSnapshot?.CpuTemperatureC ?? UserSnapshot?.Full?.CpuTemperatureC ?? CurrentHwInfo?.CpuTemperatureC;
     private string SystemDriveName => (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").TrimEnd('\\');
-    private DiskSnapshot? SystemDisk => UserSnapshot?.Disks.FirstOrDefault(d => string.Equals(d.Name.TrimEnd('\\'), SystemDriveName, StringComparison.OrdinalIgnoreCase));
+    private DiskSnapshot? SystemDisk => UserSnapshot?.Disks.FirstOrDefault(d => string.Equals(d.Name.TrimEnd('\\'), SystemDriveName, StringComparison.OrdinalIgnoreCase))
+        ?? Selected?.Disks.FirstOrDefault(d => string.Equals(d.Name.TrimEnd('\\'), SystemDriveName, StringComparison.OrdinalIgnoreCase));
     private DiskSnapshot? LowSpaceDisk => UserSnapshot?.Disks.Where(d =>
         string.Equals(d.Name.TrimEnd('\\'), SystemDriveName, StringComparison.OrdinalIgnoreCase) &&
         d.TotalBytes >= 50L * 1073741824 && d.FreeBytes < 15L * 1073741824)
@@ -661,15 +662,20 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         CurrentCpuTemperature is >= HwInfoThresholds.CpuCriticalC ? MetricCriticalBrush :
         CurrentCpuTemperature is >= HwInfoThresholds.CpuWarningC || cpuSnapshot.Full?.ResourceSampling?.CpuHighSamples >= 5 ? MetricWarningBrush : MetricGoodBrush;
     public string CpuDetail => $"{UserSnapshot?.Full?.CpuName ?? CurrentHwInfo?.CpuName ?? LocalCpuName} · {FormatCpuTemperature(CurrentCpuTemperature)}";
-    public string Gpu => UserSnapshot?.Full?.GpuName ?? "Нет данных";
-    public string MemoryType => UserSnapshot?.Full?.MemoryType is { Length: > 0 } type ? type : "Тип DDR не определён";
+    private ComputerHardwareIdentity hardwareIdentity = new(null, null);
+    private static string? KnownHardwareValue(params string?[] values) => values.FirstOrDefault(value =>
+        !string.IsNullOrWhiteSpace(value) && !value.Equals("нет данных", StringComparison.OrdinalIgnoreCase));
+    public string Gpu => KnownHardwareValue(UserSnapshot?.Full?.GpuName, Selected?.Full?.GpuName,
+        hardwareIdentity.Gpu) ?? "Нет данных";
+    public string MemoryType => KnownHardwareValue(UserSnapshot?.Full?.MemoryType, Selected?.Full?.MemoryType,
+        CurrentHwInfo?.MemoryType, hardwareIdentity.MemoryType) ?? "Тип DDR не определён";
     public string Memory => UserMemoryLabel;
     public Brush MemoryStatusBrush => UserSnapshot is not { } memorySnapshot ? MetricNeutralBrush :
         memorySnapshot.Full?.ResourceSampling is { LowAvailableSamples: >= 5, PagingHighSamples: >= 3 } ? MetricCriticalBrush :
         memorySnapshot.Full?.ResourceSampling?.MemoryHighSamples >= 5 ? MetricWarningBrush : MetricGoodBrush;
     public string MemoryDetail => UserSnapshot is not { TotalMemoryBytes: > 0 } memorySnapshot ? "Замер не выполнен"
         : $"Свободно {memorySnapshot.AvailableMemoryBytes / 1073741824.0:N1} из {memorySnapshot.TotalMemoryBytes / 1073741824.0:N1} ГБ";
-    public string DiskCount => Selected?.Disks.FirstOrDefault(d => d.Name.StartsWith(Environment.GetEnvironmentVariable("SystemDrive") ?? "C:", StringComparison.OrdinalIgnoreCase))?.Usage ?? "—";
+    public string DiskCount => SystemDisk?.Usage ?? "—";
     public Brush DiskStatusBrush
     {
         get
@@ -692,7 +698,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             return issue?.Severity switch { "Critical" => MetricCriticalBrush, "Warning" => MetricWarningBrush, _ => MetricGoodBrush };
         }
     }
-    public string DiskDetail => Selected?.Disks.FirstOrDefault(d => d.Name.StartsWith(Environment.GetEnvironmentVariable("SystemDrive") ?? "C:", StringComparison.OrdinalIgnoreCase)) is { } disk
+    public string DiskDetail => SystemDisk is { } disk
         ? $"{disk.Name} · свободно {disk.FreeBytes / 1073741824.0:N1} ГБ" : "Нет данных";
     public string SystemDiskSummary
     {
@@ -807,16 +813,16 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         if (hwInfo?.Sensors is { } sensors)
         {
             var capturedAt = hwInfo.CapturedAtUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss");
-            rows = sensors.OrderBy(item => item.Category, StringComparer.CurrentCultureIgnoreCase)
-                .ThenBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase).Take(100)
+            rows = HwInfoSensorPolicy.DisplaySensors(sensors).Take(100)
                 .Select(sensor =>
             {
                 var decimals = sensor.Category.Contains("Temperature", StringComparison.OrdinalIgnoreCase) ? 1
                     : sensor.Unit.Contains("V", StringComparison.OrdinalIgnoreCase) ? 2
-                    : sensor.Unit.Contains('%') ? 1 : 2;
+                    : sensor.Unit.Contains('%') ? 0 : 2;
                 var value = double.IsFinite(sensor.Value) ? sensor.Value.ToString($"N{decimals}") : "Нет данных";
                 return new HwInfoSensorOverview(sensor.Name,
-                    string.IsNullOrWhiteSpace(sensor.Unit) ? value : $"{value} {sensor.Unit}", capturedAt, sensor.Category);
+                    string.IsNullOrWhiteSpace(sensor.Unit) ? value : $"{value} {sensor.Unit}", capturedAt,
+                    HwInfoSensorPolicy.DisplayCategory(sensor.Category));
             }).ToArray();
         }
 
@@ -1109,7 +1115,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         }
     }
 
-    public async Task<bool> RequestApplicationUpdateAsync(IProgress<string>? progress = null)
+    public async Task<bool> RequestApplicationUpdateAsync(IProgress<string>? progress = null, CancellationToken cancellationToken = default)
     {
         if (busy || applicationUpdateRunning || availableApplicationRelease is null) return false;
         applicationUpdateRunning = true;
@@ -1124,7 +1130,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         });
         try
         {
-            var readyToInstall = await new ApplicationUpdateRunner().RequestUpdateAsync(statusProgress);
+            var readyToInstall = await new ApplicationUpdateRunner().RequestUpdateAsync(statusProgress, cancellationToken);
             if (!readyToInstall)
                 applicationUpdateStatus = "Обновление не требуется. Установлена последняя версия.";
             else
@@ -1132,6 +1138,12 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             Notify();
             progress?.Report(applicationUpdateStatus);
             return readyToInstall;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            applicationUpdateStatus = "Окно обновления закрыто. Системная задача продолжит подготовку пакета.";
+            Notify();
+            throw;
         }
         catch (Exception ex)
         {
@@ -1553,6 +1565,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             RefreshIdentity();
             windowsUpdatePolicyStatus = new WindowsUpdatePolicyRunner().ReadStatus();
             await ReloadAsync();
+            hardwareIdentity = await Task.Run(ComputerHardwareIdentity.Read);
             status = History.Count > 0 ? "Последняя проверка загружена" : "Готово к первой проверке";
             _ = ImportInstalledReportsAsync();
         }
@@ -1689,7 +1702,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         nameof(UserDiskLabel), nameof(UserDiskDetail), nameof(UserDiskHealth), nameof(UserLiveSummary),
         nameof(HwInfoStatus), nameof(Cpu), nameof(CpuStatusBrush), nameof(CpuDetail),
         nameof(Gpu), nameof(MemoryType), nameof(Memory), nameof(MemoryStatusBrush),
-        nameof(MemoryDetail));
+        nameof(MemoryDetail), nameof(DiskCount), nameof(DiskDetail), nameof(SystemDiskSummary), nameof(DiskStatusBrush));
 
     private void Notify(params string[] names)
     {

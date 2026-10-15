@@ -8,6 +8,16 @@ namespace ITSeti.Maintenance.Infrastructure;
 
 public sealed class ApplicationUpdateRunner
 {
+    private readonly string statusPath;
+    private readonly Func<string, CancellationToken, Task> runTask;
+
+    public ApplicationUpdateRunner() : this(StatusPath, RunTaskCommandAsync) { }
+
+    internal ApplicationUpdateRunner(string statusPath, Func<string, CancellationToken, Task> runTask)
+    {
+        this.statusPath = statusPath;
+        this.runTask = runTask;
+    }
     private const string UpdateTask = "ITSeti-Maintenance-Update";
     private static readonly string StatusPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
@@ -60,15 +70,17 @@ public sealed class ApplicationUpdateRunner
     {
         var requestStarted = DateTime.Now.AddSeconds(-1);
         var requestStartedUtc = DateTime.UtcNow;
-        await RunTaskCommandAsync("/Query", cancellationToken);
-        await RunTaskCommandAsync("/Run", cancellationToken);
+        await runTask("/Query", cancellationToken);
+        await runTask("/Run", cancellationToken);
 
         var deadline = DateTimeOffset.UtcNow.AddMinutes(30);
         string? lastMessage = null;
         while (DateTimeOffset.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var status = ReadRawStatus();
+            string? status = null;
+            try { if (File.Exists(statusPath)) status = File.ReadAllText(statusPath).Trim(); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             if (!string.IsNullOrWhiteSpace(status))
             {
                 var message = GetStatusMessage(status);
@@ -76,12 +88,12 @@ public sealed class ApplicationUpdateRunner
                 var hasFreshTimestamp = separator > 0 && DateTime.TryParseExact(
                     status[..separator].Trim(), "yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.AssumeLocal, out var timestamp) && timestamp >= requestStarted
-                    && File.GetLastWriteTimeUtc(StatusPath) >= requestStartedUtc;
+                    && File.GetLastWriteTimeUtc(statusPath) >= requestStartedUtc;
                 if (hasFreshTimestamp && message != lastMessage)
                 {
                     lastMessage = message;
                     progress?.Report(message);
-                    if (IsReadyToInstall(status)) return true;
+                    if (IsPendingInstall(status)) return true;
                     if (message.StartsWith("Ошибка обновления:", StringComparison.OrdinalIgnoreCase))
                         throw new InvalidOperationException(message["Ошибка обновления:".Length..].Trim());
                     if (message.Contains("обновление не требуется", StringComparison.OrdinalIgnoreCase)) return false;

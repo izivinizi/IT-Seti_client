@@ -3,7 +3,7 @@
 [Setup]
 AppId={{CFA7B53D-16A9-4D77-9D82-EE68369AB185}
 AppName=ИТ-Сети Обслуживание ПК
-AppVersion=2.4.8
+AppVersion=2.4.9
 AppPublisher=ИТ-Сети
 DefaultDirName={autopf}\ITSeti Maintenance
 DefaultGroupName=ИТ-Сети
@@ -53,6 +53,22 @@ var
   InstallDirEdit: TNewEdit;
   InstallDirBrowse: TNewButton;
   InventoryEdit: TNewEdit;
+
+procedure MaintenanceLog(const S: String; const Error, FirstLine: Boolean);
+var
+  Stage: String;
+begin
+  Log(S);
+  if Error or (Pos('ITSETI_STAGE|', S) <> 1) then Exit;
+  Stage := Copy(S, 14, Length(S));
+  if Stage = 'FILES' then WizardForm.StatusLabel.Caption := 'Проверяем файлы приложения и инструментов...'
+  else if Stage = 'SENSOR' then WizardForm.StatusLabel.Caption := 'Проверяем драйвер датчиков...'
+  else if Stage = 'ACL' then WizardForm.StatusLabel.Caption := 'Настраиваем доступ системной службы к данным...'
+  else if Stage = 'TASKS' then WizardForm.StatusLabel.Caption := 'Регистрируем задачи обслуживания...'
+  else if Stage = 'VERIFY' then WizardForm.StatusLabel.Caption := 'Проверяем запуск системного задания...'
+  else if Stage = 'SERVICE' then WizardForm.StatusLabel.Caption := 'Запускаем службу ИТ-Сети...'
+  else if Stage = 'FINISH' then WizardForm.StatusLabel.Caption := 'Завершаем установку...';
+end;
 
 procedure BrowseInstallDir(Sender: TObject);
 var
@@ -155,10 +171,10 @@ begin
     WizardForm.StatusLabel.Caption := 'Настраиваем обслуживание компьютера. Это может занять около минуты...';
     MaintenanceResult := ExpandConstant('{commonappdata}\ITSeti\Maintenance\install-error.txt');
     DeleteFile(MaintenanceResult);
-    if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    if not ExecAndLogOutput(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
       '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\ITSeti-Package\Install-Maintenance.ps1') +
       '" -PackageRoot "' + ExpandConstant('{tmp}\ITSeti-Package') + '" -InstallRoot "' + ExpandConstant('{app}') + '" -PreinstalledApp -ResultFile "' + MaintenanceResult + '"',
-      '', SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
+      '', SW_HIDE, ewWaitUntilTerminated, Code, @MaintenanceLog) or (Code <> 0) then
     begin
       if not LoadStringFromFile(MaintenanceResult, MaintenanceText) then
         MaintenanceText := 'PowerShell не записал подробности. Проверьте C:\ProgramData\ITSeti\Maintenance\install.log.';

@@ -16,6 +16,18 @@ $id=[guid]::NewGuid().ToString()
 $logging=$false
 $script:DiskBenchmarkReadyFile=Join-Path $RunRoot 'benchmark-ready.signal'
 function Write-Stage([string]$Text){[IO.File]::WriteAllText((Join-Path $RunRoot 'stage.txt'),$Text,[Text.Encoding]::UTF8)}
+function Publish-SmartProgress {
+    if($script:SmartProgressPublished -or !$script:Snapshot){return}
+    $path=Join-Path $RunRoot 'smart-result.xml'
+    if(!(Test-Path -LiteralPath $path -PathType Leaf)){return}
+    try {
+        $smart=Import-Clixml -LiteralPath $path
+        if(@($smart.Smart).Count -eq 0){return}
+        $script:Snapshot.Smart=@($smart.Smart)
+        Save-Result 'partial.json' -Pending
+        $script:SmartProgressPublished=$true
+    } catch [IO.IOException] { }
+}
 function Assert-CheckNotCancelled {
     $request=Join-Path $RunRoot 'cancel-request.txt'
     if(!(Test-Path -LiteralPath $request -PathType Leaf)){return}
@@ -138,6 +150,7 @@ try {
         } catch {$script:DiskFailure='Запуск SMART/DiskSpd: '+$_.Exception.Message}
     }
     function Show-InitialSection([int]$Number) {
+        Publish-SmartProgress
         switch($Number){
             1 {
                 Write-Stage 'CPU/ОЗУ измерены. Проверка дисков и процессов'
@@ -162,10 +175,11 @@ try {
     if($UserMode -and !$script:Admin){$script:Snapshot.Notes+=@('Проверка выполнена от текущего пользователя; защищённые системные сведения могут быть недоступны.')}
     try {$script:TopMemoryProcesses=@(Get-TopMemoryProcesses)} catch {$script:Snapshot.Notes+=@('Топ процессов по ОЗУ: '+$_.Exception.Message)}
     Save-Result 'partial.json' -Pending
+    Publish-SmartProgress
     if($script:Sampler) {
         Write-Stage 'Подтверждение нагрузки CPU/ОЗУ за 30 секунд; DiskSpd измерит задержку отдельно'
         $samplerDeadline=[DateTime]::UtcNow.AddSeconds(45)
-        while(!$script:Sampler.WaitForExit(500) -and [DateTime]::UtcNow -lt $samplerDeadline){Assert-CheckNotCancelled}
+        while(!$script:Sampler.WaitForExit(500) -and [DateTime]::UtcNow -lt $samplerDeadline){Assert-CheckNotCancelled;Publish-SmartProgress}
         if(!$script:Sampler.HasExited){
             try {$script:Sampler.Kill();[void]$script:Sampler.WaitForExit(5000)} catch {}
             $script:Snapshot.Notes+=@('Замер нагрузки не завершился за 45 секунд; зависший процесс остановлен.')

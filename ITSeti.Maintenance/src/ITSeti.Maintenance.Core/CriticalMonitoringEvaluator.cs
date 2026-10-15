@@ -71,15 +71,17 @@ public static class CriticalMonitoringEvaluator
         // distinct frames before they become a warning in the continuous monitor.
         if (hwInfoIsFresh)
         {
-            foreach (var sensor in snapshot.HwInfo!.AlertingSensors.Where(item => item.IsCritical))
+            foreach (var sensor in snapshot.HwInfo!.AlertingSensors)
             {
                 var identity = KnownSensorIdentity(sensor.Category) ??
                     "hwinfo:critical:" + (sensor.SensorId ?? sensor.Name).ToLowerInvariant();
                 if (issues.Any(issue => issue.Identity.Equals(identity, StringComparison.OrdinalIgnoreCase))) continue;
                 var type = GetIssueType(sensor.Category);
-                var severity = type == MonitoringIssueType.OtherHwInfoCritical ? "Warning" : "Critical";
+                var severity = type == MonitoringIssueType.OtherHwInfoCritical || !sensor.IsCritical ? "Warning" : "Critical";
                 var title = severity == "Warning" ? "Датчик HWiNFO требует проверки" : "HWiNFO сообщает критическое состояние";
-                var detail = $"{sensor.Name}: {sensor.Status ?? "критическое показание"} ({sensor.Value:N2} {sensor.Unit}); HWiNFO сообщил аппаратный критический статус.";
+                var detail = sensor.Category == "HardwareAlarm"
+                    ? $"{sensor.Name}: {sensor.Status ?? HwInfoSensorPolicy.DescribeAlarm(sensor.Name)}. HWiNFO: аппаратный флаг активен (Yes)."
+                    : $"{sensor.Name}: {sensor.Status ?? "предупреждение датчика"} ({sensor.Value:N2} {sensor.Unit}); статус передан HWiNFO.";
                 issues.Add(new(identity, title, detail, hwInfoCapturedAt, type, severity));
             }
         }

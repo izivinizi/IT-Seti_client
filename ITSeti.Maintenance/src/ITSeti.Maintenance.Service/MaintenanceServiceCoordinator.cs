@@ -58,7 +58,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     internal MaintenanceServiceCoordinator(string? backendRootOverride, string? statusPathOverride,
         string? pipeNameOverride, bool monitorEnabled)
     {
-        ticketUpdateMonitor = new TicketUpdateMonitor(onIncomingMessages: WtsTicketNotification.Show);
+        ticketUpdateMonitor = new TicketUpdateMonitor(tryDeliverMessages: WtsTicketNotification.Show);
         backendRoot = backendRootOverride ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Backend"));
         statusPath = statusPathOverride ?? Path.Combine(DataRoot, "Service", "status.json");
         pipeName = pipeNameOverride ?? MaintenanceServiceProtocol.PipeName;
@@ -1230,7 +1230,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     }
 
     private static string GetVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.4.8";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.4.9";
 
     private void StopChildren()
     {

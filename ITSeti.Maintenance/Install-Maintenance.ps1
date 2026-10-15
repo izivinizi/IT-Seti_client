@@ -1,13 +1,21 @@
-﻿param([string]$PackageRoot=$PSScriptRoot,[string]$InstallRoot=(Join-Path $env:ProgramFiles 'ITSeti Maintenance'),[switch]$PreinstalledApp,[string]$ResultFile='')
+﻿param([string]$PackageRoot=$PSScriptRoot,[string]$InstallRoot=(Join-Path $env:ProgramFiles 'ITSeti Maintenance'),[switch]$PreinstalledApp,[string]$ResultFile='',[switch]$RepairPermissions)
 $ErrorActionPreference='Stop'
 $installStage='Инициализация'
 $data=Join-Path $env:ProgramData 'ITSeti\Maintenance'
 $installLog=Join-Path $data 'install.log'
+$stageTimer=[Diagnostics.Stopwatch]::StartNew()
 function Write-InstallLog([string]$Message) {
     try {
         New-Item -ItemType Directory -Path $data -Force | Out-Null
         Add-Content -LiteralPath $installLog -Value ('[{0:yyyy-MM-dd HH:mm:ss}] {1}' -f (Get-Date),$Message) -Encoding UTF8
     } catch { }
+}
+function Set-InstallStage([string]$Stage,[string]$Code='CONFIG') {
+    Write-InstallLog ('Этап «{0}»: {1:N1} с' -f $script:installStage,$script:stageTimer.Elapsed.TotalSeconds)
+    $script:installStage=$Stage
+    $script:stageTimer.Restart()
+    Write-InstallLog ('Начат этап: '+$Stage)
+    Write-Output ('ITSETI_STAGE|'+$Code)
 }
 function Set-InstallAcl([string]$Path,[string[]]$Arguments) {
     if(!(Test-Path -LiteralPath $Path)){throw "Каталог или файл для настройки доступа не найден: $Path"}
@@ -18,7 +26,7 @@ function Set-InstallAcl([string]$Path,[string[]]$Arguments) {
     }
 }
 function Grant-SystemTreeFullControl([string]$Path) {
-    $aclOutput=@(& icacls.exe $Path /grant '*S-1-5-18:(OI)(CI)F' /T /C 2>&1)
+    $aclOutput=@(& icacls.exe $Path /grant '*S-1-5-18:(OI)(CI)F' /T /C 2>&1 | Select-Object -Last 8)
     $aclExitCode=$LASTEXITCODE
     if($aclExitCode -ne 0){
         $diagnostic=($aclOutput | Select-Object -Last 8) -join ' '
@@ -44,7 +52,7 @@ $installStage='Проверка прав администратора'
 $admin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if(!$admin){throw 'Run this installer once as administrator.'}
 Remove-Item -LiteralPath (Join-Path $data 'installed.flag'),(Join-Path $data 'install-status.txt') -Force -ErrorAction SilentlyContinue
-$installStage='Проверка файлов приложения и инструментов'
+Set-InstallStage 'Проверка файлов приложения и инструментов' 'FILES'
 $sourceApp=if($PreinstalledApp){$InstallRoot}else{Join-Path $PackageRoot 'App'}
 $sourceTools=if($PreinstalledApp){Join-Path $InstallRoot 'Tools'}else{Join-Path $PackageRoot 'Tools'}
 $sourceService=if($PreinstalledApp){Join-Path $InstallRoot 'Service'}else{Join-Path $PackageRoot 'Service'}
@@ -90,7 +98,7 @@ Remove-Item -LiteralPath (Join-Path $install 'Tools\Software') -Recurse -Force -
 $pawnIoInstaller=Join-Path $sourceTools 'PawnIO\PawnIO_setup.exe'
 $pawnIoLog=Join-Path $data 'cpu-sensor-driver.txt'
 $pawnIoHash='1F519A22E47187F70A1379A48CA604981C4FCF694F4E65B734AAA74A9FBA3032'
-$installStage='Проверка и установка драйвера датчика'
+Set-InstallStage 'Проверка и установка драйвера датчика' 'SENSOR'
 try {
     $pawnIoSignature=Get-AuthenticodeSignature -LiteralPath $pawnIoInstaller
     $pawnIoSigner=$pawnIoSignature.SignerCertificate
@@ -119,13 +127,17 @@ try {
     [IO.File]::WriteAllText($pawnIoLog,('PawnIO не установлен; установка приложения продолжена. '+$_.Exception.ToString()),[Text.Encoding]::UTF8)
 }
 $securityRoot=Join-Path $env:ProgramData 'ITSeti'
-$installStage='Настройка доступа к данным обслуживания'
+Set-InstallStage 'Настройка доступа к данным обслуживания' 'ACL'
 Set-InstallAcl $securityRoot @('/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F','*S-1-5-32-545:(OI)(CI)RX')
 # The root ACL is inherited by new files, but older files may carry protected
 # ACLs from previous installers or manual repairs. The SYSTEM service must be
 # able to atomically replace its cache and status files, so restore only its
 # full-control ACE recursively while preserving every other existing ACE.
-Grant-SystemTreeFullControl $securityRoot
+$aclMarker=Join-Path $data 'system-acl-v1.ok'
+if($RepairPermissions -or !(Test-Path -LiteralPath $aclMarker -PathType Leaf)){
+    Grant-SystemTreeFullControl $securityRoot
+    [IO.File]::WriteAllText($aclMarker,'system-full-control-v1',[Text.Encoding]::ASCII)
+} else {Write-InstallLog 'Миграция прав SYSTEM уже выполнена; повторный обход архива проверок пропущен.'}
 $enrollmentFile=Join-Path $data 'server-device.json'
 if(Test-Path -LiteralPath $enrollmentFile -PathType Leaf){
     Set-InstallAcl $enrollmentFile @('/inheritance:r','/grant:r','*S-1-5-18:F','*S-1-5-32-544:F','*S-1-5-32-545:R')
@@ -148,7 +160,7 @@ if($LASTEXITCODE -ne 0){throw 'Could not configure inventory number access.'}
 [void](Initialize-ScheduledFullBaseline $data)
 $passwordPolicy=Join-Path $install 'Backend\Set-LocalPasswordsNeverExpire.ps1'
 if(Test-Path -LiteralPath $passwordPolicy){try{& $passwordPolicy -LogPath (Join-Path $data 'local-password-policy.log')}catch{Write-InstallLog ('Local password expiry policy could not be updated: '+$_.Exception.GetType().Name)}}
-$installStage='Регистрация системных задач'
+Set-InstallStage 'Регистрация системных задач' 'TASKS'
 $taskName='ITSeti-Maintenance-Full'
 $uploadTaskName='ITSeti-Maintenance-Upload'
 $catalogTaskName='ITSeti-Maintenance-Catalog'
@@ -199,7 +211,6 @@ try {
             for($attempt=1;$attempt -le 3;$attempt++){
                 try {
                     Register-ScheduledTask -TaskName $name -Action $taskAction -Trigger $trigger -Settings $settings -Principal $taskPrincipal -Force -ErrorAction Stop | Out-Null
-                    $registered=Get-ScheduledTask -TaskName $name -ErrorAction Stop
                     $lastTaskError=$null
                     break
                 } catch {
@@ -222,12 +233,12 @@ try {
                 'ITSeti-Maintenance-OrganizationSetup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates')
             $task.SetSecurityDescriptor($(if($engineerTask){'D:P(A;;FA;;;SY)(A;;FA;;;BA)'}
                 else{'D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;BU)'}),0)
-            $registered=Get-ScheduledTask -TaskName $name -ErrorAction Stop
-            $registeredSid=if($registered.Principal.UserId -eq 'S-1-5-18'){'S-1-5-18'}else{([Security.Principal.NTAccount]$registered.Principal.UserId).Translate([Security.Principal.SecurityIdentifier]).Value}
-            if($registeredSid -ne 'S-1-5-18' -or $registered.Principal.LogonType -ne 'ServiceAccount' -or $registered.Principal.RunLevel -ne 'Highest'){
+            $definition=$task.Definition
+            $registeredSid=if($definition.Principal.UserId -eq 'S-1-5-18'){'S-1-5-18'}else{([Security.Principal.NTAccount]$definition.Principal.UserId).Translate([Security.Principal.SecurityIdentifier]).Value}
+            if($registeredSid -ne 'S-1-5-18' -or $definition.Principal.LogonType -ne 5 -or $definition.Principal.RunLevel -ne 1){
                 throw "Task $name has an invalid execution identity."
             }
-            if(@($registered.Actions).Count -ne 1 -or $registered.Actions.Execute -ne $taskAction.Execute -or $registered.Actions.Arguments -ne $taskAction.Arguments){
+            if($definition.Actions.Count -ne 1 -or $definition.Actions.Item(1).Path -ne $taskAction.Execute -or $definition.Actions.Item(1).Arguments -ne $taskAction.Arguments){
                 throw "Task $name has an invalid command."
             }
             Write-InstallLog ("Задача $name зарегистрирована.")
@@ -240,8 +251,7 @@ try {
     Write-InstallLog ('Не удалось зарегистрировать обязательные системные задачи: '+$_.Exception.ToString())
     throw
 }
-$installStage='Регистрация системной службы'
-$installStage='Контрольный запуск планового задания SYSTEM'
+Set-InstallStage 'Контрольный запуск планового задания SYSTEM' 'VERIFY'
 $scheduleProbe=[guid]::NewGuid().ToString('N')
 $scheduleRequest=Join-Path $data 'schedule-self-test.request'
 $scheduleResult=Join-Path $data 'schedule-self-test.result'
@@ -256,7 +266,7 @@ try {
     if(!$probePassed){throw 'Плановое задание не прошло контрольный запуск SYSTEM за 60 секунд.'}
     Write-InstallLog 'Контрольный запуск плановой задачи SYSTEM выполнен успешно.'
 } finally {Remove-Item -LiteralPath $scheduleRequest -Force -ErrorAction SilentlyContinue}
-$installStage='Регистрация системной службы'
+Set-InstallStage 'Регистрация системной службы' 'SERVICE'
 $serviceName='ITSetiMaintenanceService'
 $legacyTemperatureTask=Get-ScheduledTask -TaskName 'ITSeti-Maintenance-Temperature' -ErrorAction SilentlyContinue
 if($legacyTemperatureTask){
@@ -305,7 +315,7 @@ $serviceCim=Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $serviceName)
 if($serviceCim.StartName -ne 'LocalSystem' -or $serviceCim.StartMode -notin @('Auto','Automatic') -or [bool]$serviceCim.DelayedAutoStart){throw 'Служба должна запускаться автоматически от LocalSystem без отложенного старта.'}
 if([string]$serviceCim.PathName -notmatch [regex]::Escape($serviceExe)){throw 'Служба указывает на другой исполняемый файл.'}
 Write-InstallLog ('Служба '+$serviceName+' зарегистрирована и запущена.')
-$installStage='Завершение установки'
+Set-InstallStage 'Завершение установки' 'FINISH'
 $legacyTask=Get-ScheduledTask -TaskName 'ITSeti-Maintenance-FullRepair' -ErrorAction SilentlyContinue
 if($legacyTask){Unregister-ScheduledTask -TaskName 'ITSeti-Maintenance-FullRepair' -Confirm:$false}
 $runKey='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'

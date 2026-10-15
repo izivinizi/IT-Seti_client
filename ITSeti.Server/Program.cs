@@ -649,6 +649,8 @@ app.MapPost("/api/v1/tickets", async (HttpRequest request, CreateTicketRequest b
     string? computerInfo;
     try { computerInfo = TicketServices.FormatComputerInfo(body.ComputerInfo); }
     catch (ArgumentException) { return Results.BadRequest(new { error = "Данные компьютера превышают допустимый размер." }); }
+    var equipmentIds = computerInfo is null ? [] : await TicketEquipmentResolver.ResolveAsync(
+        connection, deviceId, companyId, request.HttpContext.RequestAborted);
     IReadOnlyList<TicketAttachment> files;
     try { files = TicketAttachments.Decode(body.Attachments); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
@@ -660,8 +662,8 @@ app.MapPost("/api/v1/tickets", async (HttpRequest request, CreateTicketRequest b
     await using var transaction = await connection.BeginTransactionAsync();
     int inserted;
     await using (var reserve = new NpgsqlCommand("""
-        INSERT INTO ticket_requests(request_id,device_id,company_id,service_object_id,title,description,service_code,payload_hash,state)
-        SELECT @request,@device,@company,@site,@title,@description,@service,@hash,'queued'
+        INSERT INTO ticket_requests(request_id,device_id,company_id,service_object_id,title,description,service_code,payload_hash,state,equipment_ids)
+        SELECT @request,@device,@company,@site,@title,@description,@service,@hash,'queued',@equipment
         WHERE EXISTS(SELECT 1 FROM devices WHERE id=@device AND NOT tickets_blocked)
         ON CONFLICT(request_id) DO NOTHING
         """, connection, transaction))
@@ -674,6 +676,7 @@ app.MapPost("/api/v1/tickets", async (HttpRequest request, CreateTicketRequest b
         reserve.Parameters.AddWithValue("description", issue.Description);
         reserve.Parameters.AddWithValue("service", body.ServiceCode!);
         reserve.Parameters.AddWithValue("hash", payloadHash);
+        reserve.Parameters.Add("equipment", NpgsqlDbType.Array | NpgsqlDbType.Bigint).Value = equipmentIds;
         inserted = await reserve.ExecuteNonQueryAsync();
     }
     if (inserted == 0)
@@ -1364,7 +1367,7 @@ admin.MapPost("/devices/{id:guid}/ticket-block", async (Guid id, TicketBlockRequ
         ? Results.Ok(new { id, blocked = body.Blocked }) : Results.NotFound();
 });
 admin.MapGet("/monitoring", async (NpgsqlDataSource db, int? days, long? companyId, long? siteId,
-    string? category, int? page, int? severity, string? state) =>
+    string? category, int? page, int? severity, string? state, string? types) =>
 {
     const int pageSize = 40;
     var since = DateTime.UtcNow.AddDays(-Math.Clamp(days ?? 7, 1, 90));
@@ -1372,6 +1375,9 @@ admin.MapGet("/monitoring", async (NpgsqlDataSource db, int? days, long? company
     if (category is not (null or "event" or "finding")) return Results.BadRequest(new { error = "Неизвестный тип события." });
     if (severity is not (null or 0 or 1 or 2)) return Results.BadRequest(new { error = "Неизвестная важность события." });
     if (state is not (null or "open" or "resolved")) return Results.BadRequest(new { error = "Неизвестный статус ошибки." });
+    var selectedTypes = types is null ? null : types == "none" ? [] : types.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct().ToArray();
+    if (selectedTypes is not null && selectedTypes.Any(type => !MonitoringKinds.All.Contains(type)))
+        return Results.BadRequest(new { error = "Неизвестный вид проблемы." });
     await using var connection = await db.OpenConnectionAsync();
     await using var command = new NpgsqlCommand($"""
         SELECT d.id,d.serial_number,d.inventory_number,d.computer_name,c.name,s.name,max(a.detected_at),
@@ -1385,15 +1391,17 @@ admin.MapGet("/monitoring", async (NpgsqlDataSource db, int? days, long? company
             AND i.category=a.category AND i.identity=a.identity)
           AND (@severity=0 OR a.severity=@severity) AND a.detected_at>=@since AND (@company IS NULL OR d.company_id=@company)
           AND (@site IS NULL OR d.service_object_id=@site) AND (@category IS NULL OR a.category=@category)
+          AND (@types IS NULL OR ({MonitoringKinds.Sql})=ANY(@types))
         GROUP BY d.id,d.serial_number,d.inventory_number,c.name,s.name
         ORDER BY max(a.detected_at) DESC,d.id LIMIT @limit OFFSET @offset
         """, connection);
     command.Parameters.AddWithValue("since", since);
-    command.Parameters.AddWithValue("severity", severity ?? 1);
+    command.Parameters.AddWithValue("severity", severity ?? 0);
     command.Parameters.AddWithValue("state", state ?? "open");
     command.Parameters.Add("company", NpgsqlDbType.Bigint).Value = (object?)companyId ?? DBNull.Value;
     command.Parameters.Add("site", NpgsqlDbType.Bigint).Value = (object?)siteId ?? DBNull.Value;
     command.Parameters.Add("category", NpgsqlDbType.Text).Value = (object?)category ?? DBNull.Value;
+    command.Parameters.Add("types", NpgsqlDbType.Array | NpgsqlDbType.Text).Value = (object?)selectedTypes ?? DBNull.Value;
     command.Parameters.AddWithValue("limit", pageSize + 1);
     command.Parameters.AddWithValue("offset", offset);
     await using var reader = await command.ExecuteReaderAsync();

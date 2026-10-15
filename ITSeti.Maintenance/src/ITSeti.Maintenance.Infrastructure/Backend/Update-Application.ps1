@@ -41,7 +41,7 @@ try {
     if ($serverBase.Scheme -ne 'https') { throw 'Сервер обновлений должен использовать HTTPS.' }
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $updateUrl = New-Object Uri($serverBase, '/api/v1/application-update?platform=windows')
-    $headers = @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/2.4.8'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache'; 'X-Device-Id' = [string]$device.deviceId; 'X-Device-Key' = [string]$device.deviceKey }
+    $headers = @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/2.4.9'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache'; 'X-Device-Id' = [string]$device.deviceId; 'X-Device-Key' = [string]$device.deviceKey }
     $release = Invoke-RestMethod -Uri $updateUrl -Headers $headers -TimeoutSec 30
     if ($null -eq $release) {
         Set-UpdateStatus "Установлена последняя версия $currentVersion; обновление не требуется."
@@ -73,7 +73,7 @@ try {
         Set-UpdateStatus "Найдена версия $latestVersion. Подготавливаю установщик."
         $request = [Net.HttpWebRequest]::Create($downloadUrl)
         $request.Method = 'GET'
-        $request.UserAgent = 'ITSeti-Maintenance-Updater/2.4.8'
+        $request.UserAgent = 'ITSeti-Maintenance-Updater/2.4.9'
         $request.Headers.Add('X-Device-Id', [string]$device.deviceId)
         $request.Headers.Add('X-Device-Key', [string]$device.deviceKey)
         $request.Timeout = 30000
@@ -126,7 +126,7 @@ try {
     Set-UpdateStatus "Устанавливаю версию $latestVersion."
     $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CLOSEAPPLICATIONS') -PassThru -Wait
     if ($process.ExitCode -ne 0) { throw "Установщик завершился с кодом $($process.ExitCode)." }
-    Set-UpdateStatus "Версия $latestVersion установлена. Запустите приложение снова."
+    Set-UpdateStatus "Версия $latestVersion установлена. Приложение будет перезапущено в пользовательской сессии."
 } catch {
     $message = $_.Exception.Message.Replace("`r", ' ').Replace("`n", ' ')
     try { Set-UpdateStatus ('Ошибка обновления: ' + $message) } catch { }

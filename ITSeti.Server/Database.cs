@@ -114,6 +114,7 @@ public static class Database
             CREATE INDEX IF NOT EXISTS ix_ticket_messages_public_created ON ticket_messages(request_id,created_at,id)
                 WHERE is_public AND direction='engineer';
             ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS workflow_state text NOT NULL DEFAULT 'opened';
+            ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS equipment_ids bigint[] NOT NULL DEFAULT '{}';
             ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS okdesk_status_name text;
             ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS okdesk_synced_at timestamptz;
             CREATE TABLE IF NOT EXISTS ticket_actions (

@@ -8,10 +8,16 @@ if(Get-Process -Id $ParentPid -ErrorAction SilentlyContinue){exit 1}
 Start-Sleep -Seconds 1
 $statusPath=Join-Path $env:ProgramData 'ITSeti\Maintenance\Updates\last-result.txt'
 $scheduler=Join-Path $env:WINDIR 'System32\schtasks.exe'
-for($attempt=0;$attempt -lt 40;$attempt++){
+for($attempt=0;$attempt -lt 300;$attempt++){
     $status=''
     try {if(Test-Path -LiteralPath $statusPath -PathType Leaf){$status=[IO.File]::ReadAllText($statusPath)}} catch [IO.IOException] {}
-    if($status -match 'Версия \d+\.\d+\.\d+ установлена|обновление не требуется'){exit 0}
+    if($status -match 'Версия \d+\.\d+\.\d+(?:\.\d+)? установлена|обновление не требуется'){
+        $application=Join-Path (Split-Path $PSScriptRoot -Parent) 'ITSeti.Maintenance.exe'
+        if(Test-Path -LiteralPath $application -PathType Leaf){
+            Start-Process -FilePath $application -WorkingDirectory (Split-Path $application) -WindowStyle Normal | Out-Null
+        }
+        exit 0
+    }
     if($status -match 'Ошибка обновления:'){exit 1}
     if($status -match 'Пакет загружен и проверен\.'){
         & $scheduler /Run /TN 'ITSeti-Maintenance-Update' | Out-Null

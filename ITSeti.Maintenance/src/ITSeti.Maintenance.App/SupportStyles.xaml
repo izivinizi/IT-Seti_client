@@ -40,7 +40,7 @@
           <Grid>
             <Border x:Name="Surface" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="4" />
             <ContentPresenter Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}" ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}" Margin="10,7,30,7" VerticalAlignment="Center" IsHitTestVisible="False" />
-            <TextBlock Text="" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="#63748A" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,12,0" IsHitTestVisible="False" />
+            <TextBlock Text="" FontFamily="Segoe UI Symbol, Segoe UI" FontSize="10" Foreground="#63748A" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,12,0" IsHitTestVisible="False" />
             <ToggleButton Focusable="False" IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}" Background="Transparent">
               <ToggleButton.Template>
                 <ControlTemplate TargetType="ToggleButton">

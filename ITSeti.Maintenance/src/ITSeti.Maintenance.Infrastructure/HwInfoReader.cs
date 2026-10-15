@@ -20,6 +20,7 @@ public static class HwInfoReader
     private static DateTimeOffset nextRecoveryUtc;
     private static DateTimeOffset nextFailureWriteUtc;
     private static string? lastFailureMessage;
+    private static string? lastCatalogSignature;
     private static int missingMemoryReads;
     private static int staleSourceReads;
     private static string SessionMarker => Path.ChangeExtension(CachePath,"session.txt");
@@ -155,6 +156,7 @@ public static class HwInfoReader
             }
             missingMemoryReads = 0;
             var sourceTime = SourceTime(values ?? []);
+            WriteSensorCatalog(values ?? []);
             if (HwInfoRecoveryPolicy.IsSourceTimestampStale(sourceTime, DateTimeOffset.UtcNow))
             {
                 staleSourceReads++;
@@ -462,11 +464,35 @@ public static class HwInfoReader
             var category = Classify(value.Name, value.Unit);
             if (category is null || !HwInfoSensorPolicy.IsValidValue(category, value.Value)) continue;
             var reading = new HwInfoSensorReading(value.Name.Trim().TrimStart('/').Trim(), value.Value, value.Unit, category,
-                IsCritical: category == "HardwareAlarm" && value.Value == 1,
+                Status: category == "HardwareAlarm" ? HwInfoSensorPolicy.DescribeAlarm(value.Name) : null,
+                IsWarning: category == "HardwareAlarm" && value.Value == 1,
                 SensorId: value.SensorIndex + ":" + value.ReadingId);
             if (seen.Add(reading)) readings.Add(reading);
         }
         return readings.ToArray();
+    }
+
+    private static void WriteSensorCatalog(ITSeti.HwInfoBridge.SensorValue[] values)
+    {
+        var signature = string.Join("\n", values.Select(value => $"{value.SensorIndex}:{value.ReadingId}|{value.Name}|{value.Unit}"));
+        if (signature == lastCatalogSignature) return;
+        var path = Path.Combine(Path.GetDirectoryName(CachePath)!, "hwinfo-sensor-catalog.json");
+        var temporary = path + ".tmp";
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var catalog = new { CapturedAtUtc = SourceTime(values), Sensors = values.Select(value => new
+            {
+                value.Name, value.Unit, SensorId = $"{value.SensorIndex}:{value.ReadingId}",
+                Category = Classify(value.Name, value.Unit)
+            }).ToArray() };
+            File.WriteAllText(temporary, JsonSerializer.Serialize(catalog));
+            File.Move(temporary, path, true);
+            lastCatalogSignature = signature;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { ApplicationErrorStore.Record("HWiNFO", "Сохранение каталога доступных датчиков", ex); }
+        finally { try { File.Delete(temporary); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
     }
 
     private static string? ReadText(JsonElement element, params string[] names)

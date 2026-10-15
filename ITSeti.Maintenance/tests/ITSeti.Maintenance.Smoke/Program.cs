@@ -29,17 +29,18 @@ internal static class Program
         Environment.SetEnvironmentVariable("ITSETI_DISABLE_REPORT_UPLOAD", "1");
         if (args.Contains("--performance-contract")) return PerformanceContract.Run();
         if (args.Contains("--refactor-contract")) return RefactorContract.Run();
+        if (args.Contains("--feedback-regressions")) return FeedbackRegressionChecks.Run(args.Contains("--live-hardware"));
         if (args.Contains("--monitoring-history-contract")) return CheckMonitoringHistoryContract();
         if (args.Contains("--installed-report-reader-contract")) return CheckInstalledReportReaderContract();
         if (args.Contains("--live-update-contract"))
         {
             var updateClient = new ServerApplicationUpdateClient();
             var release = updateClient.GetUpdateAsync(new Version(2, 3, 6)).GetAwaiter().GetResult();
-            if (release?.Version != new Version(2, 4, 7) || !release.DownloadUrl.StartsWith("https://it-seti.nylenz.ru/api/v1/packages/", StringComparison.Ordinal))
-                throw new Exception("Live server did not offer 2.4.8 for 2.3.6");
-            if (updateClient.GetUpdateAsync(new Version(2, 4, 7)).GetAwaiter().GetResult() is not null)
+            if (release?.Version.ToString(3) != "2.4.9" || !release.DownloadUrl.StartsWith("https://it-seti.nylenz.ru/api/v1/packages/", StringComparison.Ordinal))
+                throw new Exception("Live server did not offer 2.4.9 for 2.3.6");
+            if (updateClient.GetUpdateAsync(new Version(2, 4, 9)).GetAwaiter().GetResult() is not null)
                 throw new Exception("Live server offers reinstall of already-current version");
-            Console.WriteLine("PASS live server: 2.3.6 receives 2.4.8, 2.4.8 is current, authenticated package URL validated");
+            Console.WriteLine("PASS live server: 2.3.6 receives 2.4.9, 2.4.9 is current, authenticated package URL validated");
             return 0;
         }
         if (args.Contains("--service-concurrency-contract"))
@@ -585,7 +586,13 @@ internal static class Program
                 var adminShell = (UIElement)window.FindName("AdminShell")!;
                 if (args.Contains("--readme-screenshots"))
                 {
-                    await Task.Delay(500);
+                    var initialized = (TaskCompletionSource)typeof(MainWindow).GetField("initializationCompleted",
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(window)!;
+                    await initialized.Task;
+                    ((System.Windows.Threading.DispatcherTimer)typeof(MainWindow).GetField("liveMetricsTimer",
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(window)!).Stop();
+                    typeof(MainViewModel).GetField("live", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                        .SetValue(window.ViewModel, null);
                     var now = DateTimeOffset.Now;
                     var full = new FullDiagnosticDetails("Intel Core i7-13700", "NVIDIA GeForce RTX 4070", false,
                         [new PhysicalDiskDetails("NVMe SSD", "SSD", "Healthy", 1280)],
@@ -612,7 +619,7 @@ internal static class Program
                         System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                         .Invoke(window, null);
                     typeof(MainViewModel).GetField("serviceStatus", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                        .SetValue(window.ViewModel, "Служба работает · 2.4.8");
+                        .SetValue(window.ViewModel, "Служба работает · 2.4.9");
                     typeof(MainViewModel).GetMethod("Notify", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                         .Invoke(window.ViewModel, [Array.Empty<string>()]);
                     window.ViewModel.AdminInventoryInput = "0042";

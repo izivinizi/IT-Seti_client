@@ -126,6 +126,8 @@ public sealed class OkdeskApiClient : IOkdeskClient
         content.Add(new StringContent(issue.Type), "issue[type]");
         foreach (var pair in issue.CustomParameters)
             content.Add(new StringContent(pair.Value), $"issue[custom_parameters][{pair.Key}]");
+        foreach (var equipmentId in issue.EquipmentIds ?? [])
+            content.Add(new StringContent(equipmentId.ToString(System.Globalization.CultureInfo.InvariantCulture)), "issue[equipment_ids][]");
         AddFiles(content, "issue[attachments]", attachments);
         return content;
     }
@@ -184,7 +186,8 @@ public sealed record OkdeskIssue(
     [property: JsonPropertyName("company_id")] long CompanyId,
     [property: JsonPropertyName("maintenance_entity_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? MaintenanceEntityId,
     [property: JsonPropertyName("type")] string Type,
-    [property: JsonPropertyName("custom_parameters")] IReadOnlyDictionary<string, string> CustomParameters);
+    [property: JsonPropertyName("custom_parameters")] IReadOnlyDictionary<string, string> CustomParameters,
+    [property: JsonPropertyName("equipment_ids"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<long>? EquipmentIds = null);
 
 public static class TicketServices
 {

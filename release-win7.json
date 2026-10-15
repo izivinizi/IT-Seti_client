@@ -1,8 +1,8 @@
 {
-    "version":  "2.4.8",
-    "tag":  "v2.4.8-win7-beta",
-    "assetName":  "ITSeti-Maintenance-Win7-Setup.exe",
-    "size":  133374646,
-    "digest":  "sha256:e6482febfdac2f6c7ffbda9037291c88261aa0d8e8cc8598268b74cb82685297",
-    "downloadUrl":  "https://github.com/izivinizi/IT-Seti_client/releases/download/v2.4.8-win7-beta/ITSeti-Maintenance-Win7-Setup.exe"
+  "version": "2.4.9",
+  "tag": "v2.4.9-win7-beta",
+  "assetName": "ITSeti-Maintenance-Win7-Setup.exe",
+  "size": 133380349,
+  "digest": "sha256:11f58c6dec44f0cc9c0379b7b7494b8a312daac7e044a31ca11cb5fc31f86530",
+  "downloadUrl": "https://github.com/izivinizi/IT-Seti_client/releases/download/v2.4.9-win7-beta/ITSeti-Maintenance-Win7-Setup.exe"
 }

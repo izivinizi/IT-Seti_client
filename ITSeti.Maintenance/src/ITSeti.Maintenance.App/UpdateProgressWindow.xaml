@@ -15,7 +15,7 @@
             <TextBlock x:Name="HintLabel" Text="Приложение закроется после загрузки и проверки установщика."
                        FontSize="14" Foreground="#52677A" TextWrapping="Wrap" Margin="0,10,0,0"/>
             <Button x:Name="CloseButton" Content="Закрыть" Padding="18,8" HorizontalAlignment="Right"
-                    Margin="0,20,0,0" Visibility="Collapsed" IsDefault="True" Click="Close_Click"/>
+                    Margin="0,20,0,0" IsDefault="True" Click="Close_Click"/>
         </StackPanel>
     </Border>
 </Window>

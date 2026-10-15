@@ -185,13 +185,17 @@ namespace ITSeti.Maintenance.App
             var rows = new List<Win7Row>();
             AddSensor(rows, "Производительность", "Загрузка CPU", s.CpuPercent, "%", captured, "N0");
             AddSensor(rows, "Производительность", "Загрузка памяти", s.MemoryUsedPercent, "%", captured, "N0");
-            AddSensor(rows, "Температура", "CPU", s.CpuTemperatureC, "°C", captured, "N0");
-            AddSensor(rows, "Температура", "VRM", s.VrmTemperatureC, "°C", captured, "N0");
-            AddSensor(rows, "Температура", "PCH", s.PchTemperatureC, "°C", captured, "N0");
+            var temperatureSensors = s.HwInfoSensors ?? new List<LegacyHwInfoSensor>();
+            foreach (var sensor in ITSeti.Maintenance.Core.HwInfoSensorPolicy.DisplaySensors(temperatureSensors.Select(item =>
+                new ITSeti.Maintenance.Core.HwInfoSensorReading(item.Name, item.Value, item.Unit, item.Category))))
+                AddSensor(rows, ITSeti.Maintenance.Core.HwInfoSensorPolicy.DisplayCategory(sensor.Category), sensor.Name, sensor.Value, sensor.Unit, captured, "N1");
+            if (!temperatureSensors.Any(item => item.Category == "CpuTemperature")) AddSensor(rows, "Процессор", "CPU", s.CpuTemperatureC, "°C", captured, "N0");
+            if (!temperatureSensors.Any(item => item.Category == "VrmTemperature")) AddSensor(rows, "Плата и охлаждение", "VRM", s.VrmTemperatureC, "°C", captured, "N0");
+            if (!temperatureSensors.Any(item => item.Category == "PchTemperature")) AddSensor(rows, "Плата и охлаждение", "PCH", s.PchTemperatureC, "°C", captured, "N0");
             AddSensor(rows, "Напряжение", "+12 В", s.Rail12V, "В", captured, "N2");
             AddSensor(rows, "Напряжение", "+5 В", s.Rail5V, "В", captured, "N2");
             AddSensor(rows, "Напряжение", "+3,3 В", s.Rail3V, "В", captured, "N2");
-            AddSensor(rows, "Напряжение", "Vcore / VSoC", s.CpuVoltageV, "В", captured, "N2");
+            AddSensor(rows, "Напряжение", "Vcore", s.CpuVoltageV, "В", captured, "N2");
             view.Set("HwInfoSensors", Rows(rows));
         }
 

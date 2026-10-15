@@ -26,6 +26,15 @@ namespace ITSeti.Maintenance.Win7
         public double? CpuVoltageV { get; set; }
         public double? CpuLoadPercent { get; set; }
         public List<LegacyHwInfoAlert> Alerts { get; set; } = new List<LegacyHwInfoAlert>();
+        public List<LegacyHwInfoSensor> Sensors { get; set; } = new List<LegacyHwInfoSensor>();
+    }
+
+    public sealed class LegacyHwInfoSensor
+    {
+        public string Name { get; set; }
+        public string Unit { get; set; }
+        public double Value { get; set; }
+        public string Category { get; set; }
     }
 
     public sealed class LegacyHwInfoAlert
@@ -107,6 +116,7 @@ namespace ITSeti.Maintenance.Win7
             }
             snapshot.HwInfoCapturedAtUtc = data.CapturedAtUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
             snapshot.HwInfoAlerts = data.Alerts ?? new List<LegacyHwInfoAlert>();
+            snapshot.HwInfoSensors = data.Sensors ?? new List<LegacyHwInfoSensor>();
             LegacyDiagnosticAdapter.Apply(snapshot);
         }
 
@@ -267,6 +277,8 @@ namespace ITSeti.Maintenance.Win7
         {
             var category = ITSeti.Maintenance.Core.HwInfoSensorPolicy.Classify(name, unit);
             if (category == null || !ITSeti.Maintenance.Core.HwInfoSensorPolicy.IsValidValue(category, value)) return;
+            if (category.EndsWith("Temperature", StringComparison.Ordinal))
+                result.Sensors.Add(new LegacyHwInfoSensor { Name = name, Unit = unit, Value = value, Category = category });
             switch (category)
             {
                 case "CpuLoad": result.CpuLoadPercent = value; break;
@@ -277,7 +289,8 @@ namespace ITSeti.Maintenance.Win7
                 case "CpuVoltage": result.CpuVoltageV = Max(result.CpuVoltageV, value); break;
                 case "Rail12V": case "Rail5V": case "Rail3V": SetRail(result, category, value); break;
                 case "HardwareAlarm":
-                    if (value == 1) result.Alerts.Add(new LegacyHwInfoAlert { Name = name, Value = value, Unit = unit, IsCritical = true });
+                    if (value == 1) result.Alerts.Add(new LegacyHwInfoAlert { Name = name, Value = value, Unit = unit,
+                        IsWarning = true, Status = ITSeti.Maintenance.Core.HwInfoSensorPolicy.DescribeAlarm(name) });
                     break;
             }
         }

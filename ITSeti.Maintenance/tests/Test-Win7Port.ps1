@@ -97,7 +97,7 @@ $updater = $assembly.GetType('ITSeti.Maintenance.App.Win7ServerUpdater', $true)
 $flags = [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic
 $parse = $updater.GetMethod('ParseServerPackage', $flags)
 if (!$parse) { throw 'Win7 server package parser is missing.' }
-$version = '2.4.8'
+$version = '2.4.9'
 $manifest = [string]([ordered]@{
     id = '11111111-1111-1111-1111-111111111111'; key = 'application'; platform = 'win7'; version = $version
     fileName = 'ITSeti-Maintenance-Win7-Setup.exe'; sizeBytes = 12345; sha256 = ('a' * 64)
@@ -106,7 +106,7 @@ $current = [version]'2.3.3'
 if ($PSVersionTable.PSEdition -eq 'Desktop') {
     if (!$parse.Invoke($null, @($manifest, $current, [uri]'https://unit.test/'))) { throw 'A newer Win7 server release was not offered.' }
     if ($parse.Invoke($null, @($manifest, [version]$version, [uri]'https://unit.test/'))) { throw 'The installed Win7 release was offered again.' }
-    $revisionManifest = $manifest.Replace('"2.4.8"', '"7.7.7.3"')
+    $revisionManifest = $manifest.Replace('"2.4.9"', '"7.7.7.3"')
     if (!$parse.Invoke($null, @($revisionManifest, [version]'7.7.7', [uri]'https://unit.test/'))) {
         throw 'Win7 must compare the fourth component of an application version.'
     }

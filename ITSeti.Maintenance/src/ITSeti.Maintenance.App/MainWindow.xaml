@@ -33,18 +33,18 @@
     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="158"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
      <Image Source="Assets/logo.png" Width="142" Height="76" Stretch="Uniform" HorizontalAlignment="Left"/>
      <StackPanel Grid.Column="1" Margin="10,0,22,0" VerticalAlignment="Center">
-      <StackPanel Orientation="Horizontal"><TextBlock x:Name="ComputerNameLabel" Text="{Binding ComputerName}" FontSize="16" FontWeight="SemiBold" Foreground="#143C87" VerticalAlignment="Center"/><TextBlock x:Name="InventoryLabel" Text="{Binding UserInventoryLabel}" Foreground="#354A5E" FontSize="14" Margin="16,0,0,0" VerticalAlignment="Center"/><Button Click="CopyInventory_Click" Visibility="{Binding HasInventoryNumber, Converter={StaticResource BoolVisibility}}" ToolTip="Скопировать инвентарный номер" AutomationProperties.Name="Скопировать инвентарный номер" Width="24" Height="24" Padding="0" Margin="4,0,0,0" BorderThickness="0" Background="Transparent" Cursor="Hand"><TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="14"/></Button></StackPanel>
+      <StackPanel Orientation="Horizontal"><TextBlock x:Name="ComputerNameLabel" Text="{Binding ComputerName}" FontSize="16" FontWeight="SemiBold" Foreground="#143C87" VerticalAlignment="Center"/><TextBlock x:Name="InventoryLabel" Text="{Binding UserInventoryLabel}" Foreground="#354A5E" FontSize="14" Margin="16,0,0,0" VerticalAlignment="Center"/><Button Click="CopyInventory_Click" Visibility="{Binding HasInventoryNumber, Converter={StaticResource BoolVisibility}}" ToolTip="Скопировать инвентарный номер" AutomationProperties.Name="Скопировать инвентарный номер" Width="24" Height="24" Padding="0" Margin="4,0,0,0" BorderThickness="0" Background="Transparent" Cursor="Hand"><TextBlock Text="&#x25A3;" FontFamily="Segoe UI Symbol, Segoe UI" FontSize="14"/></Button></StackPanel>
       <Grid Margin="0,3,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
        <TextBlock x:Name="RmsLabel" Text="{Binding UserRmsLabel}" Foreground="#354A5E" FontSize="14" TextTrimming="CharacterEllipsis" MaxWidth="220" VerticalAlignment="Center"/>
-       <Button Grid.Column="1" Click="CopyRms_Click" Visibility="{Binding HasRmsId, Converter={StaticResource BoolVisibility}}" ToolTip="Скопировать номер RMS" AutomationProperties.Name="Скопировать номер RMS" Width="24" Height="24" Padding="0" Margin="4,0,0,0" BorderThickness="0" Background="Transparent" Cursor="Hand"><TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="14"/></Button>
+       <Button Grid.Column="1" Click="CopyRms_Click" Visibility="{Binding HasRmsId, Converter={StaticResource BoolVisibility}}" ToolTip="Скопировать номер RMS" AutomationProperties.Name="Скопировать номер RMS" Width="24" Height="24" Padding="0" Margin="4,0,0,0" BorderThickness="0" Background="Transparent" Cursor="Hand"><TextBlock Text="&#x25A3;" FontFamily="Segoe UI Symbol, Segoe UI" FontSize="14"/></Button>
        <TextBlock x:Name="AnyDeskLabel" Grid.Column="2" Text="{Binding UserAnyDeskLabel}" Foreground="#354A5E" FontSize="14" TextTrimming="CharacterEllipsis" MaxWidth="180" Margin="12,0,0,0" VerticalAlignment="Center"/>
-       <Button Grid.Column="3" Click="CopyAnyDesk_Click" Visibility="{Binding HasAnyDeskId, Converter={StaticResource BoolVisibility}}" ToolTip="Скопировать номер AnyDesk" AutomationProperties.Name="Скопировать номер AnyDesk" Width="24" Height="24" Padding="0" Margin="4,0,0,0" BorderThickness="0" Background="Transparent" Cursor="Hand"><TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="14"/></Button>
+       <Button Grid.Column="3" Click="CopyAnyDesk_Click" Visibility="{Binding HasAnyDeskId, Converter={StaticResource BoolVisibility}}" ToolTip="Скопировать номер AnyDesk" AutomationProperties.Name="Скопировать номер AnyDesk" Width="24" Height="24" Padding="0" Margin="4,0,0,0" BorderThickness="0" Background="Transparent" Cursor="Hand"><TextBlock Text="&#x25A3;" FontFamily="Segoe UI Symbol, Segoe UI" FontSize="14"/></Button>
        <TextBlock x:Name="IpLabel" Grid.Column="4" Text="{Binding UserIpLabel}" ToolTip="{Binding UserIpTooltip}" Foreground="#354A5E" FontSize="14" Margin="14,0,0,0" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
       </Grid>
       <TextBlock Text="{Binding UserUptimeLabel}" Foreground="#354A5E" FontSize="14" Margin="0,5,0,0"/>
      </StackPanel>
      <Button x:Name="AdminModeButton" Grid.Column="2" Click="ShowAdminPrompt_Click" Width="38" Height="38" Padding="0" VerticalAlignment="Center" ToolTip="Режим инженера" Cursor="Hand" Background="#F3F6F8" BorderBrush="#DDE6EB" AutomationProperties.Name="Режим инженера">
-      <TextBlock Text="&#xE72E;" FontFamily="Segoe MDL2 Assets" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      <TextBlock Text="&#x2699;" FontFamily="Segoe UI Symbol, Segoe UI" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/>
      </Button>
     </Grid>
    </Border>
@@ -54,22 +54,22 @@
     <StackPanel>
      <TextBlock Text="Проблемы с компьютером?" FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="20" FontWeight="SemiBold" Foreground="#143C87" TextWrapping="Wrap" Margin="0,0,0,22"/>
      <Button Style="{StaticResource UserPrimaryButton}" Height="74" Click="RunUserFull_Click" IsEnabled="{Binding CanRunFull}" ToolTip="Проверить оборудование, диски, процессы и события">
-      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE9D9;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="White" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Выполнить проверку" FontSize="16" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center" TextWrapping="Wrap"/></Grid>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#x2713;" FontFamily="Segoe UI Symbol, Segoe UI" FontSize="20" Foreground="White" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Выполнить проверку" FontSize="16" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center" TextWrapping="Wrap"/></Grid>
      </Button>
      <Button x:Name="UserStopCheckButton" Style="{StaticResource UserSecondaryButton}" Height="60" Margin="0,10,0,0" Click="StopFullCheck_Click" IsEnabled="{Binding CanStopFullCheck}" Visibility="{Binding IsFullCheckRunning, Converter={StaticResource BoolVisibility}}" ToolTip="Остановить текущую проверку">
-      <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><TextBlock Text="&#xE71A;" FontFamily="Segoe MDL2 Assets" Margin="0,1,8,0"/><TextBlock Text="Остановить проверку" FontWeight="SemiBold"/></StackPanel>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><TextBlock Text="&#x25A0;" FontFamily="Segoe UI Symbol, Segoe UI" Margin="0,1,8,0"/><TextBlock Text="Остановить проверку" FontWeight="SemiBold"/></StackPanel>
       </Button>
       <Button x:Name="UserCleanupButton" Style="{StaticResource UserSecondaryButton}" Height="88" Margin="0,10,0,0" Click="RunCleanup_Click" IsEnabled="{Binding CanRunCleanup}" ToolTip="Корзина, временные файлы и кэш пользователя; системно: обновления Windows, оптимизация доставки и пакеты драйверов">
-      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><StackPanel Grid.Column="1" VerticalAlignment="Center"><TextBlock Text="Выполнить очистку" FontSize="16" FontWeight="SemiBold" Foreground="#14419E"/><TextBlock x:Name="UserCleanupHint" Text="Корзина · временные файлы" FontSize="14" Foreground="#354F68" Margin="0,5,0,0"/></StackPanel></Grid>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#x267B;" FontFamily="Segoe UI Symbol, Segoe UI" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><StackPanel Grid.Column="1" VerticalAlignment="Center"><TextBlock Text="Выполнить очистку" FontSize="16" FontWeight="SemiBold" Foreground="#14419E"/><TextBlock x:Name="UserCleanupHint" Text="Корзина · временные файлы" FontSize="14" Foreground="#354F68" Margin="0,5,0,0"/></StackPanel></Grid>
       </Button>
      <Button x:Name="SupportButton" Style="{StaticResource UserSecondaryButton}" Height="72" Margin="0,10,0,0" Click="ShowSupport_Click" ToolTip="Создать заявку в поддержку">
-      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE8F2;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Оставить заявку" FontSize="16" FontWeight="SemiBold" Foreground="#14419E" VerticalAlignment="Center"/></Grid>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#x2709;" FontFamily="Segoe UI Symbol, Segoe UI" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Оставить заявку" FontSize="16" FontWeight="SemiBold" Foreground="#14419E" VerticalAlignment="Center"/></Grid>
      </Button>
      <Button x:Name="MyTicketsButton" Style="{StaticResource UserSecondaryButton}" Height="72" Margin="0,10,0,0" Click="ShowMyTickets_Click">
-      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Мои заявки" FontSize="16" FontWeight="SemiBold" Foreground="#14419E" VerticalAlignment="Center"/></Grid>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#x2630;" FontFamily="Segoe UI Symbol, Segoe UI" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Мои заявки" FontSize="16" FontWeight="SemiBold" Foreground="#14419E" VerticalAlignment="Center"/></Grid>
      </Button>
      <Button x:Name="ContactsButton" Style="{StaticResource UserSecondaryButton}" Height="72" Margin="0,10,0,0" Click="ShowContacts_Click">
-      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#xE77B;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Контакты" FontSize="16" FontWeight="SemiBold" Foreground="#14419E" VerticalAlignment="Center"/></Grid>
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="&#x263A;" FontFamily="Segoe UI Symbol, Segoe UI" FontSize="20" Foreground="#14419E" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="Контакты" FontSize="16" FontWeight="SemiBold" Foreground="#14419E" VerticalAlignment="Center"/></Grid>
      </Button>
     </StackPanel>
     <Border Grid.Column="2" Background="#E6EDF3" BorderBrush="#C5D2DE" BorderThickness="1" CornerRadius="6" Padding="24,20">
@@ -117,7 +117,7 @@
      </StackPanel>
      <Button x:Name="ExitAdminButton" DockPanel.Dock="Bottom" Click="ExitAdmin_Click" Content="К пользователю" Padding="10,10" Cursor="Hand" Margin="0,12,0,0"/>
      <ListBox x:Name="AdminNavigation" BorderThickness="0" Background="Transparent" ItemContainerStyle="{StaticResource AdminNavItem}" SelectedIndex="{Binding SelectedIndex, ElementName=AdminTabs, Mode=TwoWay}" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-      <ListBoxItem Content="Обзор"/><ListBoxItem Content="Накопители"/><ListBoxItem Content="Сеть"/><ListBoxItem Content="Процессы"/><ListBoxItem Content="События"/>
+      <ListBoxItem Content="Обзор"/><ListBoxItem Content="Накопители"/><ListBoxItem Content="Сеть и датчики"/><ListBoxItem Content="Процессы"/><ListBoxItem Content="События"/>
       <ListBoxItem Content="ПО"/><ListBoxItem Content="История"/><ListBoxItem Content="Отладка"/><ListBoxItem Content="Обслуживание"/><ListBoxItem Content="Ход проверки"/>
      </ListBox>
     </DockPanel>
@@ -129,10 +129,10 @@
      <StackPanel VerticalAlignment="Center"><TextBlock Text="Диагностика ПК" FontSize="20" FontWeight="SemiBold" Foreground="#14419E"/><TextBlock Text="{Binding SnapshotDate}" Style="{StaticResource SecondaryText}" Margin="0,4,0,0"/></StackPanel>
      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
        <Button Click="RunFull_Click" IsEnabled="{Binding CanRunFull}" Height="38" Padding="14,7" Background="#326EFF" Foreground="White" BorderThickness="0" Cursor="Hand" ToolTip="{Binding FullRunHint}">
-       <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets" Foreground="White" Margin="0,2,8,0"/><TextBlock Text="Полная проверка" Foreground="White" FontWeight="SemiBold"/></StackPanel>
+       <StackPanel Orientation="Horizontal"><TextBlock Text="&#x25B6;" FontFamily="Segoe UI Symbol, Segoe UI" Foreground="White" Margin="0,2,8,0"/><TextBlock Text="Полная проверка" Foreground="White" FontWeight="SemiBold"/></StackPanel>
       </Button>
       <Button x:Name="AdminStopCheckButton" Click="StopFullCheck_Click" IsEnabled="{Binding CanStopFullCheck}" Visibility="{Binding IsFullCheckRunning, Converter={StaticResource BoolVisibility}}" Height="38" Padding="12,7" Margin="8,0,0,0" Cursor="Hand" ToolTip="Остановить текущую проверку">
-       <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE71A;" FontFamily="Segoe MDL2 Assets" Margin="0,1,7,0"/><TextBlock Text="Остановить" FontWeight="SemiBold"/></StackPanel>
+       <StackPanel Orientation="Horizontal"><TextBlock Text="&#x25A0;" FontFamily="Segoe UI Symbol, Segoe UI" Margin="0,1,7,0"/><TextBlock Text="Остановить" FontWeight="SemiBold"/></StackPanel>
       </Button>
      </StackPanel>
     </Grid>
@@ -156,7 +156,7 @@
        <TextBlock Text="{Binding OverviewUptimeLabel}" Foreground="#30475A" Margin="0,0,0,14"/>
        <Grid Margin="0,0,0,18"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <StackPanel><TextBlock Text="Инвентарный номер" FontWeight="SemiBold"/><TextBlock Text="{Binding ScheduleStatus}" Style="{StaticResource SecondaryText}" Margin="0,4,12,0"/></StackPanel>
-        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top"><TextBox x:Name="InventoryInput" Text="{Binding AdminInventoryInput, UpdateSourceTrigger=PropertyChanged}" MaxLength="4" Width="82" Height="36" Padding="9,6" ToolTip="Четыре цифры инвентарного номера"/><Button Click="SaveInventory_Click" Width="36" Height="36" Margin="7,0,0,0" Cursor="Hand" ToolTip="Сохранить инвентарный номер"><TextBlock Text="&#xE74E;" FontFamily="Segoe MDL2 Assets"/></Button></StackPanel>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top"><TextBox x:Name="InventoryInput" Text="{Binding AdminInventoryInput, UpdateSourceTrigger=PropertyChanged}" MaxLength="4" Width="82" Height="36" Padding="9,6" ToolTip="Четыре цифры инвентарного номера"/><Button Click="SaveInventory_Click" Width="36" Height="36" Margin="7,0,0,0" Cursor="Hand" ToolTip="Сохранить инвентарный номер"><TextBlock Text="&#x2713;" FontFamily="Segoe UI Symbol, Segoe UI"/></Button></StackPanel>
        </Grid>
        <StackPanel Margin="0,0,0,18">
         <Button x:Name="ServerAssignmentButton" Content="Компания и объект ПК" Click="OpenServerAssignment_Click" HorizontalAlignment="Left" Padding="12,7" Background="White" BorderBrush="#C7D5E5" Foreground="#14419E" Cursor="Hand" ToolTip="Изменить привязку компьютера к серверу ИТ-Сети"/>
@@ -217,15 +217,28 @@
     <TabItem Header="Сеть и датчики">
      <Grid Margin="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
       <DockPanel Margin="0,0,0,12" LastChildFill="True">
-       <Button DockPanel.Dock="Right" Click="RefreshNetwork_Click" Padding="9,6" ToolTip="Обновить список сетевых адаптеров" AutomationProperties.Name="Обновить сетевые адаптеры"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets"/></Button>
+       <Button DockPanel.Dock="Right" Click="RefreshNetwork_Click" Padding="9,6" ToolTip="Обновить список сетевых адаптеров" AutomationProperties.Name="Обновить сетевые адаптеры"><TextBlock Text="&#x21BB;" FontFamily="Segoe UI Symbol, Segoe UI"/></Button>
        <StackPanel VerticalAlignment="Center">
         <TextBlock Text="Сетевые адаптеры и последние показания HWiNFO" Style="{StaticResource SecondaryText}"/>
         <TextBlock Text="{Binding HwInfoStatus}" Style="{StaticResource SecondaryText}"/>
        </StackPanel>
       </DockPanel>
-      <Grid Grid.Row="1"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="2*"/><RowDefinition Height="Auto"/><RowDefinition Height="3*"/></Grid.RowDefinitions>
+      <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><StackPanel>
+       <TextBlock Text="Датчики HWiNFO" FontSize="18" FontWeight="SemiBold" Foreground="#143C87" Margin="0,4,0,10"/>
+       <ItemsControl ItemsSource="{Binding HwInfoSensors}" Margin="-5,0,-5,18">
+        <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate><DataTemplate>
+         <Border Width="230" MinHeight="125" Margin="5" Padding="14" CornerRadius="8" BorderBrush="#CBD9E6" BorderThickness="1" Background="White" ToolTip="{Binding Name}">
+          <StackPanel>
+           <TextBlock Text="{Binding Category}" Foreground="#597087" FontSize="12"/>
+           <TextBlock Text="{Binding Value}" Foreground="#143C87" FontSize="23" FontWeight="SemiBold" Margin="0,6,0,6"/>
+           <TextBlock Text="{Binding Name}" Foreground="#263F55" TextWrapping="Wrap" FontSize="12"/>
+          </StackPanel>
+         </Border>
+        </DataTemplate></ItemsControl.ItemTemplate>
+       </ItemsControl>
        <TextBlock Text="Сеть" FontWeight="SemiBold" Foreground="#143C87" Margin="0,0,0,6"/>
-       <DataGrid Grid.Row="1" ItemsSource="{Binding NetworkAdapters}" RowHeight="NaN" MinRowHeight="44">
+       <DataGrid ItemsSource="{Binding NetworkAdapters}" RowHeight="NaN" MinRowHeight="44" MinHeight="100" MaxHeight="300">
         <DataGrid.Columns>
          <DataGridTextColumn Header="Адаптер" Binding="{Binding Name}" Width="150"/>
          <DataGridTextColumn Header="Тип" Binding="{Binding Type}" Width="85"/>
@@ -235,11 +248,7 @@
          <DataGridTemplateColumn Header="IP-адреса" Width="*"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding Addresses}" TextWrapping="Wrap" Padding="4,6"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
         </DataGrid.Columns>
        </DataGrid>
-       <TextBlock Grid.Row="2" Text="Датчики" FontWeight="SemiBold" Foreground="#143C87" Margin="0,12,0,6"/>
-       <DataGrid Grid.Row="3" ItemsSource="{Binding HwInfoSensors}" IsReadOnly="True" AutoGenerateColumns="False" RowHeight="NaN" MinRowHeight="38">
-        <DataGrid.Columns><DataGridTextColumn Header="Категория" Binding="{Binding Category}" Width="130"/><DataGridTextColumn Header="Датчик" Binding="{Binding Name}" Width="*"/><DataGridTextColumn Header="Значение" Binding="{Binding Value}" Width="115"/><DataGridTextColumn Header="Снято" Binding="{Binding CapturedAt}" Width="145"/></DataGrid.Columns>
-       </DataGrid>
-      </Grid>
+      </StackPanel></ScrollViewer>
      </Grid>
     </TabItem>
     <TabItem Header="Процессы">
@@ -247,7 +256,7 @@
       <TextBlock Text="{Binding ProcessStatus}" Foreground="#2D4354" Margin="0,0,0,6" TextWrapping="Wrap"/>
       <TextBlock Grid.Row="1" Text="{Binding ProcessAllowStatus}" Foreground="#2D4354" Margin="0,0,0,10" TextWrapping="Wrap"/>
       <DataGrid Grid.Row="2" ItemsSource="{Binding Processes}" SelectionMode="Single"><DataGrid.Columns>
-       <DataGridTextColumn Header="Процесс" Binding="{Binding Name}" Width="130"/><DataGridTextColumn Header="Название" Binding="{Binding Description}" Width="*"/><DataGridTextColumn Header="Издатель" Binding="{Binding Publisher}" Width="220"/><DataGridTextColumn Header="Подпись" Binding="{Binding Signature}" Width="90"/><DataGridTemplateColumn Header="Правило" Width="76"><DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><Button Content="&#xE73E;" FontFamily="Segoe MDL2 Assets" Click="AllowProcess_Click" Tag="{Binding}" Width="28" Height="28" Padding="0" Margin="1" ToolTip="Разрешить этот процесс на сервере" AutomationProperties.Name="Разрешить процесс"/><Button Content="&#xE72E;" FontFamily="Segoe MDL2 Assets" Click="TrustProcessPublisher_Click" Tag="{Binding}" IsEnabled="{Binding CanTrustPublisher}" Width="28" Height="28" Padding="0" Margin="1" ToolTip="Доверять издателю с действительной подписью" AutomationProperties.Name="Доверять издателю"/></StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+       <DataGridTextColumn Header="Процесс" Binding="{Binding Name}" Width="130"/><DataGridTextColumn Header="Название" Binding="{Binding Description}" Width="*"/><DataGridTextColumn Header="Издатель" Binding="{Binding Publisher}" Width="220"/><DataGridTextColumn Header="Подпись" Binding="{Binding Signature}" Width="90"/><DataGridTemplateColumn Header="Правило" Width="76"><DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><Button Content="&#x2713;" FontFamily="Segoe UI Symbol, Segoe UI" Click="AllowProcess_Click" Tag="{Binding}" Width="28" Height="28" Padding="0" Margin="1" ToolTip="Разрешить этот процесс на сервере" AutomationProperties.Name="Разрешить процесс"/><Button Content="&#x2699;" FontFamily="Segoe UI Symbol, Segoe UI" Click="TrustProcessPublisher_Click" Tag="{Binding}" IsEnabled="{Binding CanTrustPublisher}" Width="28" Height="28" Padding="0" Margin="1" ToolTip="Доверять издателю с действительной подписью" AutomationProperties.Name="Доверять издателю"/></StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
       </DataGrid.Columns></DataGrid>
      </Grid>
     </TabItem>
@@ -271,7 +280,7 @@
       <StackPanel Margin="20">
        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <StackPanel VerticalAlignment="Center"><TextBlock Text="{Binding SetupSummary}" Foreground="#2D4354"/><TextBlock Text="{Binding SetupBundleStatus}" Foreground="#354A5E" ToolTip="{Binding SetupBundleTooltip}"/></StackPanel>
-        <Button x:Name="RefreshSetupAuditButton" Grid.Column="1" Click="RefreshSetupAudit_Click" Padding="10,7" ToolTip="Повторно проверить, какие программы установлены на этом компьютере" Cursor="Hand"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" Margin="0,0,7,0"/><TextBlock Text="Проверить ПО"/></StackPanel></Button>
+        <Button x:Name="RefreshSetupAuditButton" Grid.Column="1" Click="RefreshSetupAudit_Click" Padding="10,7" ToolTip="Повторно проверить, какие программы установлены на этом компьютере" Cursor="Hand"><StackPanel Orientation="Horizontal"><TextBlock Text="&#x21BB;" FontFamily="Segoe UI Symbol, Segoe UI" Margin="0,0,7,0"/><TextBlock Text="Проверить ПО"/></StackPanel></Button>
        </Grid>
        <TextBlock Text="{Binding SetupWarning}" TextWrapping="Wrap" Foreground="#896617" Margin="0,13,0,13"/>
        <Grid x:Name="SoftwareComponentHeader" Margin="0,0,0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="1.2*"/><ColumnDefinition Width="1.1*"/><ColumnDefinition Width="3*"/><ColumnDefinition Width="1.1*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -338,8 +347,8 @@
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="145"/></Grid.RowDefinitions>
       <Grid Margin="0,0,0,10"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
        <StackPanel><TextBlock Text="Ошибки приложения" Style="{StaticResource SectionHeading}"/><TextBlock Text="{Binding DebugSource}" Style="{StaticResource SecondaryText}" Margin="0,4,0,0"/></StackPanel>
-       <Button Grid.Column="1" Click="RefreshDebug_Click" Padding="9,7" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="Обновить этапы и файлы" Cursor="Hand"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets"/></Button>
-       <Button Grid.Column="2" Click="OpenDebugDirectory_Click" IsEnabled="{Binding CanOpenDebugDirectory}" Padding="9,7" VerticalAlignment="Center" ToolTip="Открыть папку проверки" Cursor="Hand"><TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets"/></Button>
+       <Button Grid.Column="1" Click="RefreshDebug_Click" Padding="9,7" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="Обновить этапы и файлы" Cursor="Hand"><TextBlock Text="&#x21BB;" FontFamily="Segoe UI Symbol, Segoe UI"/></Button>
+       <Button Grid.Column="2" Click="OpenDebugDirectory_Click" IsEnabled="{Binding CanOpenDebugDirectory}" Padding="9,7" VerticalAlignment="Center" ToolTip="Открыть папку проверки" Cursor="Hand"><TextBlock Text="&#x2630;" FontFamily="Segoe UI Symbol, Segoe UI"/></Button>
       </Grid>
       <StackPanel Grid.Row="1" Margin="0,0,0,12"><TextBlock Text="{Binding DebugStage, StringFormat=Последняя ошибка: {0}}" Foreground="#354A5E" TextWrapping="Wrap"/><TextBlock Text="{Binding DebugErrorLine}" Foreground="#9B3F3F" TextWrapping="Wrap" Margin="0,4,0,0"/></StackPanel>
       <DataGrid Grid.Row="2" ItemsSource="{Binding DebugSteps}" RowHeight="NaN" MinRowHeight="38" SelectionMode="Single">
@@ -363,7 +372,7 @@
         <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
         <ItemsControl.ItemTemplate><DataTemplate>
          <Button Tag="{Binding Key}" Click="LaunchSystemTool_Click" IsEnabled="{Binding Available}" ToolTip="{Binding ToolTip}" Width="190" Height="44" Margin="0,0,8,8" Padding="9,6" HorizontalContentAlignment="Left">
-          <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="{Binding Icon}" FontFamily="Segoe MDL2 Assets" FontSize="16" Foreground="#14419E" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="{Binding Title}" FontSize="14" TextWrapping="Wrap" VerticalAlignment="Center"/></Grid>
+          <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="{Binding Icon}" FontFamily="Segoe UI Symbol, Segoe UI" FontSize="16" Foreground="#14419E" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="{Binding Title}" FontSize="14" TextWrapping="Wrap" VerticalAlignment="Center"/></Grid>
          </Button>
         </DataTemplate></ItemsControl.ItemTemplate>
        </ItemsControl>
@@ -405,8 +414,8 @@
        <TextBlock x:Name="MaintenanceRepairHint" Text="DISM и SFC запускаются только отдельно. Работают в фоне; автоматической перезагрузки нет." Foreground="#354A5E" Margin="0,8,0,12" TextWrapping="Wrap"/>
        <StackPanel Orientation="Horizontal">
         <Button Click="RunRepair_Click" IsEnabled="{Binding CanRunRepair}" Content="Запустить восстановление" Padding="14,9" Cursor="Hand"/>
-        <Button Click="RefreshMaintenance_Click" ToolTip="Обновить результаты" Padding="9,7" Margin="8,0,0,0" Cursor="Hand"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets"/></Button>
-        <Button Click="OpenRepairLog_Click" IsEnabled="{Binding CanOpenRepairLog}" ToolTip="Открыть журнал DISM и SFC" Padding="9,7" Margin="8,0,0,0" Cursor="Hand"><TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets"/></Button>
+        <Button Click="RefreshMaintenance_Click" ToolTip="Обновить результаты" Padding="9,7" Margin="8,0,0,0" Cursor="Hand"><TextBlock Text="&#x21BB;" FontFamily="Segoe UI Symbol, Segoe UI"/></Button>
+        <Button Click="OpenRepairLog_Click" IsEnabled="{Binding CanOpenRepairLog}" ToolTip="Открыть журнал DISM и SFC" Padding="9,7" Margin="8,0,0,0" Cursor="Hand"><TextBlock Text="&#x2630;" FontFamily="Segoe UI Symbol, Segoe UI"/></Button>
        </StackPanel>
        <TextBlock Text="Результат восстановления" FontWeight="SemiBold" Margin="0,15,0,5"/>
        <TextBlock Text="{Binding StandaloneRepairStatus}" TextWrapping="Wrap" Foreground="#2D4354"/>
@@ -440,7 +449,7 @@
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
       <PasswordBox x:Name="AdminPassword" Height="38" Padding="10,7" FontSize="16" KeyDown="AdminPassword_KeyDown" PasswordChanged="AdminPassword_Changed" PreviewKeyDown="AdminPassword_PreviewKeyDown"/>
       <TextBox x:Name="AdminVisiblePassword" Grid.Column="0" Height="38" Padding="10,7" FontSize="16" Visibility="Collapsed" KeyDown="AdminPassword_KeyDown" TextChanged="AdminVisiblePassword_Changed" PreviewKeyDown="AdminPassword_PreviewKeyDown"/>
-      <Button Grid.Column="1" Click="ToggleAdminPassword_Click" Padding="4,2" Margin="3,0,0,0" ToolTip="Показать пароль"><TextBlock x:Name="AdminPasswordVisibilityIcon" Text="&#xE890;" FontFamily="Segoe MDL2 Assets"/></Button>
+      <Button Grid.Column="1" Click="ToggleAdminPassword_Click" Padding="4,2" Margin="3,0,0,0" ToolTip="Показать пароль"><TextBlock x:Name="AdminPasswordVisibilityIcon" Text="&#x2193;" FontFamily="Segoe UI Symbol, Segoe UI"/></Button>
      </Grid>
      <TextBlock x:Name="AdminCapsLockStatus" Text="Caps Lock включён" Foreground="#B7791F" Margin="0,5,0,0" Visibility="Collapsed"/>
      <TextBlock x:Name="AdminError" Foreground="#C64D4D" Margin="0,8,0,0" Visibility="Collapsed" TextWrapping="Wrap"/>
