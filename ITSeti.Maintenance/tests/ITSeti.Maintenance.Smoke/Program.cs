@@ -12,6 +12,7 @@ using Microsoft.Win32;
 using ITSeti.Maintenance.App;
 using ITSeti.Maintenance.Core;
 using ITSeti.Maintenance.Infrastructure;
+using ITSeti.Maintenance.Service;
 
 internal static class Program
 {
@@ -28,16 +29,17 @@ internal static class Program
         Environment.SetEnvironmentVariable("ITSETI_DISABLE_REPORT_UPLOAD", "1");
         if (args.Contains("--performance-contract")) return PerformanceContract.Run();
         if (args.Contains("--refactor-contract")) return RefactorContract.Run();
+        if (args.Contains("--monitoring-history-contract")) return CheckMonitoringHistoryContract();
         if (args.Contains("--installed-report-reader-contract")) return CheckInstalledReportReaderContract();
         if (args.Contains("--live-update-contract"))
         {
             var updateClient = new ServerApplicationUpdateClient();
             var release = updateClient.GetUpdateAsync(new Version(2, 3, 6)).GetAwaiter().GetResult();
             if (release?.Version != new Version(2, 4, 7) || !release.DownloadUrl.StartsWith("https://it-seti.nylenz.ru/api/v1/packages/", StringComparison.Ordinal))
-                throw new Exception("Live server did not offer 2.4.7 for 2.3.6");
+                throw new Exception("Live server did not offer 2.4.8 for 2.3.6");
             if (updateClient.GetUpdateAsync(new Version(2, 4, 7)).GetAwaiter().GetResult() is not null)
                 throw new Exception("Live server offers reinstall of already-current version");
-            Console.WriteLine("PASS live server: 2.3.6 receives 2.4.7, 2.4.7 is current, authenticated package URL validated");
+            Console.WriteLine("PASS live server: 2.3.6 receives 2.4.8, 2.4.8 is current, authenticated package URL validated");
             return 0;
         }
         if (args.Contains("--service-concurrency-contract"))
@@ -610,7 +612,7 @@ internal static class Program
                         System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                         .Invoke(window, null);
                     typeof(MainViewModel).GetField("serviceStatus", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                        .SetValue(window.ViewModel, "Служба работает · 2.4.7");
+                        .SetValue(window.ViewModel, "Служба работает · 2.4.8");
                     typeof(MainViewModel).GetMethod("Notify", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                         .Invoke(window.ViewModel, [Array.Empty<string>()]);
                     window.ViewModel.AdminInventoryInput = "0042";
@@ -1034,6 +1036,42 @@ internal static class Program
         };
         app.Run(window);
         return code;
+    }
+
+    private static int CheckMonitoringHistoryContract()
+    {
+        var history = new MonitoringSensorHistory();
+        var start = new DateTimeOffset(2026, 10, 14, 10, 0, 0, TimeSpan.Zero);
+        IReadOnlyList<SensorHistorySample> samples = [];
+        for (var index = 0; index < 62; index++)
+        {
+            var captured = start.AddSeconds(index * 5);
+            var sensors = Enumerable.Range(0, 30)
+                .Select(sensor => new HwInfoSensorReading($"CPU sensor {sensor}", 40 + sensor, "°C", "CpuTemperature"))
+                .Append(new HwInfoSensorReading("Clock", 3200, "MHz", "Frequency"))
+                .ToArray();
+            var snapshot = new DiagnosticSnapshot(Guid.NewGuid(), captured, "HISTORY-TEST", 42.6,
+                10UL << 30, 4UL << 30, [], [],
+                HwInfo: new HwInfoSnapshot("fixture", "1", captured, null, null, null, null, sensors));
+            samples = history.Add(snapshot);
+        }
+        if (samples.Count != 61 || samples[0].CapturedAtUtc != start.AddSeconds(5) ||
+            samples[^1].CapturedAtUtc != start.AddSeconds(61 * 5))
+            throw new Exception($"Sensor history did not retain a bounded rolling five-minute window: count={samples.Count}, first={samples.FirstOrDefault()?.CapturedAtUtc:O}, last={samples.LastOrDefault()?.CapturedAtUtc:O}.");
+        if (samples.Any(sample => sample.Sensors.Count > 24 || sample.Sensors.Any(sensor => sensor.Category == "Frequency")) ||
+            samples[^1].CpuLoadPercent != 42.6 || samples[^1].MemoryLoadPercent != 60)
+            throw new Exception("Sensor history exceeded its bounds or lost CPU/RAM values.");
+
+        var staleSnapshot = new DiagnosticSnapshot(Guid.NewGuid(), start.AddSeconds(310), "HISTORY-TEST", 5,
+            10UL << 30, 9UL << 30, [], [],
+            HwInfo: new HwInfoSnapshot("fixture", "1", start.AddSeconds(279), null, null, null, null,
+                [new HwInfoSensorReading("Old CPU", 99, "°C", "CpuTemperature")]));
+        var stale = history.Add(staleSnapshot)[^1];
+        if (stale.Sensors.Count != 0 || stale.HwInfoCapturedAtUtc is not null)
+            throw new Exception("Stale HWiNFO values were added to the history.");
+
+        Console.WriteLine("PASS: rolling five-minute history, sensor/load bounds and stale HWiNFO rejection.");
+        return 0;
     }
 
     private static async Task<int> CheckUpdateClientContract()

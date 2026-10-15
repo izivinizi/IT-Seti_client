@@ -33,6 +33,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     private readonly string pipeName;
     private readonly bool monitorEnabled;
     private readonly MonitoringConfirmation monitoring = new();
+    private readonly MonitoringSensorHistory sensorHistory = new();
     private readonly DiskLatencySampler diskLatencySampler = new();
     private readonly EngineerAuthorization engineerAuthorization = new();
     private Task<HwInfoSnapshot?>? hwInfoReadTask;
@@ -882,6 +883,11 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
                     }
                 }
                 var snapshot = await ReadLiveSnapshotWithTimeoutAsync(cancellationToken);
+                var history = snapshot is null || liveSnapshotTimedOut
+                    ? sensorHistory.Snapshot()
+                    : sensorHistory.Add(snapshot);
+                if (snapshot is not null && !liveSnapshotTimedOut)
+                    ApplicationErrorStore.PublishSensorHistory(history);
                 IReadOnlyList<CriticalMonitoringIssue> critical = snapshot is null || liveSnapshotTimedOut
                     ? monitoring.Observe(Array.Empty<CriticalMonitoringIssue>(), DateTimeOffset.UtcNow)
                     : EvaluateMonitoring(snapshot);
@@ -895,7 +901,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
                             : critical.Count > 0 ? "Есть подтверждённое предупреждение датчиков" : "Мониторинг работает";
                 await WriteStatusAsync(snapshot, state, cancellationToken, critical);
                 if (snapshot is not null && critical.Count > 0)
-                    await QueueMonitoringReportAsync(snapshot, critical, cancellationToken);
+                    await QueueMonitoringReportAsync(snapshot, critical, history, cancellationToken);
                 TryStartReportUpload();
                 if (DateTimeOffset.UtcNow >= nextTicketPoll) StartTicketUpdatePoll(cancellationToken);
             }
@@ -971,7 +977,8 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         monitoring.Observe(CriticalMonitoringEvaluator.Evaluate(snapshot), snapshot.StartedAt);
 
     private Task QueueMonitoringReportAsync(ITSeti.Maintenance.Core.DiagnosticSnapshot snapshot,
-        IReadOnlyList<CriticalMonitoringIssue> issues, CancellationToken cancellationToken)
+        IReadOnlyList<CriticalMonitoringIssue> issues, IReadOnlyList<SensorHistorySample> history,
+        CancellationToken cancellationToken)
     {
         var queue = Path.Combine(DataRoot, "MonitoringQueue");
         var report = new
@@ -998,8 +1005,12 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
                 Rail12V = hwInfo.Rail12V,
                 Rail5V = hwInfo.Rail5V,
                 Rail3V = hwInfo.Rail3V,
-                AlertingSensors = hwInfo.AlertingSensors
+                AlertingSensors = hwInfo.AlertingSensors,
+                Sensors = hwInfo.Sensors.Where(sensor => sensor.Category is "CpuTemperature" or "VrmTemperature" or
+                    "PchTemperature" or "Rail12V" or "Rail5V" or "Rail3V" or "CpuVoltage" or "CpuLoad" or "MemoryLoad")
+                    .Take(24).ToArray()
             } : null,
+            SensorHistory = history,
             snapshot.ActiveUptimeHours,
             snapshot.DiskReadLatencyMs,
             snapshot.DiskWriteLatencyMs,
@@ -1219,7 +1230,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     }
 
     private static string GetVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.4.7";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.4.8";
 
     private void StopChildren()
     {

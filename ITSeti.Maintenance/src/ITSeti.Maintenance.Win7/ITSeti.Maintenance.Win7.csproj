@@ -4,9 +4,9 @@
     <TargetFramework>net48</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>ITSeti.Maintenance.Win7</AssemblyName>
-    <Version>2.4.7-beta</Version>
-    <AssemblyVersion>2.4.7.0</AssemblyVersion>
-    <FileVersion>2.4.7.0</FileVersion>
+    <Version>2.4.8-beta</Version>
+    <AssemblyVersion>2.4.8.0</AssemblyVersion>
+    <FileVersion>2.4.8.0</FileVersion>
     <ApplicationIcon>..\ITSeti.Maintenance.App\Assets\favicon.ico</ApplicationIcon>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>

@@ -65,6 +65,91 @@ function property(object, ...names) {
 function list(value) { return Array.isArray(value) ? value : []; }
 function short(value, max = 120) { const text = String(value ?? ''); return text.length > max ? text.slice(0, max - 1) + '…' : text; }
 
+function sensorHistoryValues(history, category) {
+  const samples = list(history);
+  let sensorName = null;
+  if (category !== 'CpuLoad' && category !== 'MemoryLoad') {
+    const counts = new Map();
+    for (const sample of samples) for (const sensor of list(property(sample, 'sensors'))) {
+      if (property(sensor, 'category') !== category) continue;
+      const name = property(sensor, 'name');
+      if (name) counts.set(name, (counts.get(name) || 0) + 1);
+    }
+    sensorName = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+  }
+  return samples.flatMap(sample => {
+    const capturedAt = property(sample, 'capturedAtUtc');
+    let value;
+    if (category === 'CpuLoad') value = property(sample, 'cpuLoadPercent');
+    else if (category === 'MemoryLoad') value = property(sample, 'memoryLoadPercent');
+    else value = list(property(sample, 'sensors')).find(sensor => property(sensor, 'category') === category &&
+      property(sensor, 'name') === sensorName);
+    const sensor = value && typeof value === 'object' ? value : null;
+    if (sensor) value = property(sensor, 'value');
+    const numeric = Number(value);
+    return capturedAt && Number.isFinite(numeric) ? [{ capturedAt: new Date(capturedAt), value: numeric, sensorName }] : [];
+  }).filter(point => Number.isFinite(point.capturedAt.getTime())).sort((a, b) => a.capturedAt - b.capturedAt);
+}
+
+function showTelemetryChart(history, category, label) {
+  const points = sensorHistoryValues(history, category);
+  if (!points.length) return;
+  $('telemetry-title').textContent = label;
+  $('telemetry-subtitle').textContent = `${points[0].sensorName ? points[0].sensorName + ' · ' : ''}${date(points[0].capturedAt)} — ${date(points.at(-1).capturedAt)} · ${points.length} измерений за последние 5 минут`;
+  const chart = $('telemetry-chart'); chart.replaceChildren();
+  const width = 760, height = 280, left = 52, right = 18, top = 16, bottom = 42;
+  const min = Math.min(...points.map(point => point.value)), max = Math.max(...points.map(point => point.value));
+  const padding = Math.max((max - min) * .12, Math.abs(max || min) * .025, .05);
+  const low = min - padding, high = max + padding;
+  const x = index => left + (points.length < 2 ? .5 : index / (points.length - 1)) * (width - left - right);
+  const y = value => top + (high - value) / (high - low) * (height - top - bottom);
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`); svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', `График ${label}`); svg.classList.add('telemetry-svg');
+  for (let tick = 0; tick < 4; tick++) {
+    const value = high - (high - low) * tick / 3, yy = y(value);
+    const line = document.createElementNS(svg.namespaceURI, 'line');
+    line.setAttribute('x1', String(left)); line.setAttribute('x2', String(width - right));
+    line.setAttribute('y1', String(yy)); line.setAttribute('y2', String(yy)); line.classList.add('telemetry-grid'); svg.append(line);
+    const text = document.createElementNS(svg.namespaceURI, 'text');
+    text.setAttribute('x', String(left - 8)); text.setAttribute('y', String(yy + 4)); text.setAttribute('text-anchor', 'end');
+    text.textContent = value.toFixed(Math.abs(high - low) < 2 ? 2 : 0); text.classList.add('telemetry-axis'); svg.append(text);
+  }
+  if (points.length > 1) {
+    const polyline = document.createElementNS(svg.namespaceURI, 'polyline');
+    polyline.setAttribute('points', points.map((point, index) => `${x(index)},${y(point.value)}`).join(' '));
+    polyline.classList.add('telemetry-line'); svg.append(polyline);
+  }
+  for (const [index, point] of points.entries()) {
+    const circle = document.createElementNS(svg.namespaceURI, 'circle');
+    circle.setAttribute('cx', String(x(index))); circle.setAttribute('cy', String(y(point.value))); circle.setAttribute('r', '3');
+    circle.classList.add('telemetry-point');
+    const title = document.createElementNS(svg.namespaceURI, 'title');
+    title.textContent = `${date(point.capturedAt)} · ${point.value.toFixed(2)}`; circle.append(title); svg.append(circle);
+  }
+  for (const [index, point] of [points[0], points.at(-1)].entries()) {
+    const text = document.createElementNS(svg.namespaceURI, 'text');
+    text.setAttribute('x', String(index === 0 ? left : width - right)); text.setAttribute('y', String(height - 12));
+    text.setAttribute('text-anchor', index === 0 ? 'start' : 'end'); text.textContent = point.capturedAt.toLocaleTimeString('ru-RU');
+    text.classList.add('telemetry-axis'); svg.append(text);
+  }
+  chart.append(svg);
+  const average = points.reduce((sum, point) => sum + point.value, 0) / points.length;
+  const suffix = category.includes('Voltage') || category.startsWith('Rail') ? ' В' : category.includes('Temperature') ? ' °C' : '%';
+  $('telemetry-stats').replaceChildren(
+    node('span', `Мин. ${min.toFixed(2)}${suffix}`), node('span', `Сред. ${average.toFixed(2)}${suffix}`), node('span', `Макс. ${max.toFixed(2)}${suffix}`));
+  $('telemetry-dialog').showModal();
+}
+
+function telemetryButton(history, category, label) {
+  if (sensorHistoryValues(history, category).length < 2) return null;
+  const button = node('button', 'График', 'secondary compact telemetry-button');
+  button.type = 'button'; button.addEventListener('click', event => {
+    event.stopPropagation(); showTelemetryChart(history, category, label);
+  });
+  return button;
+}
+
 function showView(view) {
   state.view = view;
   $('page-title').textContent = { computers: 'Компьютеры', monitoring: 'Мониторинг', connections:'Новые подключения', 'application-errors': 'Ошибки приложения', tickets: 'Заявки', packages: 'ПО и обновления' }[view];
@@ -339,9 +424,29 @@ function eventIdentity(event) {
   return [property(event, 'log'), provider, property(event, 'id'), property(event, 'level') || 2, bugcheck].join('|').toLowerCase();
 }
 
+function profileDetailRow(label, currentValue, savedValue, savedAt) {
+  const current = currentValue != null && String(currentValue).trim() !== '' && String(currentValue) !== 'нет данных';
+  const value = current ? currentValue : savedValue;
+  if (value == null || String(value).trim() === '' || String(value) === 'нет данных') return null;
+  const stale = !current && (!savedAt || Date.now() - new Date(savedAt).getTime() > 24 * 60 * 60 * 1000);
+  return { text: `${label}: ${value}${current ? '' : ` · сохранено ${date(savedAt)}`}`,
+    className: `detail-row ${current ? '' : stale ? 'stale-data' : 'profile-data'}` };
+}
+
+function telemetryDetailRow(label, value, history, category) {
+  const row = node('div', undefined, 'sensor-detail-row');
+  row.append(node('span', `${label}: ${value}`));
+  const button = telemetryButton(history, category, label);
+  if (button) row.append(button);
+  return { element: row, className: 'detail-row' };
+}
+
 function renderRun(run) {
   const root = $('run-detail'); root.replaceChildren();
   const report = run.details || {}, full = property(report, 'full') || {};
+  const profile = run.hardwareProfile || {};
+  const profileUpdatedAt = run.hardwareProfileUpdatedAt || property(profile, 'capturedAtUtc');
+  const history = property(report, 'sensorHistory');
   root.append(node('h3', 'Результат проверки'));
   root.append(node('span', date(run.startedAt) + ' · ' + run.kind, 'meta'));
   if (property(report, 'trigger')) {
@@ -356,18 +461,38 @@ function renderRun(run) {
     property(report, 'anyDeskId') && 'AnyDesk ' + property(report, 'anyDeskId')].filter(Boolean);
   if (identifiers.length) root.append(node('div', identifiers.join(' · '), 'detail-row'));
   const stats = node('div', undefined, 'detail-stats');
+  const cpuPercent = Number(property(report, 'cpuPercent'));
+  const cpuLabel = Number.isFinite(cpuPercent) && cpuPercent >= 0 && cpuPercent <= 100 ? Math.round(cpuPercent) + '%' : 'Нет данных';
   const items = [
-    ['Процессор', property(report, 'cpuPercent') == null ? 'Нет данных' : property(report, 'cpuPercent') + '%'],
+    ['Процессор', cpuLabel],
     ['Температура', temperature(property(report, 'cpuTemperatureC') ?? property(property(report, 'full'), 'cpuTemperatureC'))],
     ['ОЗУ', property(report, 'memoryUsedPercent') == null ? 'Нет данных' : Number(property(report, 'memoryUsedPercent')).toFixed(0) + '%'],
     ['Windows', [property(report, 'windowsEdition', 'osName'), property(report, 'windowsRelease', 'osVersion')].filter(Boolean).join(' ') || 'Нет данных']
   ];
   for (const [label, value] of items) { const cell = node('div'); cell.append(node('span', label), node('strong', String(value))); stats.append(cell); }
   root.append(stats);
+  const totalMemory = property(report, 'totalMemoryBytes');
+  const savedMemory = property(profile, 'totalMemoryBytes');
+  const memoryText = bytes => bytes == null ? null : `${(Number(bytes) / 1073741824).toFixed(1)} ГБ`;
+  const configRows = [
+    profileDetailRow('Имя компьютера', property(report, 'computerName'), property(profile, 'computerName'), profileUpdatedAt),
+    profileDetailRow('Процессор', property(full, 'cpuName'), property(profile, 'cpuModel'), profileUpdatedAt),
+    profileDetailRow('Видеокарта', property(full, 'gpuName'), property(profile, 'gpuModel'), profileUpdatedAt),
+    profileDetailRow('Оперативная память', memoryText(totalMemory), memoryText(savedMemory), profileUpdatedAt),
+    profileDetailRow('Тип памяти', property(full, 'memoryType') || property(property(report, 'hwiNFO', 'hwInfo'), 'memoryType'), property(profile, 'memoryType'), profileUpdatedAt),
+    profileDetailRow('Материнская плата', property(property(report, 'hwiNFO', 'hwInfo'), 'motherboard'), property(profile, 'motherboard'), profileUpdatedAt),
+    profileDetailRow('BIOS', property(property(report, 'hwiNFO', 'hwInfo'), 'biosVersion'), property(profile, 'biosVersion'), profileUpdatedAt),
+    profileDetailRow('Windows', [property(report, 'windowsEdition'), property(report, 'windowsRelease'), property(report, 'windowsBuild') && `сборка ${property(report, 'windowsBuild')}`].filter(Boolean).join(' ') || null,
+      [property(profile, 'windowsEdition'), property(profile, 'windowsRelease'), property(profile, 'windowsBuild') && `сборка ${property(profile, 'windowsBuild')}`].filter(Boolean).join(' ') || null, profileUpdatedAt)
+  ].filter(Boolean);
+  detailSection(root, 'Конфигурация компьютера', configRows,
+    'Данные конфигурации ещё не получены. Они появятся после очередного отчёта компьютера.');
+  if (profileUpdatedAt) root.append(node('span', `Профиль оборудования сохранён ${date(profileUpdatedAt)}.`, 'meta'));
   const adapters = list(property(report, 'networkAdapters', 'network'));
-  detailSection(root, 'Сеть', adapters.map(adapter => ({
+  const savedAdapters = list(property(profile, 'networkAdapters'));
+  detailSection(root, 'Сеть', (adapters.length ? adapters : savedAdapters).map(adapter => ({
     text: [property(adapter, 'name'), property(adapter, 'macAddress', 'mac'), property(adapter, 'addresses', 'ipAddresses')]
-      .filter(Boolean).join(' · ')
+      .filter(Boolean).join(' · '), className: adapters.length ? 'detail-row' : 'detail-row stale-data'
   })), 'Сетевые данные не переданы.', true);
   const nestedHwInfo = property(report, 'hwiNFO', 'hwInfo');
   const legacySensorFields = ['cpuTemperatureC', 'vrmTemperatureC', 'pchTemperatureC', 'rail12V', 'rail5V', 'rail3V']
@@ -386,15 +511,20 @@ function renderRun(run) {
   const sensorRows = hwInfo ? [
     ['Источник', [property(hwInfo, 'source'), property(hwInfo, 'toolVersion')].filter(Boolean).join(' · ')],
     ['Снимок', property(hwInfo, 'capturedAtUtc') ? date(property(hwInfo, 'capturedAtUtc')) : null],
-    ['CPU', temperature(property(hwInfo, 'cpuTemperatureC'))],
-    ['VRM', temperature(property(hwInfo, 'vrmTemperatureC'))],
-    ['PCH', temperature(property(hwInfo, 'pchTemperatureC'))],
-    ['12 В', property(hwInfo, 'rail12V') == null ? 'Нет данных' : Number(property(hwInfo, 'rail12V')).toFixed(2) + ' В'],
-    ['5 В', property(hwInfo, 'rail5V') == null ? 'Нет данных' : Number(property(hwInfo, 'rail5V')).toFixed(2) + ' В'],
-    ['3,3 В', property(hwInfo, 'rail3V') == null ? 'Нет данных' : Number(property(hwInfo, 'rail3V')).toFixed(2) + ' В'],
-    ['CPU load', property(hwInfo, 'cpuLoadPercent') == null ? 'Нет данных' : Number(property(hwInfo, 'cpuLoadPercent')).toFixed(0) + '%']
-  ].filter(([, value]) => value && value !== 'Нет данных').map(([label, value]) => ({ text: label + ': ' + value })) : [];
+    ['CPU', temperature(property(hwInfo, 'cpuTemperatureC')), 'CpuTemperature'],
+    ['VRM', temperature(property(hwInfo, 'vrmTemperatureC')), 'VrmTemperature'],
+    ['PCH', temperature(property(hwInfo, 'pchTemperatureC')), 'PchTemperature'],
+    ['12 В', property(hwInfo, 'rail12V') == null ? 'Нет данных' : Number(property(hwInfo, 'rail12V')).toFixed(2) + ' В', 'Rail12V'],
+    ['5 В', property(hwInfo, 'rail5V') == null ? 'Нет данных' : Number(property(hwInfo, 'rail5V')).toFixed(2) + ' В', 'Rail5V'],
+    ['3,3 В', property(hwInfo, 'rail3V') == null ? 'Нет данных' : Number(property(hwInfo, 'rail3V')).toFixed(2) + ' В', 'Rail3V'],
+    ['Загрузка CPU', property(hwInfo, 'cpuLoadPercent') == null ? 'Нет данных' : Number(property(hwInfo, 'cpuLoadPercent')).toFixed(0) + '%', 'CpuLoad']
+  ].filter(([label, value]) => label && value && value !== 'Нет данных')
+    .map(([label, value, category]) => telemetryDetailRow(label, value, history, category)) : [];
   detailSection(root, 'HWiNFO', sensorRows, 'Свежий снимок HWiNFO не передан.', true);
+  const cpuHistoryButton = telemetryButton(history, 'CpuLoad', 'Загрузка CPU');
+  if (cpuHistoryButton) root.append(cpuHistoryButton);
+  const memoryHistoryButton = telemetryButton(history, 'MemoryLoad', 'Загрузка памяти');
+  if (memoryHistoryButton) root.append(memoryHistoryButton);
   const otherVoltages=list(property(hwInfo,'sensors')).filter(sensor=>property(sensor,'category')==='Voltage');
   if(otherVoltages.length)detailSection(root,'Другие напряжения',otherVoltages.map(sensor=>({text:property(sensor,'name')+': '+Number(property(sensor,'value')).toFixed(2)+' В'})),'',true);
   const issues = list(run.issues || property(report, 'diagnosticIssues'));
@@ -410,11 +540,15 @@ function renderRun(run) {
     className: 'detail-row critical'
   })), 'Ошибок приложения для этой проверки нет.', applicationErrors.length === 0);
   const disks = list(property(report, 'disks'));
+  const profileDisks = list(property(profile, 'physicalDisks'));
   const smart = list(property(full, 'smartDisks') || property(report, 'smartDisks'));
-  detailSection(root, 'Накопители', disks.map(disk => {
+  const profileSmart = list(property(profile, 'smartDisks'));
+  detailSection(root, 'Накопители', (disks.length ? disks : profileDisks).map(disk => {
     const free = property(disk, 'freeBytes'), total = property(disk, 'totalBytes');
-    return { text: `${property(disk, 'name') || 'Диск'} · ${free != null && total != null ? (free / 1073741824).toFixed(1) + ' из ' + (total / 1073741824).toFixed(1) + ' ГБ свободно' : 'нет данных о свободном месте'}` };
-  }).concat(smart.map(disk => ({ text: [property(disk, 'model'), property(disk, 'status', 'health'), property(disk, 'smartWarnings')].filter(Boolean).join(' · ') }))), 'Данные о дисках не переданы.');
+    return { text: `${property(disk, 'name', 'model') || 'Диск'} · ${free != null && total != null ? (free / 1073741824).toFixed(1) + ' из ' + (total / 1073741824).toFixed(1) + ' ГБ свободно' : [property(disk, 'mediaType'), property(disk, 'health')].filter(Boolean).join(' · ') || 'нет данных о свободном месте'}`,
+      className: disks.length ? 'detail-row' : 'detail-row stale-data' };
+  }).concat((smart.length ? smart : profileSmart).map(disk => ({ text: [property(disk, 'model'), property(disk, 'status', 'health'), property(disk, 'smartWarnings')].filter(Boolean).join(' · '),
+    className: smart.length ? 'detail-row' : 'detail-row stale-data' }))), 'Данные о дисках не переданы.');
   const previous = run.previous || {}, prevFull = property(previous, 'full') || {};
   const processes = list(run.unknownProcesses || property(full, 'processes') || property(report, 'processes'));
   const oldProcesses = new Set(list(property(prevFull, 'processes') || property(previous, 'processes'))
@@ -448,6 +582,7 @@ function renderRun(run) {
 function monitoringParameters() {
   const params = new URLSearchParams({ page: String(state.monitorPage), days: $('monitor-days').value });
   params.set('severity', $('monitor-severity').value || '1');
+  params.set('state', $('monitor-state').value || 'open');
   if ($('monitor-category').value) params.set('category', $('monitor-category').value);
   if ($('monitor-company').value) params.set('companyId', $('monitor-company').value);
   if ($('monitor-site').value) params.set('siteId', $('monitor-site').value);
@@ -494,24 +629,55 @@ async function loadApplicationErrors() {
     if (requestId !== state.applicationErrorRequest) return;
     const container = $('app-errors-list');
     container.replaceChildren();
-    for (const error of result.items || []) {
-      const row = node('article', undefined, 'application-error-row');
+    for (const computer of result.items || []) {
+      const card = node('article', undefined, 'application-error-card clickable');
+      card.tabIndex = 0;
+      const openComputer = () => selectDevice({ id: computer.deviceId, serial: computer.serial,
+        inventory: computer.inventory, company: computer.company, site: computer.site });
+      card.addEventListener('click', event => { if (!event.target.closest('button,a,details,summary')) openComputer(); });
+      card.addEventListener('keydown', event => {
+        if ((event.key === 'Enter' || event.key === ' ') && event.target === card) { event.preventDefault(); openComputer(); }
+      });
       const heading = node('div', undefined, 'application-error-heading');
-      const machine = error.inventory ? `${error.computer || 'ПК'} · Инв. № ${error.inventory}` : error.computer || 'Компьютер';
-      heading.append(node('strong', machine), node('time', date(error.occurredAt), 'when'));
-      const context = node('div', [error.company, error.site, error.component, error.operation, error.version ? 'версия ' + error.version : ''].filter(Boolean).join(' · '), 'application-error-context');
-      const details = node('details', undefined, 'application-error-details');
-      details.append(node('summary', error.summary || 'Ошибка приложения'));
-      if (error.exceptionType) details.append(node('p', error.exceptionType, 'application-error-type'));
-      if (error.technicalDetails) details.append(node('pre', error.technicalDetails, 'application-error-technical'));
-      row.append(heading, context, details);
-      container.append(row);
+      const identity = node('div', undefined, 'application-error-identity');
+      identity.append(node('strong', computer.inventory ? `Инв. № ${computer.inventory}` : 'Инвентарный номер не указан'));
+      identity.append(node('span', [computer.company, computer.site].filter(Boolean).join(' · ') || 'Компания и объект не указаны', 'application-error-context'));
+      identity.append(node('span', computer.computer || computer.serial || '', 'meta'));
+      heading.append(identity, node('time', date(computer.latestErrorAt), 'when'));
+      card.append(heading);
+      const errors = node('div', undefined, 'application-error-items');
+      for (const error of list(computer.errors)) {
+        const item = node('section', undefined, 'application-error-item');
+        const context = node('div', [error.component, error.operation, error.version ? 'версия ' + error.version : ''].filter(Boolean).join(' · '), 'application-error-context');
+        const details = node('details', undefined, 'application-error-details');
+        details.append(node('summary', `${date(error.occurredAt)} · ${error.summary || 'Ошибка приложения'}`));
+        if (error.exceptionType) details.append(node('p', error.exceptionType, 'application-error-type'));
+        if (error.technicalDetails) details.append(node('pre', error.technicalDetails, 'application-error-technical'));
+        const history = property(error, 'sensorHistory');
+        const charts = node('div', undefined, 'application-error-charts');
+        for (const [category, label] of [['CpuLoad', 'Загрузка CPU'], ['MemoryLoad', 'Загрузка ОЗУ'],
+          ['CpuTemperature', 'Температура CPU'], ['VrmTemperature', 'Температура VRM'], ['PchTemperature', 'Температура PCH'],
+          ['Rail12V', '12 В'], ['Rail5V', '5 В'], ['Rail3V', '3,3 В'], ['CpuVoltage', 'Напряжение CPU']]) {
+          const button = telemetryButton(history, category, label);
+          if (button) charts.append(button);
+        }
+        item.append(context, details);
+        if (charts.childElementCount) item.append(charts);
+        errors.append(item);
+      }
+      card.append(errors);
+      if (computer.hasMoreErrors) card.append(node('p', `Показаны последние ${list(computer.errors).length} из ${computer.errorCount} ошибок этого ПК.`, 'meta'));
+      const footer = node('div', undefined, 'application-error-footer');
+      footer.append(node('span', `${computer.errorCount} ошибок`), node('span', 'Открыть карточку ПК ›'));
+      card.append(footer);
+      container.append(card);
     }
     $('app-errors-page').textContent = 'Страница ' + (state.applicationErrorPage + 1);
     $('app-errors-prev').disabled = state.applicationErrorPage === 0;
     $('app-errors-next').disabled = !result.hasMore;
     $('app-errors-empty').classList.toggle('hidden', !!result.items?.length);
-    status('app-errors-status', result.items?.length ? `Записей: ${result.items.length}` : '');
+    const totalErrors = (result.items || []).reduce((sum, computer) => sum + Number(computer.errorCount || 0), 0);
+    status('app-errors-status', result.items?.length ? `${result.items.length} компьютеров · ${totalErrors} ошибок` : '');
   } catch (error) {
     if (requestId === state.applicationErrorRequest) status('app-errors-status', error.message, 'error');
   }
@@ -519,34 +685,79 @@ async function loadApplicationErrors() {
 
 async function loadMonitoring() {
   const requestId=++state.monitorRequest;
-  status('monitor-status','Загружаю события…');
+  status('monitor-status','Загружаю компьютеры…');
   try {
     const result=await api('/api/admin/monitoring?'+monitoringParameters());
     if(requestId!==state.monitorRequest)return;
     const container = $('monitor-list'); container.replaceChildren();
-    for (const alert of result.items || []) {
-      const row = node('div', undefined, 'monitor-row ' + (alert.severity === 1 ? 'critical' : 'warning'));
-      const issue = node('div');
-      issue.append(node('span', alert.category === 'event' ? 'Ошибка журнала Windows' : 'Замечание проверки', 'type'));
-      const details = node('details', undefined, 'monitor-details');
-      details.append(node('summary', alert.title), node('p', alert.detail));
-      issue.append(details);
-      const place = node('div');
-      place.append(node('strong', alert.inventory ? 'Инв. № ' + alert.inventory : 'Инвентарник не указан'), node('p', [alert.company, alert.site].filter(Boolean).join(' · ')));
-      if (alert.inventory) place.append(node('span', 'Инв. № ' + alert.inventory, 'meta'));
-      const when = node('div', date(alert.detectedAt), 'when');
-      const button = node('button', 'Открыть проверку', 'secondary compact');
-      button.type = 'button';
-      button.addEventListener('click', () => selectDevice({ id: alert.deviceId, serial: alert.serial, inventory: alert.inventory,
-        company: alert.company, site: alert.site }, alert.runId));
-      row.append(issue, place, when, button); container.append(row);
+    for (const computer of result.items || []) {
+      const card = node('article', undefined, 'monitor-card clickable');
+      card.tabIndex = 0;
+      const openComputer = () => selectDevice({ id: computer.deviceId, serial: computer.serial,
+        inventory: computer.inventory, company: computer.company, site: computer.site }, computer.latestRunId);
+      card.addEventListener('click', event => {
+        if (!event.target.closest('button,a,details,summary')) openComputer();
+      });
+      card.addEventListener('keydown', event => {
+        if ((event.key === 'Enter' || event.key === ' ') && event.target === card) { event.preventDefault(); openComputer(); }
+      });
+      const header = node('div', undefined, 'monitor-card-header');
+      const identity = node('div');
+      identity.append(node('strong', computer.inventory ? 'Инв. № ' + computer.inventory : 'Инвентарный номер не указан'));
+      identity.append(node('span', [computer.company, computer.site].filter(Boolean).join(' · ') || 'Компания и объект не указаны', 'monitor-card-place'));
+      identity.append(node('span', computer.computer || computer.serial || '', 'meta'));
+      header.append(identity, node('span', date(computer.latestDetectedAt), 'when'));
+      card.append(header);
+      const errors = node('div', undefined, 'monitor-card-errors');
+      for (const issue of list(computer.issues)) {
+        const row = node('div', undefined, 'monitor-card-issue ' + (Number(issue.severity) === 1 ? 'critical' : 'warning'));
+        const description = node('div', undefined, 'monitor-card-description');
+        description.append(node('strong', issue.title || 'Проблема'));
+        description.append(node('span', [issue.category === 'event' ? 'Журнал Windows' : 'Проверка', date(issue.detectedAt)].join(' · '), 'meta'));
+        description.append(node('p', issue.detail || 'Подробности не переданы.'));
+        row.append(description);
+        if (String($('monitor-state').value) === 'open') {
+          const actions = node('div', undefined, 'monitor-issue-actions');
+          const resolve = node('button', '✓', 'issue-action resolve');
+          resolve.type = 'button'; resolve.title = 'Отметить причину решённой'; resolve.setAttribute('aria-label', resolve.title);
+          resolve.addEventListener('click', event => { event.stopPropagation(); updateMonitoringIssue(issue.id, 'resolve'); });
+          const ignore = node('button', '×', 'issue-action ignore');
+          ignore.type = 'button'; ignore.title = 'Игнорировать эту причину на данном ПК'; ignore.setAttribute('aria-label', ignore.title);
+          ignore.addEventListener('click', event => { event.stopPropagation(); updateMonitoringIssue(issue.id, 'ignore', computer); });
+          actions.append(resolve, ignore); row.append(actions);
+        }
+        errors.append(row);
+      }
+      card.append(errors);
+      const footer = node('div', undefined, 'monitor-card-footer');
+      footer.append(node('span', `${list(computer.issues).length} ошибок и предупреждений`));
+      footer.append(node('span', 'Открыть карточку ПК ›'));
+      card.append(footer);
+      container.append(card);
     }
     $('monitor-empty').classList.toggle('hidden', !!result.items?.length);
     $('monitor-page').textContent = 'Страница ' + (state.monitorPage + 1);
     $('monitor-prev').disabled = state.monitorPage === 0;
     $('monitor-next').disabled = !result.hasMore;
-    status('monitor-status', '');
+    status('monitor-status', result.items?.length ? `Компьютеров: ${result.items.length}` : '');
   } catch (error) { if (requestId === state.monitorRequest) status('monitor-status', error.message, 'error'); }
+}
+
+async function updateMonitoringIssue(id, action, computer) {
+  if (action === 'ignore') {
+    const identity = computer.inventory ? `Инв. № ${computer.inventory}` : computer.computer || 'этого ПК';
+    if (!confirm(`Игнорировать эту причину для ${identity}? Новые совпадающие события с этого ПК больше не будут показываться в мониторинге.`)) return;
+  }
+  const button = document.activeElement;
+  if (button instanceof HTMLButtonElement) button.disabled = true;
+  try {
+    await api(`/api/admin/monitoring/${id}/${action}`, { method: 'POST' });
+    await loadMonitoring();
+    await loadOverview();
+  } catch (error) {
+    if (button instanceof HTMLButtonElement) button.disabled = false;
+    status('monitor-status', error.message, 'error');
+  }
 }
 
 const ticketStates = { queued: 'В очереди', sending: 'Отправляется', created: 'Отправлена в Okdesk',
@@ -742,6 +953,10 @@ $('process-policy-form').addEventListener('submit', async event => {
   finally { if (button) button.disabled = false; }
 });
 $('ticket-dialog-close').addEventListener('click', () => $('ticket-dialog').close());
+$('telemetry-close').addEventListener('click', () => $('telemetry-dialog').close());
+$('telemetry-dialog').addEventListener('click', event => {
+  if (event.target === $('telemetry-dialog')) $('telemetry-dialog').close();
+});
 $('ticket-complete').addEventListener('click', () => ticketAction('completed'));
 $('ticket-cancel').addEventListener('click', () => ticketAction('cancelled'));
 $('ticket-reply-form').addEventListener('submit', async event => {
@@ -793,7 +1008,7 @@ $('device-company').addEventListener('change', () => { fillSites('device', true)
 $('device-site').addEventListener('change', () => { state.devicePage = 0; clearDeviceSelection(); refreshDeviceLists(); });
 $('device-prev').addEventListener('click', () => { state.devicePage--; loadDevices(); });
 $('device-next').addEventListener('click', () => { state.devicePage++; loadDevices(); });
-for (const id of ['monitor-days', 'monitor-category', 'monitor-site', 'monitor-severity']) $(id).addEventListener('change', () => { state.monitorPage = 0; loadMonitoring(); });
+for (const id of ['monitor-days', 'monitor-category', 'monitor-site', 'monitor-severity', 'monitor-state']) $(id).addEventListener('change', () => { state.monitorPage = 0; loadMonitoring(); });
 $('monitor-company').addEventListener('change', () => { fillSites('monitor', true); state.monitorPage = 0; loadMonitoring(); });
 $('monitor-prev').addEventListener('click', () => { state.monitorPage--; loadMonitoring(); });
 $('monitor-next').addEventListener('click', () => { state.monitorPage++; loadMonitoring(); });

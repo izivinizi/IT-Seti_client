@@ -7,7 +7,7 @@
   <link rel="icon" href="/favicon.ico" sizes="any">
   <title>ИТ-Сети · Сервер</title>
   <script src="/theme.js?v=1"></script>
-  <link rel="stylesheet" href="/app.css?v=10">
+  <link rel="stylesheet" href="/app.css?v=11">
   <link rel="stylesheet" href="/package-admin.css?v=1">
   <script src="/app.js?v=12" defer></script>
 </head>
@@ -70,7 +70,7 @@
           <div id="monitor-connections-empty" class="empty hidden">Новых компьютеров за выбранный период нет.</div>
         </section>
         <section id="view-application-errors" class="view" aria-labelledby="application-errors-title">
-          <div class="page-heading"><div><h1 id="application-errors-title">Ошибки приложения</h1><p>Журнал, отправленный клиентскими компьютерами</p></div><button id="refresh-application-errors" type="button" class="secondary">Обновить</button></div>
+          <div class="page-heading"><div><h1 id="application-errors-title">Ошибки приложения</h1><p>Ошибки собраны по компьютерам; нажмите карточку, чтобы открыть его проверку.</p></div><button id="refresh-application-errors" type="button" class="secondary">Обновить</button></div>
           <div class="filterbar">
             <label><span>Период</span><select id="app-errors-days" class="field"><option value="1">24 часа</option><option value="7" selected>7 дней</option><option value="30">30 дней</option><option value="90">90 дней</option></select></label>
             <label><span>Компания</span><select id="app-errors-company" class="field"><option value="">Все компании</option></select></label>
@@ -82,7 +82,7 @@
           <div class="pager"><button id="app-errors-prev" type="button" class="secondary compact">Назад</button><span id="app-errors-page">Страница 1</span><button id="app-errors-next" type="button" class="secondary compact">Далее</button></div>
         </section>
         <section id="view-monitoring" class="view" aria-labelledby="monitoring-title">
-          <div class="page-heading"><div><h1 id="monitoring-title">Мониторинг</h1><p>Проблемы, появившиеся после предыдущей проверки ПК</p></div><button id="refresh-monitoring" type="button" class="secondary">Обновить</button></div>
+          <div class="page-heading"><div><h1 id="monitoring-title">Мониторинг</h1><p>Проблемы по компьютерам; действия применяются к конкретной причине на этом ПК.</p></div><button id="refresh-monitoring" type="button" class="secondary">Обновить</button></div>
           <div class="monitor-summary"><strong id="monitor-total">—</strong><span>новых событий за 7 дней по всем ПК</span></div>
           <div class="filterbar monitoring-filters">
             <label><span>Важность</span><select id="monitor-severity" class="field"><option value="1" selected>Только критические</option><option value="2">Предупреждения</option><option value="0">Все проблемы</option></select></label>
@@ -90,9 +90,9 @@
             <label><span>Тип</span><select id="monitor-category" class="field"><option value="">Все</option><option value="event">Ошибки журнала</option><option value="finding">Замечания проверки</option></select></label>
             <label><span>Компания</span><select id="monitor-company" class="field"><option value="">Все компании</option></select></label>
             <label><span>Объект</span><select id="monitor-site" class="field"><option value="">Все объекты</option></select></label>
+            <label><span>Состояние</span><select id="monitor-state" class="field"><option value="open" selected>Активные</option><option value="resolved">Решённые</option></select></label>
           </div>
           <div id="monitor-status" class="status" role="status"></div>
-          <div class="monitor-head"><span>Новое событие</span><span>Инвентарный номер и объект</span><span>Обнаружено</span><span></span></div>
           <div id="monitor-list" class="monitor-list"></div>
           <div id="monitor-empty" class="empty hidden">Новых ошибок и замечаний пока нет. Первая проверка ПК служит точкой отсчёта.</div>
           <div class="pager"><button id="monitor-prev" type="button" class="secondary compact">Назад</button><span id="monitor-page">Страница 1</span><button id="monitor-next" type="button" class="secondary compact">Далее</button></div>
@@ -151,6 +151,12 @@
       <label class="public-comment"><input id="ticket-reply-public" type="checkbox" checked> Ответ виден пользователю</label>
       <div class="ticket-actions"><button type="submit" class="primary">Отправить ответ</button><button id="ticket-complete" type="button" class="secondary">Выполнить</button><button id="ticket-cancel" type="button" class="secondary">Отменить заявку</button></div>
     </form><div id="ticket-action-status" class="status" role="status"></div>
+  </dialog>
+  <dialog id="telemetry-dialog" class="ticket-dialog telemetry-dialog" aria-labelledby="telemetry-title">
+    <header><h2 id="telemetry-title">История показаний</h2><button id="telemetry-close" type="button" class="secondary compact" title="Закрыть" aria-label="Закрыть">×</button></header>
+    <p id="telemetry-subtitle" class="meta"></p>
+    <div id="telemetry-chart" class="telemetry-chart"></div>
+    <div id="telemetry-stats" class="telemetry-stats"></div>
   </dialog>
 </body>
 </html>

@@ -74,7 +74,7 @@ public sealed class ServerApplicationUpdateClient
     private static HttpClient CreateClient()
     {
         var result = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        result.DefaultRequestHeaders.UserAgent.ParseAdd("ITSeti-Maintenance/2.4.7");
+        result.DefaultRequestHeaders.UserAgent.ParseAdd("ITSeti-Maintenance/2.4.8");
         result.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         return result;
     }

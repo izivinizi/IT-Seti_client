@@ -13,7 +13,8 @@ public sealed record ApplicationErrorEntry(
     string Summary,
     string ExceptionType,
     string TechnicalDetails,
-    string Version);
+    string Version,
+    IReadOnlyList<ITSeti.Maintenance.Core.SensorHistorySample>? SensorHistory = null);
 
 public static class ApplicationErrorStore
 {
@@ -26,6 +27,7 @@ public static class ApplicationErrorStore
     public static readonly string JsonLogPath = Path.Combine(DirectoryPath, "application-errors.jsonl");
     public static readonly string TextLogPath = Path.Combine(DirectoryPath, "application-errors.log");
     public static readonly string ServerOutboxPath = Path.Combine(DirectoryPath, "server-outbox");
+    public static readonly string SensorHistoryPath = Path.Combine(DirectoryPath, "sensor-history.json");
     private static readonly string ReportMarkerPath = Path.Combine(DirectoryPath, "application-errors-report-marker.txt");
 
     public static ApplicationErrorEntry Record(string component, string operation, Exception exception, string? summary = null)
@@ -35,7 +37,8 @@ public static class ApplicationErrorStore
             Clean(component, 80), Clean(operation, 160),
             Clean(summary ?? FriendlySummary(exception), 500), exception.GetType().FullName ?? exception.GetType().Name,
             Redact(exception.ToString(), 16000),
-            Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "неизвестно");
+            Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "неизвестно",
+            ReadRecentSensorHistory(DateTimeOffset.UtcNow));
         try
         {
             lock (Gate)
@@ -96,6 +99,47 @@ public static class ApplicationErrorStore
             File.WriteAllText(ReportMarkerPath, entries.Max(entry => entry.OccurredAt).ToString("O"), new UTF8Encoding(false));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    public static void PublishSensorHistory(IReadOnlyList<ITSeti.Maintenance.Core.SensorHistorySample> samples)
+    {
+        try
+        {
+            lock (Gate)
+            {
+                Directory.CreateDirectory(DirectoryPath);
+                var temporary = SensorHistoryPath + ".tmp";
+                File.WriteAllText(temporary, JsonSerializer.Serialize(samples, JsonOptions), new UTF8Encoding(false));
+                File.Move(temporary, SensorHistoryPath, true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            System.Diagnostics.Debug.WriteLine("Sensor history cache failed: " + ex.Message);
+        }
+    }
+
+    private static IReadOnlyList<ITSeti.Maintenance.Core.SensorHistorySample>? ReadRecentSensorHistory(DateTimeOffset occurredAt)
+    {
+        if (!File.Exists(SensorHistoryPath)) return null;
+        try
+        {
+            lock (Gate)
+            {
+                var samples = JsonSerializer.Deserialize<List<ITSeti.Maintenance.Core.SensorHistorySample>>(
+                    File.ReadAllText(SensorHistoryPath, Encoding.UTF8), JsonOptions);
+                var cutoff = occurredAt.AddMinutes(-5);
+                var recent = samples?.Where(sample => sample is not null && sample.Sensors is not null &&
+                        sample.CapturedAtUtc >= cutoff && sample.CapturedAtUtc <= occurredAt.AddSeconds(2))
+                    .TakeLast(61).ToArray();
+                return recent is { Length: > 0 } ? recent : null;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            System.Diagnostics.Debug.WriteLine("Sensor history read failed: " + ex.Message);
+            return null;
+        }
     }
 
     public static string UserMessage(ApplicationErrorEntry entry) =>

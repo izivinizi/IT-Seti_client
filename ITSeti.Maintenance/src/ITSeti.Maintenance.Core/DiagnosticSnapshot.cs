@@ -32,6 +32,9 @@ public sealed record ResourceSampleSummary(int Samples, int CpuHighSamples, int 
 public sealed record HwInfoSensorReading(string Name, double Value, string Unit, string Category,
     string? Status = null, bool IsWarning = false, bool IsCritical = false,
     double? RawValue = null, string Quality = "Unverified", string? SensorId = null);
+public sealed record SensorHistoryReading(string Name, double Value, string Unit, string Category);
+public sealed record SensorHistorySample(DateTimeOffset CapturedAtUtc, double? CpuLoadPercent,
+    double? MemoryLoadPercent, IReadOnlyList<SensorHistoryReading> Sensors, DateTimeOffset? HwInfoCapturedAtUtc = null);
 public sealed partial record HwInfoSnapshot(string Source, string ToolVersion, DateTimeOffset CapturedAtUtc,
     string? CpuName, string? Motherboard, string? BiosVersion, string? MemoryType,
     IReadOnlyList<HwInfoSensorReading> Sensors,

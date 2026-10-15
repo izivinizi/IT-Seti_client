@@ -214,7 +214,7 @@ namespace ITSeti.Maintenance.Win7
             request.AllowAutoRedirect = false;
             request.Timeout = 30000;
             request.ReadWriteTimeout = 30000;
-            request.UserAgent = "ITSeti-Maintenance-Win7/2.4.7";
+            request.UserAgent = "ITSeti-Maintenance-Win7/2.4.8";
             request.Headers.Add("X-Device-Id", Convert.ToString(device["deviceId"]));
             request.Headers.Add("X-Device-Key", Convert.ToString(device["deviceKey"]));
             using (var response = (HttpWebResponse)request.GetResponse())

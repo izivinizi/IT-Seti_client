@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType><TargetFramework>net9.0-windows</TargetFramework><UseWPF>true</UseWPF><UseWindowsForms>true</UseWindowsForms>
-    <AssemblyName>ITSeti.Maintenance</AssemblyName><Version>2.4.7</Version><AssemblyVersion>2.4.7.0</AssemblyVersion><FileVersion>2.4.7.0</FileVersion>
+    <AssemblyName>ITSeti.Maintenance</AssemblyName><Version>2.4.8</Version><AssemblyVersion>2.4.8.0</AssemblyVersion><FileVersion>2.4.8.0</FileVersion>
     <ApplicationIcon>Assets\favicon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup><Using Remove="System.Windows.Forms" /><Using Remove="System.Drawing" /></ItemGroup>

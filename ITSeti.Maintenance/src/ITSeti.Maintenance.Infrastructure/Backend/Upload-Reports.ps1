@@ -188,16 +188,25 @@ function Send-ApplicationErrors($device) {
     $outbox = Join-Path $root 'Logs\server-outbox'
     if (!(Test-Path -LiteralPath $outbox -PathType Container)) { return }
     for ($batch = 0; $batch -lt 5; $batch++) {
-        $files = @(Get-ChildItem -LiteralPath $outbox -File -Filter '*.json' -ErrorAction Stop |
+        $candidates = @(Get-ChildItem -LiteralPath $outbox -File -Filter '*.json' -ErrorAction Stop |
             Sort-Object LastWriteTimeUtc | Select-Object -First 100)
-        if (!$files.Count) { return }
+        if (!$candidates.Count) { return }
         $entries = @()
-        foreach ($file in $files) {
+        $files = @()
+        $estimatedBytes = 2
+        $maximumBatchBytes = 1800KB
+        foreach ($file in $candidates) {
             $entry = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
             if (!$entry.id -or !$entry.occurredAt -or !$entry.component -or !$entry.operation -or !$entry.summary) {
                 throw "Повреждена запись журнала приложения: $($file.Name)"
             }
+            $entryJson = ConvertTo-Json -InputObject $entry -Depth 8 -Compress
+            $entryBytes = [Text.Encoding]::UTF8.GetByteCount($entryJson) + 1
+            if ($entries.Count -gt 0 -and $estimatedBytes + $entryBytes -gt $maximumBatchBytes) { break }
+            if ($entryBytes + 2 -gt 2MB) { throw "Запись журнала приложения слишком велика для отправки: $($file.Name)" }
             $entries += $entry
+            $files += $file
+            $estimatedBytes += $entryBytes
         }
         $json = @{ errors = [object[]]$entries } | ConvertTo-Json -Depth 8 -Compress
         $bytes = [Text.Encoding]::UTF8.GetBytes($json)

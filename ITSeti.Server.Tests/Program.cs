@@ -100,6 +100,7 @@ var sourceRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "
 var applicationErrorSchema = File.ReadAllText(Path.Combine(sourceRoot, "ITSeti.Server", "Database.cs"));
 var applicationErrorApi = File.ReadAllText(Path.Combine(sourceRoot, "ITSeti.Server", "Program.cs"));
 var applicationErrorPage = File.ReadAllText(Path.Combine(sourceRoot, "ITSeti.Server", "wwwroot", "index.html"));
+var applicationErrorUi = File.ReadAllText(Path.Combine(sourceRoot, "ITSeti.Server", "wwwroot", "app.js"));
 Check(applicationErrorSchema.Contains("CREATE TABLE IF NOT EXISTS application_errors") &&
     applicationErrorSchema.Contains("PRIMARY KEY(device_id,error_id)"),
     "application error journal has an idempotent per-device schema");
@@ -111,6 +112,24 @@ Check(applicationErrorPage.Contains("data-view=\"application-errors\"") &&
     applicationErrorPage.Contains("id=\"app-errors-list\"") &&
     applicationErrorPage.Contains("id=\"app-errors-company\""),
     "admin UI exposes a filterable client application-error journal");
+Check(applicationErrorSchema.Contains("hardware_profile jsonb") && applicationErrorSchema.Contains("sensor_history jsonb") &&
+    applicationErrorSchema.Contains("monitor_issue_ignores") && applicationErrorApi.Contains("BuildHardwareProfile(report.RootElement)") &&
+    applicationErrorApi.Contains("TryReadSensorHistory(item, out var sensorHistory)"),
+    "client reports retain hardware configuration and bounded sensor history");
+Check(applicationErrorApi.Contains("admin.MapPost(\"/monitoring/{id:long}/resolve\"") &&
+    applicationErrorApi.Contains("admin.MapPost(\"/monitoring/{id:long}/ignore\"") &&
+    applicationErrorApi.Contains("state='resolved'") && applicationErrorApi.Contains("state='ignored'") &&
+    applicationErrorUi.Contains("Игнорировать эту причину"),
+    "monitoring issues can be resolved or explicitly ignored for one computer");
+Check(applicationErrorUi.Contains("application-error-card clickable") && applicationErrorUi.Contains("monitor-card clickable") &&
+    applicationErrorUi.Contains("showTelemetryChart") && applicationErrorUi.Contains("Math.round(cpuPercent) + '%'"),
+    "server groups issues by PC, charts recent sensor history and rounds CPU load");
+var ticketRouteStart = applicationErrorApi.IndexOf("admin.MapGet(\"/tickets\"", StringComparison.Ordinal);
+var ticketRouteEnd = applicationErrorApi.IndexOf("admin.MapGet(\"/overview\"", ticketRouteStart, StringComparison.Ordinal);
+var ticketRoute = ticketRouteStart >= 0 && ticketRouteEnd > ticketRouteStart
+    ? applicationErrorApi[ticketRouteStart..ticketRouteEnd] : "";
+Check(ticketRoute.Contains("new NpgsqlCommand($\"\"\"") && ticketRoute.Contains("{DeviceDisplayFilter.SqlPredicate}"),
+    "ticket list SQL interpolates its display filter instead of sending braces to PostgreSQL");
 
 Check(PackageVersionDetector.TryParse("FileVersion 2.3.3.0", out var detectedVersion) && detectedVersion == new Version(2, 3, 3, 0),
     "application package versions accept EXE FileVersion metadata");
