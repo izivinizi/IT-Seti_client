@@ -42,7 +42,7 @@ public sealed class TicketDispatchService(NpgsqlDataSource database, IOkdeskClie
         await using (var transaction = await connection.BeginTransactionAsync(cancellationToken))
         {
             await using var claim = new NpgsqlCommand("""
-                SELECT request_id,company_id,service_object_id,title,description,service_code
+                SELECT request_id,company_id,service_object_id,title,description,service_code,equipment_ids
                 FROM ticket_requests WHERE state='queued' ORDER BY created_at,request_id
                 LIMIT 1 FOR UPDATE SKIP LOCKED
                 """, connection, transaction);
@@ -51,6 +51,7 @@ public sealed class TicketDispatchService(NpgsqlDataSource database, IOkdeskClie
             requestId = reader.GetGuid(0);
             issue = TicketServices.Build(reader.GetString(3), reader.GetString(4), reader.GetString(5),
                 reader.GetInt64(1), reader.IsDBNull(2) ? null : reader.GetInt64(2));
+            issue = issue with { EquipmentIds = reader.GetFieldValue<long[]>(6) };
             await reader.DisposeAsync();
             await using var mark = new NpgsqlCommand("UPDATE ticket_requests SET state='sending',updated_at=now() WHERE request_id=@id", connection, transaction);
             mark.Parameters.AddWithValue("id", requestId);

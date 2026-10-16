@@ -6,6 +6,12 @@ using System.Security.Cryptography;
 using System.Text;
 using ITSeti.Maintenance.Core;
 
+if (args.Contains("--feedback-database"))
+{
+    await FeedbackDatabaseChecks.RunAsync();
+    return;
+}
+
 if (args.Contains("--monitoring-performance"))
 {
     MonitoringPerformanceContract.Run();
@@ -100,6 +106,7 @@ var sourceRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "
 var applicationErrorSchema = File.ReadAllText(Path.Combine(sourceRoot, "ITSeti.Server", "Database.cs"));
 var applicationErrorApi = File.ReadAllText(Path.Combine(sourceRoot, "ITSeti.Server", "Program.cs"));
 var applicationErrorPage = File.ReadAllText(Path.Combine(sourceRoot, "ITSeti.Server", "wwwroot", "index.html"));
+var applicationErrorUi = File.ReadAllText(Path.Combine(sourceRoot, "ITSeti.Server", "wwwroot", "app.js"));
 Check(applicationErrorSchema.Contains("CREATE TABLE IF NOT EXISTS application_errors") &&
     applicationErrorSchema.Contains("PRIMARY KEY(device_id,error_id)"),
     "application error journal has an idempotent per-device schema");
@@ -111,6 +118,24 @@ Check(applicationErrorPage.Contains("data-view=\"application-errors\"") &&
     applicationErrorPage.Contains("id=\"app-errors-list\"") &&
     applicationErrorPage.Contains("id=\"app-errors-company\""),
     "admin UI exposes a filterable client application-error journal");
+Check(applicationErrorSchema.Contains("hardware_profile jsonb") && applicationErrorSchema.Contains("sensor_history jsonb") &&
+    applicationErrorSchema.Contains("monitor_issue_ignores") && applicationErrorApi.Contains("BuildHardwareProfile(report.RootElement)") &&
+    applicationErrorApi.Contains("TryReadSensorHistory(item, out var sensorHistory)"),
+    "client reports retain hardware configuration and bounded sensor history");
+Check(applicationErrorApi.Contains("admin.MapPost(\"/monitoring/{id:long}/resolve\"") &&
+    applicationErrorApi.Contains("admin.MapPost(\"/monitoring/{id:long}/ignore\"") &&
+    applicationErrorApi.Contains("state='resolved'") && applicationErrorApi.Contains("state='ignored'") &&
+    applicationErrorUi.Contains("Игнорировать эту причину"),
+    "monitoring issues can be resolved or explicitly ignored for one computer");
+Check(applicationErrorUi.Contains("application-error-card clickable") && applicationErrorUi.Contains("monitor-card clickable") &&
+    applicationErrorUi.Contains("showTelemetryChart") && applicationErrorUi.Contains("Math.round(cpuPercent) + '%'"),
+    "server groups issues by PC, charts recent sensor history and rounds CPU load");
+var ticketRouteStart = applicationErrorApi.IndexOf("admin.MapGet(\"/tickets\"", StringComparison.Ordinal);
+var ticketRouteEnd = applicationErrorApi.IndexOf("admin.MapGet(\"/overview\"", ticketRouteStart, StringComparison.Ordinal);
+var ticketRoute = ticketRouteStart >= 0 && ticketRouteEnd > ticketRouteStart
+    ? applicationErrorApi[ticketRouteStart..ticketRouteEnd] : "";
+Check(ticketRoute.Contains("new NpgsqlCommand($\"\"\"") && ticketRoute.Contains("{DeviceDisplayFilter.SqlPredicate}"),
+    "ticket list SQL interpolates its display filter instead of sending braces to PostgreSQL");
 
 Check(PackageVersionDetector.TryParse("FileVersion 2.3.3.0", out var detectedVersion) && detectedVersion == new Version(2, 3, 3, 0),
     "application package versions accept EXE FileVersion metadata");
@@ -183,11 +208,12 @@ using (var web = new OkdeskWebClient(new ConfigurationBuilder().AddInMemoryColle
     ["OkdeskLogin"]="fixture@example.test",["OkdeskPassword"]="fixture",["OkdeskWebTicketDeliveryEnabled"]="true"
 }).Build(), new HttpClient(webFixture)))
 {
-    Check(await web.CreateIssueAsync(TicketServices.Build("Fixture", "first\r\nsecond\n<third>", "525", 123, 456), CancellationToken.None) == 731,
+    Check(await web.CreateIssueAsync(TicketServices.Build("Fixture", "first\r\nsecond\n<third>", "525", 123, 456) with { EquipmentIds = [501] }, CancellationToken.None) == 731,
         "web transport creates a ticket after isolated authentication");
     Check(webFixture.Issue.GetProperty("company_id").GetInt64() == 123 && webFixture.Issue.GetProperty("maintenance_entity_id").GetInt64() == 456 &&
         webFixture.Issue.GetProperty("group_id").GetInt64() == 99 && webFixture.Issue.GetProperty("description").GetString() == "first<br />second<br />&lt;third&gt;",
         "web payload preserves assignment, service defaults, multiline text and HTML encoding");
+    Check(webFixture.Issue.GetProperty("equipment_ids")[0].GetInt64() == 501, "web ticket includes synchronized equipment");
     Check(await web.AddCommentAsync(731, "first\r\nsecond & <third>", [], CancellationToken.None) == 42 && webFixture.PublicReply &&
         webFixture.CommentContent == "first<br />second &amp; &lt;third&gt;",
         "web comment preserves multiline text and confirms public delivery");
@@ -389,7 +415,10 @@ Check(Monitoring.NewIssues(repeated, first).Count == 0, "changing readings and r
 
 var oldReadings = Report("""{"Notes":["Наработка после последнего запуска: 61 ч.","C:\\ свободно 8,1 ГБ"]}""");
 var newReadings = Report("""{"Notes":["Наработка после последнего запуска: 63 ч.","C:\\ свободно 4,2 ГБ"]}""");
-Check(Monitoring.NewIssues(newReadings, oldReadings).Count == 1, "warning escalating to critical generates an alert");
+Check(Monitoring.NewIssues(newReadings, oldReadings).Count == 0, "low disk space stays in reports and never enters monitoring");
+var legacyResource = Report("""{"KindLabel":"Постоянный мониторинг","DiagnosticIssues":[{"Title":"Критическая загрузка CPU","Detail":"100%","Severity":"Critical"},{"Title":"Критическая загрузка памяти","Detail":"99%","Severity":"Critical"}]}""");
+Check(Monitoring.NewIssues(legacyResource, null).Count == 0 && Monitoring.CurrentIssues(legacyResource).All(issue => issue.Severity == 2),
+    "old clients cannot promote CPU or memory pressure to critical monitoring alerts");
 
 var newError = Report("""
     {"Notes":["CPU: температура 80 °C достигла порога 75 °C.","ОЗУ: менее 500 МБ доступно и активная подкачка"],
@@ -417,6 +446,14 @@ var win7Old = Report("""{"Findings":[],"Events":[{"Log":"Application","Source":"
 var win7New = Report("""{"Findings":[],"Events":[{"Log":"Application","Source":"App","Id":101,"Level":1,"Message":"Error"}]}""");
 Check(Monitoring.NewIssues(win7New, win7Old).Single().Title == "App #101", "Windows 7 event format is supported");
 var declared = Report("""{"DiagnosticIssues":[{"Title":"Критическая проблема","Detail":"Диск неисправен","Severity":"Critical"},{"Title":"Предупреждение","Detail":"Мало памяти","Severity":"Warning"}],"Notes":["Пароль уже бессрочный"]}""");
+Check(Monitoring.AlertsForReport(declared, null).Single().Severity == 1,
+    "first report critical findings enter monitoring without waiting for a change");
+Check(Monitoring.AlertsForReport(declared, declared).Single().Severity == 1,
+    "repeated critical findings refresh monitoring instead of disappearing behind the baseline");
+Check(Monitoring.AlertsForReport(win7New, null).Count == 0,
+    "historical Windows events still establish a baseline before monitoring");
+Check(Monitoring.AlertsForReport(legacyResource, legacyResource).Count == 0,
+    "repeated resource pressure never enters monitoring");
 Check(Monitoring.CurrentIssues(declared).Count == 2 && Monitoring.NewIssues(declared, quick).Single().Severity == 1,
     "client warnings remain in results but only client critical issues become alerts");
 Check(Monitoring.CurrentIssues(Report("""{"Notes":["Пароль уже бессрочный","Без доступа к исполняемому файлу процессов: 13","Автоматическая установка обновлений отключена."]}""")).Count == 0,
@@ -490,10 +527,16 @@ var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<str
     ["OkdeskApiToken"] = "test-token", ["OkdeskBaseUrl"] = "https://it-seti.okdesk.ru"
 }).Build();
 var client = new OkdeskApiClient(config, new HttpClient(handler));
+ticket = ticket with { EquipmentIds = [501, 502] };
 Check(await client.CreateIssueAsync(ticket, CancellationToken.None) == 731, "Okdesk issue ID is read");
 Check(handler.Path == "/api/v1/issues/" && handler.Query.Contains("api_token=test-token") &&
     handler.Body.Contains("\"company_id\":12") && handler.Body.Contains("\"service_type\":\"525\"") &&
     !handler.Body.Contains("maintenance_entity_id"), "Okdesk API request has the expected fields");
+Check(JsonDocument.Parse(handler.Body).RootElement.GetProperty("issue").GetProperty("equipment_ids").EnumerateArray().Select(x => x.GetInt64()).SequenceEqual([501L,502L]),
+    "JSON API associates equipment with the ticket");
+await client.CreateIssueAsync(ticket, CancellationToken.None, [new TicketAttachment(Guid.NewGuid(), "fixture.txt", "text/plain", [1,2,3])]);
+Check(handler.Body.Contains("issue[equipment_ids][]") && handler.Body.Contains("501") && handler.Body.Contains("502"),
+    "multipart API preserves equipment when a ticket has files");
 
 sealed class TicketApiHandler : HttpMessageHandler
 {

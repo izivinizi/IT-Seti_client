@@ -649,6 +649,8 @@ app.MapPost("/api/v1/tickets", async (HttpRequest request, CreateTicketRequest b
     string? computerInfo;
     try { computerInfo = TicketServices.FormatComputerInfo(body.ComputerInfo); }
     catch (ArgumentException) { return Results.BadRequest(new { error = "Данные компьютера превышают допустимый размер." }); }
+    var equipmentIds = computerInfo is null ? [] : await TicketEquipmentResolver.ResolveAsync(
+        connection, deviceId, companyId, request.HttpContext.RequestAborted);
     IReadOnlyList<TicketAttachment> files;
     try { files = TicketAttachments.Decode(body.Attachments); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
@@ -660,8 +662,8 @@ app.MapPost("/api/v1/tickets", async (HttpRequest request, CreateTicketRequest b
     await using var transaction = await connection.BeginTransactionAsync();
     int inserted;
     await using (var reserve = new NpgsqlCommand("""
-        INSERT INTO ticket_requests(request_id,device_id,company_id,service_object_id,title,description,service_code,payload_hash,state)
-        SELECT @request,@device,@company,@site,@title,@description,@service,@hash,'queued'
+        INSERT INTO ticket_requests(request_id,device_id,company_id,service_object_id,title,description,service_code,payload_hash,state,equipment_ids)
+        SELECT @request,@device,@company,@site,@title,@description,@service,@hash,'queued',@equipment
         WHERE EXISTS(SELECT 1 FROM devices WHERE id=@device AND NOT tickets_blocked)
         ON CONFLICT(request_id) DO NOTHING
         """, connection, transaction))
@@ -674,6 +676,7 @@ app.MapPost("/api/v1/tickets", async (HttpRequest request, CreateTicketRequest b
         reserve.Parameters.AddWithValue("description", issue.Description);
         reserve.Parameters.AddWithValue("service", body.ServiceCode!);
         reserve.Parameters.AddWithValue("hash", payloadHash);
+        reserve.Parameters.Add("equipment", NpgsqlDbType.Array | NpgsqlDbType.Bigint).Value = equipmentIds;
         inserted = await reserve.ExecuteNonQueryAsync();
     }
     if (inserted == 0)
@@ -855,6 +858,7 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
     var applicationErrorCount = applicationErrors is { ValueKind: JsonValueKind.Array }
         ? applicationErrors.Value.GetArrayLength() : 0;
     var kind = JsonRead.String(report.RootElement, "KindLabel", "Kind", "kind") ?? "Проверка";
+    var hardwareProfile = BuildHardwareProfile(report.RootElement);
     var summary = JsonSerializer.Serialize(new
     {
         computerName = machine, os, version, kind, startedAt = started,
@@ -885,10 +889,9 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
         await reader.ReadAsync();
         using var previousReport = reader.IsDBNull(0) ? null : JsonDocument.Parse(reader.GetString(0));
         using var previousEvents = reader.IsDBNull(1) ? null : JsonDocument.Parse(reader.GetString(1));
-        // The report keeps warnings for the detailed PC view. The monitoring feed
-        // is intentionally reserved for newly detected critical issues.
-        newIssues = Monitoring.NewIssues(report.RootElement, previousReport?.RootElement, previousEvents?.RootElement,
-            includeWarnings: false, currentIssues: reportIssues);
+        // Repeated critical findings refresh their grouped monitoring entry as well.
+        newIssues = Monitoring.AlertsForReport(report.RootElement, previousReport?.RootElement, previousEvents?.RootElement,
+            currentIssues: reportIssues);
     }
     var currentRms = JsonRead.String(report.RootElement, "RmsId", "rmsId");
     if (!string.IsNullOrWhiteSpace(currentRms))
@@ -963,6 +966,8 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
     await using (var update = new NpgsqlCommand("""
         UPDATE devices SET computer_name=@name, os_name=@os, os_version=@version,
             inventory_number=CASE WHEN @inventory IS NULL THEN inventory_number ELSE @inventory END,
+            hardware_profile=CASE WHEN @profile IS NULL THEN hardware_profile ELSE COALESCE(hardware_profile,'{}'::jsonb) || @profile::jsonb END,
+            hardware_profile_updated_at=CASE WHEN @profile IS NULL THEN hardware_profile_updated_at ELSE @started END,
             last_ip=COALESCE(@ip::inet,last_ip),last_seen_at=now()
         WHERE id=@id
         """, connection, transaction))
@@ -970,6 +975,8 @@ app.MapPost("/api/v1/check-runs", async (HttpRequest request, JsonDocument repor
         update.Parameters.AddWithValue("name", machine);
         update.Parameters.AddWithValue("os", (object?)os ?? DBNull.Value);
         update.Parameters.AddWithValue("version", (object?)version ?? DBNull.Value);
+        update.Parameters.Add("profile", NpgsqlDbType.Jsonb).Value = (object?)hardwareProfile ?? DBNull.Value;
+        update.Parameters.AddWithValue("started", started);
         update.Parameters.Add("inventory", NpgsqlDbType.Text).Value = inventory is { Length: 4 } ? inventory : DBNull.Value;
         update.Parameters.AddWithValue("id", deviceId);
         update.Parameters.Add("ip", NpgsqlDbType.Text).Value =
@@ -989,7 +996,7 @@ app.MapPost("/api/v1/application-errors", async (HttpRequest request, NpgsqlData
     var errors = JsonRead.Property(payload.RootElement, "errors");
     if (errors is not { ValueKind: JsonValueKind.Array } || errors.Value.GetArrayLength() is < 1 or > 100)
         return Results.BadRequest(new { error = "Ожидается от 1 до 100 записей журнала." });
-    var parsed = new List<(Guid Id, DateTimeOffset OccurredAt, string Component, string Operation, string Summary, string ExceptionType, string Details, string Version)>();
+    var parsed = new List<(Guid Id, DateTimeOffset OccurredAt, string Component, string Operation, string Summary, string ExceptionType, string Details, string Version, string? SensorHistory)>();
     foreach (var item in errors.Value.EnumerateArray())
     {
         var id = JsonRead.Guid(item, "id");
@@ -1000,6 +1007,8 @@ app.MapPost("/api/v1/application-errors", async (HttpRequest request, NpgsqlData
         var exceptionType = JsonRead.String(item, "exceptionType")?.Trim() ?? "";
         var details = JsonRead.String(item, "technicalDetails") ?? "";
         var version = JsonRead.String(item, "version")?.Trim() ?? "";
+        if (!TryReadSensorHistory(item, out var sensorHistory))
+            return Results.BadRequest(new { error = "История датчиков повреждена или превышает допустимый размер." });
         if (id is null || occurred is null || occurred > DateTimeOffset.UtcNow.AddHours(1) ||
             string.IsNullOrWhiteSpace(component) || component.Length > 80 ||
             string.IsNullOrWhiteSpace(operation) || operation.Length > 160 ||
@@ -1009,7 +1018,7 @@ app.MapPost("/api/v1/application-errors", async (HttpRequest request, NpgsqlData
         details = Regex.Replace(details, @"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+", "Bearer <скрыто>", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
         details = Regex.Replace(details, "(?i)(password|пароль|authorization|device[-_ ]?key|token)([\\\"']?\\s*[:=]\\s*)(?:\\\"[^\\\"]*\\\"|'[^']*'|[^\\s,;]+)", "$1$2<скрыто>", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
         details = Regex.Replace(details, @"(?i)(https?://)[^/@\s:]+:[^/@\s]+@", "$1<скрыто>@", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
-        parsed.Add((id.Value, occurred.Value.ToUniversalTime(), component, operation, summary, exceptionType, details, version));
+        parsed.Add((id.Value, occurred.Value.ToUniversalTime(), component, operation, summary, exceptionType, details, version, sensorHistory));
     }
 
     var deviceId = Guid.Parse(request.Headers[DeviceKeys.IdHeader].ToString());
@@ -1019,8 +1028,8 @@ app.MapPost("/api/v1/application-errors", async (HttpRequest request, NpgsqlData
     foreach (var entry in parsed)
     {
         await using var command = new NpgsqlCommand("""
-            INSERT INTO application_errors(device_id,error_id,occurred_at,component,operation,summary,exception_type,technical_details,app_version)
-            VALUES(@device,@id,@occurred,@component,@operation,@summary,@exception,@details,@version)
+            INSERT INTO application_errors(device_id,error_id,occurred_at,component,operation,summary,exception_type,technical_details,app_version,sensor_history)
+            VALUES(@device,@id,@occurred,@component,@operation,@summary,@exception,@details,@version,@history::jsonb)
             ON CONFLICT(device_id,error_id) DO NOTHING
             """, connection, transaction);
         command.Parameters.AddWithValue("device", deviceId);
@@ -1032,6 +1041,7 @@ app.MapPost("/api/v1/application-errors", async (HttpRequest request, NpgsqlData
         command.Parameters.AddWithValue("exception", entry.ExceptionType);
         command.Parameters.AddWithValue("details", entry.Details);
         command.Parameters.AddWithValue("version", entry.Version);
+        command.Parameters.Add("history", NpgsqlDbType.Jsonb).Value = (object?)entry.SensorHistory ?? DBNull.Value;
         inserted += await command.ExecuteNonQueryAsync(request.HttpContext.RequestAborted);
     }
     await using (var touch = new NpgsqlCommand("UPDATE devices SET last_seen_at=now(),last_ip=COALESCE(@ip::inet,last_ip) WHERE id=@id", connection, transaction))
@@ -1136,7 +1146,7 @@ admin.MapGet("/tickets", async (NpgsqlDataSource db, string? status, long? compa
         return Results.BadRequest(new { error = "Неизвестный статус заявки." });
     var offset = Math.Clamp(page ?? 0, 0, 10000) * 50;
     await using var connection = await db.OpenConnectionAsync();
-    await using var command = new NpgsqlCommand("""
+    await using var command = new NpgsqlCommand($"""
         SELECT t.request_id,t.state,t.title,t.description,t.service_code,t.okdesk_issue_id,t.last_error,
                t.created_at,t.updated_at,d.id,d.serial_number,d.inventory_number,c.name,s.name,t.workflow_state,
                (SELECT a.state FROM ticket_actions a WHERE a.request_id=t.request_id ORDER BY a.created_at DESC,a.id DESC LIMIT 1),
@@ -1177,7 +1187,7 @@ admin.MapGet("/overview", async (NpgsqlDataSource db) =>
                (SELECT count(*) FROM check_runs r JOIN devices d ON d.id=r.device_id WHERE {DeviceDisplayFilter.SqlPredicate} AND NOT r.is_test AND r.started_at > now()-interval '24 hours' AND r.started_at<=now()),
                (SELECT count(*) FROM companies WHERE active),
                (SELECT count(*) FROM service_objects WHERE active),
-               (SELECT count(*) FROM monitor_alerts a JOIN devices d ON d.id=a.device_id WHERE {DeviceDisplayFilter.SqlPredicate} AND a.visible AND a.severity=1 AND a.detected_at > now()-interval '7 days')
+               (SELECT count(DISTINCT (a.device_id,a.category,a.identity)) FROM monitor_alerts a JOIN devices d ON d.id=a.device_id WHERE {DeviceDisplayFilter.SqlPredicate} AND {Monitoring.AlertSqlPredicate} AND a.visible AND a.state='open' AND a.severity=1 AND a.detected_at > now()-interval '7 days')
         """, connection);
     await using var reader = await command.ExecuteReaderAsync();
     await reader.ReadAsync();
@@ -1253,7 +1263,8 @@ admin.MapGet("/devices", async (NpgsqlDataSource db, string? q, long? companyId,
                d.tickets_blocked,
                (SELECT count(*) FROM okdesk_equipment e WHERE e.normalized_inventory_number={deviceInventory}),
                (SELECT e.company_id FROM okdesk_equipment e WHERE e.normalized_inventory_number={deviceInventory} ORDER BY e.id LIMIT 1),
-               (SELECT e.service_object_id FROM okdesk_equipment e WHERE e.normalized_inventory_number={deviceInventory} ORDER BY e.id LIMIT 1)
+               (SELECT e.service_object_id FROM okdesk_equipment e WHERE e.normalized_inventory_number={deviceInventory} ORDER BY e.id LIMIT 1),
+               d.hardware_profile::text,d.hardware_profile_updated_at
         FROM devices d LEFT JOIN companies c ON c.id=d.company_id LEFT JOIN service_objects s ON s.id=d.service_object_id
         WHERE (@q IS NULL OR coalesce(d.serial_number,'') ILIKE '%'||@q||'%' OR coalesce(d.inventory_number,'') ILIKE '%'||@q||'%' OR d.id::text ILIKE '%'||@q||'%')
           AND {DeviceDisplayFilter.SqlPredicate}
@@ -1276,6 +1287,12 @@ admin.MapGet("/devices", async (NpgsqlDataSource db, string? q, long? companyId,
         var issues = report is null ? null : Monitoring.CurrentIssues(report.RootElement);
         var rmsPresent = report is not null && !string.IsNullOrWhiteSpace(JsonRead.String(report.RootElement, "RmsId", "rmsId"));
         var ocsPresent = report is not null && (JsonRead.Bool(report.RootElement, "OcsPresent", "ocsPresent") ?? false);
+        JsonElement? hardwareProfile = null;
+        if (!reader.IsDBNull(16))
+        {
+            using var profile = JsonDocument.Parse(reader.GetString(16));
+            hardwareProfile = profile.RootElement.Clone();
+        }
         rows.Add(new {
         id = reader.GetGuid(0), serial = reader.IsDBNull(1) ? null : reader.GetString(1),
         inventory = reader.IsDBNull(2) ? null : reader.GetString(2), os = reader.IsDBNull(3) ? null : reader.GetString(3),
@@ -1293,7 +1310,9 @@ admin.MapGet("/devices", async (NpgsqlDataSource db, string? q, long? companyId,
             _ when reader.IsDBNull(14) || reader.GetInt64(14) != reader.GetInt64(8) ||
                    (reader.IsDBNull(15) ? (long?)null : reader.GetInt64(15)) != (reader.IsDBNull(9) ? (long?)null : reader.GetInt64(9)) => "other_object",
             _ => "matched"
-        }
+        },
+        hardwareProfile,
+        hardwareProfileUpdatedAt = reader.IsDBNull(17) ? (DateTime?)null : reader.GetDateTime(17)
         });
     }
     return Results.Ok(new { items = rows.Take(100), hasMore = rows.Count > 100, page = offset / 100 });
@@ -1346,38 +1365,132 @@ admin.MapPost("/devices/{id:guid}/ticket-block", async (Guid id, TicketBlockRequ
     return await command.ExecuteNonQueryAsync(context.RequestAborted) == 1
         ? Results.Ok(new { id, blocked = body.Blocked }) : Results.NotFound();
 });
-admin.MapGet("/monitoring", async (NpgsqlDataSource db, int? days, long? companyId, long? siteId, string? category, int? page, int? severity) =>
+admin.MapGet("/monitoring", async (NpgsqlDataSource db, int? days, long? companyId, long? siteId,
+    string? category, int? page, int? severity, string? state, string? types) =>
 {
+    const int pageSize = 40;
     var since = DateTime.UtcNow.AddDays(-Math.Clamp(days ?? 7, 1, 90));
-    var offset = Math.Clamp(page ?? 0, 0, 10000) * 100;
+    var offset = Math.Clamp(page ?? 0, 0, 10000) * pageSize;
     if (category is not (null or "event" or "finding")) return Results.BadRequest(new { error = "Неизвестный тип события." });
     if (severity is not (null or 0 or 1 or 2)) return Results.BadRequest(new { error = "Неизвестная важность события." });
+    if (state is not (null or "open" or "resolved")) return Results.BadRequest(new { error = "Неизвестный статус ошибки." });
+    var selectedTypes = types is null ? null : types == "none" ? [] : types.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct().ToArray();
+    if (selectedTypes is not null && selectedTypes.Any(type => !MonitoringKinds.All.Contains(type)))
+        return Results.BadRequest(new { error = "Неизвестный вид проблемы." });
     await using var connection = await db.OpenConnectionAsync();
     await using var command = new NpgsqlCommand($"""
-        SELECT a.id,a.device_id,a.run_id,a.detected_at,a.category,a.title,a.detail,a.severity,
-               d.serial_number,d.inventory_number,c.name,s.name
-        FROM monitor_alerts a JOIN devices d ON d.id=a.device_id
+        WITH grouped AS (
+          SELECT a.*, count(*) OVER (PARTITION BY device_id,category,identity) AS occurrences,
+            min(detected_at) OVER (PARTITION BY device_id,category,identity) AS first_detected_at,
+            row_number() OVER (PARTITION BY device_id,category,identity ORDER BY detected_at DESC,id DESC) AS position
+          FROM monitor_alerts a
+          WHERE a.visible AND a.state=@state AND a.detected_at>=@since AND {Monitoring.AlertSqlPredicate}
+            AND (@severity=0 OR a.severity=@severity) AND (@category IS NULL OR a.category=@category)
+            AND NOT EXISTS (SELECT 1 FROM monitor_issue_ignores i WHERE i.device_id=a.device_id
+              AND i.category=a.category AND i.identity=a.identity)
+        )
+        SELECT d.id,d.serial_number,d.inventory_number,d.computer_name,c.name,s.name,max(a.detected_at),
+               jsonb_agg(jsonb_build_object('id',a.id,'runId',a.run_id,'detectedAt',a.detected_at,
+                 'category',a.category,'title',a.title,'detail',a.detail,'severity',a.severity,
+                 'occurrences',a.occurrences,'firstDetectedAt',a.first_detected_at)
+                 ORDER BY a.detected_at DESC,a.id DESC)::text
+        FROM grouped a JOIN devices d ON d.id=a.device_id
         LEFT JOIN companies c ON c.id=d.company_id LEFT JOIN service_objects s ON s.id=d.service_object_id
-        WHERE {DeviceDisplayFilter.SqlPredicate} AND a.visible AND (@severity=0 OR a.severity=@severity) AND a.detected_at>=@since AND (@company IS NULL OR d.company_id=@company)
+        WHERE {DeviceDisplayFilter.SqlPredicate} AND a.position=1 AND a.visible AND a.state=@state
+          AND NOT EXISTS (SELECT 1 FROM monitor_issue_ignores i WHERE i.device_id=a.device_id
+            AND i.category=a.category AND i.identity=a.identity)
+          AND (@severity=0 OR a.severity=@severity) AND a.detected_at>=@since AND (@company IS NULL OR d.company_id=@company)
           AND (@site IS NULL OR d.service_object_id=@site) AND (@category IS NULL OR a.category=@category)
-        ORDER BY a.detected_at DESC,a.id DESC LIMIT 101 OFFSET @offset
+          AND (@types IS NULL OR ({MonitoringKinds.Sql})=ANY(@types))
+        GROUP BY d.id,d.serial_number,d.inventory_number,c.name,s.name
+        ORDER BY max(a.detected_at) DESC,d.id LIMIT @limit OFFSET @offset
         """, connection);
     command.Parameters.AddWithValue("since", since);
     command.Parameters.AddWithValue("severity", severity ?? 1);
+    command.Parameters.AddWithValue("state", state ?? "open");
     command.Parameters.Add("company", NpgsqlDbType.Bigint).Value = (object?)companyId ?? DBNull.Value;
     command.Parameters.Add("site", NpgsqlDbType.Bigint).Value = (object?)siteId ?? DBNull.Value;
     command.Parameters.Add("category", NpgsqlDbType.Text).Value = (object?)category ?? DBNull.Value;
+    command.Parameters.Add("types", NpgsqlDbType.Array | NpgsqlDbType.Text).Value = (object?)selectedTypes ?? DBNull.Value;
+    command.Parameters.AddWithValue("limit", pageSize + 1);
     command.Parameters.AddWithValue("offset", offset);
     await using var reader = await command.ExecuteReaderAsync();
     var rows = new List<object>();
-    while (await reader.ReadAsync()) rows.Add(new
+    while (await reader.ReadAsync())
     {
-        id = reader.GetInt64(0), deviceId = reader.GetGuid(1), runId = reader.GetGuid(2), detectedAt = reader.GetDateTime(3),
-        category = reader.GetString(4), title = reader.GetString(5), detail = reader.GetString(6), severity = reader.GetInt16(7),
-        serial = reader.IsDBNull(8) ? null : reader.GetString(8), inventory = reader.IsDBNull(9) ? null : reader.GetString(9),
-        company = reader.IsDBNull(10) ? null : reader.GetString(10), site = reader.IsDBNull(11) ? null : reader.GetString(11)
-    });
-    return Results.Ok(new { items = rows.Take(100), hasMore = rows.Count > 100, page = offset / 100 });
+        using var issues = JsonDocument.Parse(reader.GetString(7));
+        var latestRunId = issues.RootElement.GetArrayLength() > 0
+            ? JsonRead.Guid(issues.RootElement[0], "runId") : null;
+        rows.Add(new
+        {
+            deviceId = reader.GetGuid(0), serial = reader.IsDBNull(1) ? null : reader.GetString(1),
+            inventory = reader.IsDBNull(2) ? null : reader.GetString(2),
+            computer = reader.IsDBNull(3) ? null : reader.GetString(3),
+            company = reader.IsDBNull(4) ? null : reader.GetString(4),
+            site = reader.IsDBNull(5) ? null : reader.GetString(5),
+            latestDetectedAt = reader.GetDateTime(6), latestRunId,
+            issues = issues.RootElement.Clone()
+        });
+    }
+    return Results.Ok(new { items = rows.Take(pageSize), hasMore = rows.Count > pageSize, page = offset / pageSize });
+});
+admin.MapPost("/monitoring/{id:long}/resolve", async (long id, HttpContext context, IAntiforgery antiforgery, NpgsqlDataSource db) =>
+{
+    if (!await SameOriginAsync(context)) return Results.BadRequest(new { error = "Недопустимый источник запроса." });
+    await antiforgery.ValidateRequestAsync(context);
+    await using var connection = await db.OpenConnectionAsync(context.RequestAborted);
+    await using var transaction = await connection.BeginTransactionAsync(context.RequestAborted);
+    Guid deviceId; string category, identity;
+    await using (var find = new NpgsqlCommand("SELECT device_id,category,identity FROM monitor_alerts WHERE id=@id AND state='open' FOR UPDATE", connection, transaction))
+    {
+        find.Parameters.AddWithValue("id", id);
+        await using var reader = await find.ExecuteReaderAsync(context.RequestAborted);
+        if (!await reader.ReadAsync()) return Results.NotFound();
+        deviceId = reader.GetGuid(0); category = reader.GetString(1); identity = reader.GetString(2);
+    }
+    await using (var resolve = new NpgsqlCommand("UPDATE monitor_alerts SET state='resolved' WHERE device_id=@device AND category=@category AND identity=@identity AND state='open'", connection, transaction))
+    {
+        resolve.Parameters.AddWithValue("device", deviceId);
+        resolve.Parameters.AddWithValue("category", category);
+        resolve.Parameters.AddWithValue("identity", identity);
+        await resolve.ExecuteNonQueryAsync(context.RequestAborted);
+    }
+    await transaction.CommitAsync(context.RequestAborted);
+    return Results.Ok(new { id, state = "resolved" });
+});
+admin.MapPost("/monitoring/{id:long}/ignore", async (long id, HttpContext context, IAntiforgery antiforgery, NpgsqlDataSource db) =>
+{
+    if (!await SameOriginAsync(context)) return Results.BadRequest(new { error = "Недопустимый источник запроса." });
+    await antiforgery.ValidateRequestAsync(context);
+    await using var connection = await db.OpenConnectionAsync(context.RequestAborted);
+    await using var transaction = await connection.BeginTransactionAsync(context.RequestAborted);
+    Guid deviceId; string category, identity;
+    await using (var find = new NpgsqlCommand("SELECT device_id,category,identity FROM monitor_alerts WHERE id=@id AND state='open' FOR UPDATE", connection, transaction))
+    {
+        find.Parameters.AddWithValue("id", id);
+        await using var reader = await find.ExecuteReaderAsync(context.RequestAborted);
+        if (!await reader.ReadAsync()) return Results.NotFound();
+        deviceId = reader.GetGuid(0); category = reader.GetString(1); identity = reader.GetString(2);
+    }
+    await using (var ignore = new NpgsqlCommand("""
+        INSERT INTO monitor_issue_ignores(device_id,category,identity) VALUES(@device,@category,@identity)
+        ON CONFLICT(device_id,category,identity) DO NOTHING
+        """, connection, transaction))
+    {
+        ignore.Parameters.AddWithValue("device", deviceId);
+        ignore.Parameters.AddWithValue("category", category);
+        ignore.Parameters.AddWithValue("identity", identity);
+        await ignore.ExecuteNonQueryAsync(context.RequestAborted);
+    }
+    await using (var hide = new NpgsqlCommand("UPDATE monitor_alerts SET state='ignored' WHERE device_id=@device AND category=@category AND identity=@identity AND state='open'", connection, transaction))
+    {
+        hide.Parameters.AddWithValue("device", deviceId);
+        hide.Parameters.AddWithValue("category", category);
+        hide.Parameters.AddWithValue("identity", identity);
+        await hide.ExecuteNonQueryAsync(context.RequestAborted);
+    }
+    await transaction.CommitAsync(context.RequestAborted);
+    return Results.Ok(new { id, state = "ignored" });
 });
 admin.MapGet("/new-connections", async (NpgsqlDataSource db, int? days, long? companyId, long? siteId) =>
 {
@@ -1412,38 +1525,66 @@ admin.MapGet("/new-connections", async (NpgsqlDataSource db, int? days, long? co
 admin.MapGet("/application-errors", async (NpgsqlDataSource db, int? days, long? companyId, long? siteId, int? page) =>
 {
     var since = DateTime.UtcNow.AddDays(-Math.Clamp(days ?? 7, 1, 90));
-    var offset = Math.Clamp(page ?? 0, 0, 10000) * 100;
+    const int pageSize = 20;
+    var offset = Math.Clamp(page ?? 0, 0, 10000) * pageSize;
     await using var connection = await db.OpenConnectionAsync();
     await using var command = new NpgsqlCommand($"""
-        SELECT e.error_id,e.occurred_at,e.component,e.operation,e.summary,e.exception_type,e.technical_details,e.app_version,
-               d.id,d.computer_name,d.inventory_number,d.serial_number,c.name,s.name
-        FROM application_errors e JOIN devices d ON d.id=e.device_id
-        LEFT JOIN companies c ON c.id=d.company_id LEFT JOIN service_objects s ON s.id=d.service_object_id
-        WHERE {DeviceDisplayFilter.SqlPredicate} AND e.occurred_at>=@since
-          AND (@company IS NULL OR d.company_id=@company) AND (@site IS NULL OR d.service_object_id=@site)
-        ORDER BY e.occurred_at DESC,e.received_at DESC,e.error_id LIMIT 101 OFFSET @offset
+        WITH device_errors AS (
+          SELECT d.id,d.computer_name,d.inventory_number,d.serial_number,c.name AS company,s.name AS site,
+                 count(*) AS error_count,max(e.occurred_at) AS last_error_at
+          FROM application_errors e JOIN devices d ON d.id=e.device_id
+          LEFT JOIN companies c ON c.id=d.company_id LEFT JOIN service_objects s ON s.id=d.service_object_id
+          WHERE {DeviceDisplayFilter.SqlPredicate} AND e.occurred_at>=@since
+            AND (@company IS NULL OR d.company_id=@company) AND (@site IS NULL OR d.service_object_id=@site)
+          GROUP BY d.id,d.computer_name,d.inventory_number,d.serial_number,c.name,s.name
+        ), page AS (
+          SELECT * FROM device_errors ORDER BY last_error_at DESC,id LIMIT @limit OFFSET @offset
+        )
+        SELECT p.id,p.computer_name,p.inventory_number,p.serial_number,p.company,p.site,p.error_count,p.last_error_at,
+          coalesce((SELECT jsonb_agg(jsonb_build_object(
+              'id',e.error_id,'occurredAt',e.occurred_at,'component',e.component,'operation',e.operation,
+              'summary',e.summary,'exceptionType',e.exception_type,'technicalDetails',left(e.technical_details,4000),
+              'version',e.app_version,'sensorHistory',CASE WHEN e.position=1 THEN e.sensor_history END)
+            ORDER BY e.occurred_at DESC,e.received_at DESC,e.error_id)
+            FROM (SELECT e.*,row_number() OVER(ORDER BY (sensor_history IS NOT NULL) DESC,occurred_at DESC,received_at DESC,error_id) AS position
+                  FROM application_errors e WHERE device_id=p.id AND occurred_at>=@since
+                  ORDER BY occurred_at DESC,received_at DESC,error_id LIMIT 30) e), '[]'::jsonb)::text
+        FROM page p ORDER BY p.last_error_at DESC,p.id
         """, connection);
     command.Parameters.AddWithValue("since", since);
     command.Parameters.Add("company", NpgsqlDbType.Bigint).Value = (object?)companyId ?? DBNull.Value;
     command.Parameters.Add("site", NpgsqlDbType.Bigint).Value = (object?)siteId ?? DBNull.Value;
+    command.Parameters.AddWithValue("limit", pageSize + 1);
     command.Parameters.AddWithValue("offset", offset);
     await using var reader = await command.ExecuteReaderAsync();
     var rows = new List<object>();
-    while (await reader.ReadAsync()) rows.Add(new
+    while (await reader.ReadAsync())
     {
-        id = reader.GetGuid(0), occurredAt = reader.GetDateTime(1), component = reader.GetString(2),
-        operation = reader.GetString(3), summary = reader.GetString(4), exceptionType = reader.GetString(5),
-        technicalDetails = reader.GetString(6), version = reader.GetString(7), deviceId = reader.GetGuid(8),
-        computer = reader.GetString(9), inventory = reader.IsDBNull(10) ? null : reader.GetString(10),
-        serial = reader.IsDBNull(11) ? null : reader.GetString(11), company = reader.IsDBNull(12) ? null : reader.GetString(12),
-        site = reader.IsDBNull(13) ? null : reader.GetString(13)
-    });
-    return Results.Ok(new { items = rows.Take(100), hasMore = rows.Count > 100, page = offset / 100 });
+        using var errors = JsonDocument.Parse(reader.GetString(8));
+        rows.Add(new
+        {
+            deviceId = reader.GetGuid(0), computer = reader.GetString(1),
+            inventory = reader.IsDBNull(2) ? null : reader.GetString(2),
+            serial = reader.IsDBNull(3) ? null : reader.GetString(3),
+            company = reader.IsDBNull(4) ? null : reader.GetString(4),
+            site = reader.IsDBNull(5) ? null : reader.GetString(5),
+            errorCount = reader.GetInt64(6), latestErrorAt = reader.GetDateTime(7),
+            hasMoreErrors = reader.GetInt64(6) > errors.RootElement.GetArrayLength(),
+            errors = errors.RootElement.Clone()
+        });
+    }
+    return Results.Ok(new { items = rows.Take(pageSize), hasMore = rows.Count > pageSize, page = offset / pageSize });
 });
 admin.MapGet("/devices/{id:guid}/runs", async (Guid id, NpgsqlDataSource db) =>
 {
     await using var connection = await db.OpenConnectionAsync();
-    await using var command = new NpgsqlCommand($"SELECT r.id,r.started_at,r.kind,r.details FROM check_runs r JOIN devices d ON d.id=r.device_id WHERE r.device_id=@id AND {DeviceDisplayFilter.SqlPredicate} ORDER BY r.started_at DESC LIMIT 100", connection);
+    await using var command = new NpgsqlCommand($"""
+        SELECT r.id,r.started_at,r.kind,r.details FROM check_runs r JOIN devices d ON d.id=r.device_id
+        WHERE r.device_id=@id AND {DeviceDisplayFilter.SqlPredicate} AND (
+          r.id IN (SELECT id FROM check_runs WHERE device_id=@id ORDER BY started_at DESC LIMIT 100)
+          OR r.id=(SELECT id FROM check_runs WHERE device_id=@id AND kind<>'Постоянный мониторинг' ORDER BY started_at DESC LIMIT 1))
+        ORDER BY r.started_at DESC
+        """, connection);
     command.Parameters.AddWithValue("id", id);
     await using var reader = await command.ExecuteReaderAsync();
     var rows = new List<object>();
@@ -1465,18 +1606,31 @@ admin.MapGet("/runs/{id:guid}", async (Guid id, NpgsqlDataSource db, ProcessPoli
     await using var connection = await db.OpenConnectionAsync();
     await using var command = new NpgsqlCommand($"""
         SELECT r.device_id,r.started_at,r.kind,r.details,
-          (SELECT p.details FROM check_runs p WHERE p.device_id=r.device_id AND p.started_at<r.started_at ORDER BY p.started_at DESC,p.received_at DESC LIMIT 1)
+          d.hardware_profile::text,d.hardware_profile_updated_at,
+          (SELECT p.details FROM check_runs p WHERE p.device_id=r.device_id AND p.started_at<r.started_at ORDER BY p.started_at DESC,p.received_at DESC LIMIT 1),
+          (SELECT p.details FROM check_runs p WHERE p.device_id=r.device_id AND p.kind<>'Постоянный мониторинг'
+             AND jsonb_typeof(p.details->'Full')='object' ORDER BY p.started_at DESC,p.received_at DESC LIMIT 1)
         FROM check_runs r JOIN devices d ON d.id=r.device_id WHERE r.id=@id AND {DeviceDisplayFilter.SqlPredicate}
         """, connection);
     command.Parameters.AddWithValue("id", id);
     await using var reader = await command.ExecuteReaderAsync();
     if (!await reader.ReadAsync()) return Results.NotFound();
     using var details = JsonDocument.Parse(reader.GetString(3));
-    using var previousDetails = reader.IsDBNull(4) ? null : JsonDocument.Parse(reader.GetString(4));
+    using var hardwareProfile = reader.IsDBNull(4) ? null : JsonDocument.Parse(reader.GetString(4));
+    using var previousDetails = reader.IsDBNull(6) ? null : JsonDocument.Parse(reader.GetString(6));
+    using var latestFull = reader.IsDBNull(7) ? null : JsonDocument.Parse(reader.GetString(7));
+    var effectiveProfile = JsonNode.Parse(latestFull is null ? "{}" : BuildHardwareProfile(latestFull.RootElement) ?? "{}")!.AsObject();
+    if (hardwareProfile is not null)
+        foreach (var item in JsonNode.Parse(hardwareProfile.RootElement.GetRawText())!.AsObject())
+            effectiveProfile[item.Key] = item.Value?.DeepClone();
     var full = JsonRead.Property(details.RootElement, "Full");
     var processes = full is { ValueKind: JsonValueKind.Object } ? JsonRead.Property(full.Value, "Processes") : JsonRead.Property(details.RootElement, "Processes");
     var unknownProcesses = processes is { ValueKind: JsonValueKind.Array } ? processes.Value.EnumerateArray().Where(p => !policy.IsAllowed(p)).Select(p => p.Clone()).ToArray() : [];
-    return Results.Ok(new { deviceId = reader.GetGuid(0), startedAt = reader.GetDateTime(1), kind = reader.GetString(2), details = details.RootElement.Clone(), unknownProcesses, issues = Monitoring.CurrentIssues(details.RootElement), previous = previousDetails?.RootElement.Clone() });
+    return Results.Ok(new { deviceId = reader.GetGuid(0), startedAt = reader.GetDateTime(1), kind = reader.GetString(2),
+        details = details.RootElement.Clone(), unknownProcesses, issues = Monitoring.CurrentIssues(details.RootElement),
+        hardwareProfile = JsonSerializer.SerializeToElement(effectiveProfile),
+        hardwareProfileUpdatedAt = reader.IsDBNull(5) ? (DateTime?)null : reader.GetDateTime(5),
+        previous = previousDetails?.RootElement.Clone() });
 });
 admin.MapGet("/catalog", async (NpgsqlDataSource db) =>
 {
@@ -1746,6 +1900,94 @@ admin.MapPost("/packages", async (HttpContext context, IAntiforgery antiforgery,
 }).RequireRateLimiting("package-upload");
 
 app.Run();
+
+static string? BuildHardwareProfile(JsonElement report)
+{
+    var full = JsonRead.Property(report, "Full", "full");
+    if (full is not { ValueKind: JsonValueKind.Object }) return null;
+    var hwInfo = JsonRead.Property(report, "HWiNFO", "HwInfo", "hwInfo");
+    var profile = new JsonObject();
+    void AddString(string key, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value) && !value.Equals("нет данных", StringComparison.OrdinalIgnoreCase))
+            profile[key] = value.Trim();
+    }
+    void AddNumber(string key, double? value)
+    {
+        if (value is { } number && double.IsFinite(number) && number >= 0)
+            profile[key] = JsonValue.Create(number);
+    }
+    void AddArray(string key, JsonElement? parent, params string[] names)
+    {
+        var value = parent is { } element ? JsonRead.Property(element, names) : null;
+        if (value is { ValueKind: JsonValueKind.Array } array && array.GetArrayLength() > 0)
+            profile[key] = JsonNode.Parse(array.GetRawText());
+    }
+
+    AddString("computerName", JsonRead.String(report, "ComputerName", "computerName"));
+    AddString("cpuModel", (full is { } fullReport ? JsonRead.String(fullReport, "CpuName", "cpuName") : null)
+        ?? (hwInfo is { } sensors ? JsonRead.String(sensors, "CpuName", "cpuName") : null));
+    AddString("gpuModel", full is { } graphicReport ? JsonRead.String(graphicReport, "GpuName", "gpuName") : null);
+    AddNumber("totalMemoryBytes", JsonRead.Number(report, "TotalMemoryBytes", "totalMemoryBytes"));
+    AddString("memoryType", (full is { } memoryReport ? JsonRead.String(memoryReport, "MemoryType", "memoryType") : null)
+        ?? (hwInfo is { } hwi ? JsonRead.String(hwi, "MemoryType", "memoryType") : null));
+    AddString("motherboard", hwInfo is { } board ? JsonRead.String(board, "Motherboard", "motherboard") : null);
+    AddString("biosVersion", hwInfo is { } bios ? JsonRead.String(bios, "BiosVersion", "biosVersion") : null);
+    AddString("windowsEdition", JsonRead.String(report, "WindowsEdition", "windowsEdition", "OsName", "osName"));
+    AddString("windowsRelease", JsonRead.String(report, "WindowsRelease", "windowsRelease", "OsVersion", "osVersion"));
+    AddNumber("windowsBuild", JsonRead.Number(report, "WindowsBuild", "windowsBuild"));
+    AddString("systemDrive", JsonRead.String(report, "SystemDrive", "systemDrive"));
+    AddArray("physicalDisks", full, "PhysicalDisks", "physicalDisks");
+    AddArray("smartDisks", full, "SmartDisks", "smartDisks");
+    AddArray("volumes", report, "Disks", "disks");
+    if (full is { } benchmarkReport && JsonRead.Property(benchmarkReport, "Benchmark") is { ValueKind: JsonValueKind.Object } benchmark &&
+        (JsonRead.Number(benchmark, "Read") is > 0 || JsonRead.Number(benchmark, "Write") is > 0))
+    {
+        profile["benchmark"] = JsonNode.Parse(benchmark.GetRawText());
+        profile["benchmarkAtUtc"] = JsonRead.Date(report, "StartedAt")?.ToString("O");
+    }
+    if (full is { } smartReport && JsonRead.Property(smartReport, "SmartDisks") is { ValueKind: JsonValueKind.Array } smart && smart.GetArrayLength() > 0)
+        profile["smartAtUtc"] = JsonRead.Date(report, "StartedAt")?.ToString("O");
+    AddArray("networkAdapters", report, "NetworkAdapters", "networkAdapters");
+    AddString("capturedAtUtc", JsonRead.Date(report, "StartedAt", "startedAt")?.ToString("O"));
+    return profile.Count >= 3 ? profile.ToJsonString() : null;
+}
+
+static bool TryReadSensorHistory(JsonElement error, out string? json)
+{
+    json = null;
+    var value = JsonRead.Property(error, "SensorHistory", "sensorHistory");
+    if (value is null || value.Value.ValueKind == JsonValueKind.Null) return true;
+    if (value.Value.ValueKind != JsonValueKind.Array || value.Value.GetArrayLength() is < 1 or > 61) return false;
+    var allowedCategories = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "CpuTemperature", "VrmTemperature", "PchTemperature", "Rail12V", "Rail5V", "Rail3V",
+        "CpuVoltage", "CpuLoad", "MemoryLoad"
+    };
+    foreach (var sample in value.Value.EnumerateArray())
+    {
+        if (sample.ValueKind != JsonValueKind.Object || JsonRead.Date(sample, "CapturedAtUtc") is null) return false;
+        foreach (var key in new[] { "CpuLoadPercent", "MemoryLoadPercent" })
+        {
+            var percent = JsonRead.Number(sample, key);
+            if (percent is { } percentValue && (!double.IsFinite(percentValue) || percentValue is < 0 or > 100)) return false;
+        }
+        var sensors = JsonRead.Property(sample, "Sensors", "sensors");
+        if (sensors is null || sensors.Value.ValueKind != JsonValueKind.Array || sensors.Value.GetArrayLength() > 24) return false;
+        foreach (var sensor in sensors.Value.EnumerateArray())
+        {
+            var name = JsonRead.String(sensor, "Name", "name");
+            var category = JsonRead.String(sensor, "Category", "category");
+            var unit = JsonRead.String(sensor, "Unit", "unit") ?? "";
+            var reading = JsonRead.Number(sensor, "Value", "value");
+            if (string.IsNullOrWhiteSpace(name) || name.Length > 160 || unit.Length > 16 ||
+                category is null || !allowedCategories.Contains(category) || reading is not { } sensorValue ||
+                !double.IsFinite(sensorValue) || Math.Abs(sensorValue) > 1000000) return false;
+        }
+    }
+    json = value.Value.GetRawText();
+    return json.Length <= 300_000;
+}
 
 static Task<bool> SameOriginAsync(HttpContext context)
 {

@@ -45,12 +45,12 @@ public static class CriticalMonitoringEvaluator
         var cpuLoadCapturedAt = snapshot.CpuPercentCapturedAtUtc ?? snapshot.StartedAt;
         if (snapshot.CpuPercent is >= HwInfoThresholds.CpuLoadCriticalPercent and <= 100 &&
             IsRecent(cpuLoadCapturedAt, snapshot.StartedAt))
-            issues.Add(new("cpu:load", "Критическая загрузка CPU",
+            issues.Add(new("cpu:load", "Высокая загрузка CPU",
                 $"Загрузка процессора держится на уровне {snapshot.CpuPercent:N0}% " +
                 $"(порог {HwInfoThresholds.CpuLoadCriticalPercent:N0}%). " +
                 HwInfoConfirmation(hwInfoIsFresh,
                     snapshot.HwInfo?.CpuLoadPercent is { } cpuLoad ? cpuLoad >= HwInfoThresholds.CpuLoadCriticalPercent : null),
-                cpuLoadCapturedAt, MonitoringIssueType.ResourceLoad));
+                cpuLoadCapturedAt, MonitoringIssueType.ResourceLoad, "Warning"));
 
         var memoryCapturedAt = snapshot.MemoryUsedPercentCapturedAtUtc ?? snapshot.StartedAt;
         if (IsRecent(memoryCapturedAt, snapshot.StartedAt) && snapshot.TotalMemoryBytes > 0 &&
@@ -58,12 +58,12 @@ public static class CriticalMonitoringEvaluator
         {
             var memoryUsedPercent = 100.0 * (snapshot.TotalMemoryBytes - snapshot.AvailableMemoryBytes) / snapshot.TotalMemoryBytes;
             if (memoryUsedPercent >= HwInfoThresholds.MemoryUsedCriticalPercent)
-                issues.Add(new("memory:load", "Критическая загрузка памяти",
+                issues.Add(new("memory:load", "Высокая загрузка памяти",
                     $"Занято {memoryUsedPercent:N0}% оперативной памяти " +
                     $"(порог {HwInfoThresholds.MemoryUsedCriticalPercent:N0}%). " +
                     HwInfoConfirmation(hwInfoIsFresh,
                         snapshot.HwInfo?.MemoryLoadPercent is { } memoryLoad ? memoryLoad >= HwInfoThresholds.MemoryUsedCriticalPercent : null),
-                    memoryCapturedAt, MonitoringIssueType.ResourceLoad));
+                    memoryCapturedAt, MonitoringIssueType.ResourceLoad, "Warning"));
         }
 
         // Shared Memory does not expose HWiNFO's coloured alarm state for general readings.
@@ -71,15 +71,17 @@ public static class CriticalMonitoringEvaluator
         // distinct frames before they become a warning in the continuous monitor.
         if (hwInfoIsFresh)
         {
-            foreach (var sensor in snapshot.HwInfo!.AlertingSensors.Where(item => item.IsCritical))
+            foreach (var sensor in snapshot.HwInfo!.AlertingSensors)
             {
                 var identity = KnownSensorIdentity(sensor.Category) ??
                     "hwinfo:critical:" + (sensor.SensorId ?? sensor.Name).ToLowerInvariant();
                 if (issues.Any(issue => issue.Identity.Equals(identity, StringComparison.OrdinalIgnoreCase))) continue;
                 var type = GetIssueType(sensor.Category);
-                var severity = type == MonitoringIssueType.OtherHwInfoCritical ? "Warning" : "Critical";
+                var severity = type is MonitoringIssueType.OtherHwInfoCritical or MonitoringIssueType.ResourceLoad || !sensor.IsCritical ? "Warning" : "Critical";
                 var title = severity == "Warning" ? "Датчик HWiNFO требует проверки" : "HWiNFO сообщает критическое состояние";
-                var detail = $"{sensor.Name}: {sensor.Status ?? "критическое показание"} ({sensor.Value:N2} {sensor.Unit}); HWiNFO сообщил аппаратный критический статус.";
+                var detail = sensor.Category == "HardwareAlarm"
+                    ? $"{sensor.Name}: {sensor.Status ?? HwInfoSensorPolicy.DescribeAlarm(sensor.Name)}. HWiNFO: аппаратный флаг активен (Yes)."
+                    : $"{sensor.Name}: {sensor.Status ?? "предупреждение датчика"} ({sensor.Value:N2} {sensor.Unit}); статус передан HWiNFO.";
                 issues.Add(new(identity, title, detail, hwInfoCapturedAt, type, severity));
             }
         }
@@ -94,10 +96,16 @@ public static class CriticalMonitoringEvaluator
                 issues.Add(new("disk:health:" + disk.Model.ToLowerInvariant(),
                     $"Накопитель {disk.Model} сообщает критическое состояние", disk.Health));
         }
-        var latency = Math.Max(snapshot.DiskReadLatencyMs ?? 0, snapshot.DiskWriteLatencyMs ?? 0);
-        if (latency >= 100)
-            issues.Add(new("disk:latency", "Критическая задержка диска",
-                $"Средняя задержка отклика диска достигла {latency:N0} мс (порог 100 мс)."));
+        foreach (var disk in snapshot.DiskLatencies ?? [])
+        {
+            var latency = Math.Max(disk.ReadMs ?? 0, disk.WriteMs ?? 0);
+            if (latency >= 100 && !double.IsInfinity(latency) && !double.IsNaN(latency))
+                issues.Add(new("disk:latency:" + disk.Disk.ToLowerInvariant(), $"Высокая задержка диска {disk.Disk}",
+                    $"Диск {disk.Disk} · чтение {disk.ReadMs:N0} мс, запись {disk.WriteMs:N0} мс (порог 100 мс в течение 30 секунд)."));
+        }
+        if (snapshot.DiskLatencies is null && Math.Max(snapshot.DiskReadLatencyMs ?? 0, snapshot.DiskWriteLatencyMs ?? 0) is var totalLatency && totalLatency >= 100)
+            issues.Add(new("disk:latency", "Высокая задержка диска — накопитель не определён",
+                $"Суммарный счётчик Windows: {totalLatency:N0} мс. Этот старый отчёт не содержит отдельных показаний накопителей."));
         return issues;
     }
 

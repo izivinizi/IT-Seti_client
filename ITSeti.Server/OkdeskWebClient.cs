@@ -241,6 +241,7 @@ public sealed class OkdeskWebClient : IOkdeskClient, IDisposable
             using var body = JsonContent.Create(new { issue = new
             {
                 title = issue.Title, description = EncodeText(issue.Description), company_id = issue.CompanyId,
+                equipment_ids = issue.EquipmentIds ?? [],
                 maintenance_entity_id = issue.MaintenanceEntityId, work_type_id = defaults.TypeId,
                 priority_id = defaults.PriorityId, group_id = group,
                 ftselect_directory_parameters = issue.CustomParameters, temp_attachments = uploaded

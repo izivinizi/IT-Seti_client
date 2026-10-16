@@ -11,7 +11,10 @@ public sealed partial record DiagnosticSnapshot(
     double? ActiveUptimeHours = null, double? DiskReadLatencyMs = null, double? DiskWriteLatencyMs = null,
     HwInfoSnapshot? HwInfo = null, List<NetworkAdapterSnapshot>? NetworkAdapters = null, string SystemDrive = "C:",
     DateTimeOffset? CpuTemperatureCapturedAtUtc = null, DateTimeOffset? CpuPercentCapturedAtUtc = null,
-    DateTimeOffset? MemoryUsedPercentCapturedAtUtc = null);
+    DateTimeOffset? MemoryUsedPercentCapturedAtUtc = null,
+    IReadOnlyList<DiskLatencyReading>? DiskLatencies = null);
+
+public sealed record DiskLatencyReading(string Disk, double? ReadMs, double? WriteMs);
 
 public sealed record PhysicalDiskDetails(string Model, string MediaType, string Health, long? PowerOnHours = null);
 public sealed record NetworkAdapterSnapshot(string Name, string Type, string Status, string LinkSpeed,
@@ -32,6 +35,9 @@ public sealed record ResourceSampleSummary(int Samples, int CpuHighSamples, int 
 public sealed record HwInfoSensorReading(string Name, double Value, string Unit, string Category,
     string? Status = null, bool IsWarning = false, bool IsCritical = false,
     double? RawValue = null, string Quality = "Unverified", string? SensorId = null);
+public sealed record SensorHistoryReading(string Name, double Value, string Unit, string Category);
+public sealed record SensorHistorySample(DateTimeOffset CapturedAtUtc, double? CpuLoadPercent,
+    double? MemoryLoadPercent, IReadOnlyList<SensorHistoryReading> Sensors, DateTimeOffset? HwInfoCapturedAtUtc = null);
 public sealed partial record HwInfoSnapshot(string Source, string ToolVersion, DateTimeOffset CapturedAtUtc,
     string? CpuName, string? Motherboard, string? BiosVersion, string? MemoryType,
     IReadOnlyList<HwInfoSensorReading> Sensors,

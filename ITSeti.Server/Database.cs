@@ -73,6 +73,8 @@ public static class Database
             ALTER TABLE devices ADD COLUMN IF NOT EXISTS support_key_hash text;
             ALTER TABLE devices ADD COLUMN IF NOT EXISTS hardware_fingerprint text;
             ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_ip inet;
+            ALTER TABLE devices ADD COLUMN IF NOT EXISTS hardware_profile jsonb;
+            ALTER TABLE devices ADD COLUMN IF NOT EXISTS hardware_profile_updated_at timestamptz;
             ALTER TABLE devices ADD COLUMN IF NOT EXISTS tickets_blocked boolean NOT NULL DEFAULT false;
             CREATE UNIQUE INDEX IF NOT EXISTS ix_devices_support_key ON devices(support_key_hash) WHERE support_key_hash IS NOT NULL;
             CREATE INDEX IF NOT EXISTS ix_devices_last_ip_seen ON devices(last_ip,last_seen_at DESC) WHERE last_ip IS NOT NULL;
@@ -112,6 +114,7 @@ public static class Database
             CREATE INDEX IF NOT EXISTS ix_ticket_messages_public_created ON ticket_messages(request_id,created_at,id)
                 WHERE is_public AND direction='engineer';
             ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS workflow_state text NOT NULL DEFAULT 'opened';
+            ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS equipment_ids bigint[] NOT NULL DEFAULT '{}';
             ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS okdesk_status_name text;
             ALTER TABLE ticket_requests ADD COLUMN IF NOT EXISTS okdesk_synced_at timestamptz;
             CREATE TABLE IF NOT EXISTS ticket_actions (
@@ -158,6 +161,7 @@ public static class Database
             );
             CREATE INDEX IF NOT EXISTS ix_application_errors_recent ON application_errors(occurred_at DESC,received_at DESC);
             CREATE INDEX IF NOT EXISTS ix_application_errors_device_recent ON application_errors(device_id,occurred_at DESC);
+            ALTER TABLE application_errors ADD COLUMN IF NOT EXISTS sensor_history jsonb;
             CREATE TABLE IF NOT EXISTS monitor_alerts (
                 id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                 device_id uuid NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
@@ -172,6 +176,15 @@ public static class Database
             );
             CREATE INDEX IF NOT EXISTS ix_monitor_alerts_recent ON monitor_alerts(detected_at DESC,id DESC);
             ALTER TABLE monitor_alerts ADD COLUMN IF NOT EXISTS visible boolean NOT NULL DEFAULT true;
+            ALTER TABLE monitor_alerts ADD COLUMN IF NOT EXISTS state text NOT NULL DEFAULT 'open';
+            CREATE INDEX IF NOT EXISTS ix_monitor_alerts_device_state_recent ON monitor_alerts(device_id,state,detected_at DESC);
+            CREATE TABLE IF NOT EXISTS monitor_issue_ignores (
+                device_id uuid NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                category text NOT NULL,
+                identity text NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY(device_id,category,identity)
+            );
             ALTER TABLE check_runs ADD COLUMN IF NOT EXISTS is_test boolean NOT NULL DEFAULT false;
             CREATE TABLE IF NOT EXISTS packages (
                 id uuid PRIMARY KEY,

@@ -66,3 +66,65 @@ button.primary{color:#fff}
 .monitor-connections{background:var(--surface);border:1px solid var(--border);padding:0 14px;margin-bottom:18px}.monitor-connections .section-heading{min-height:44px}.monitor-connections h2{font-size:17px}.monitor-connections-list{display:grid;gap:0}.monitor-connection-row{display:grid;grid-template-columns:minmax(250px,1fr) 160px 120px;gap:14px;align-items:center;padding:12px 0;border-top:1px solid var(--border-soft)}.monitor-connection-row strong,.monitor-connection-row span{display:block}.monitor-connection-row strong{color:var(--text)}.monitor-connection-row span:not(.meta){margin-top:3px;color:var(--secondary)}.monitor-connection-row .when{color:var(--secondary);font-size:13px}.monitor-connection-row button{width:100%}@media(max-width:650px){.monitor-connection-row{display:block}.monitor-connection-row>*{margin-bottom:8px}.monitor-connection-row button{width:auto}}
 .application-errors-list{background:var(--surface);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}.application-error-row{padding:14px 16px;border-bottom:1px solid var(--border-soft)}.application-error-row:last-child{border-bottom:0}.application-error-row:hover{background:var(--hover)}.application-error-heading{display:flex;justify-content:space-between;gap:16px;align-items:baseline}.application-error-heading strong{overflow-wrap:anywhere}.application-error-heading .when{flex:0 0 auto;color:var(--secondary);font-size:13px}.application-error-context{margin-top:4px;color:var(--muted);font-size:13px;overflow-wrap:anywhere}.application-error-details{margin-top:8px}.application-error-details summary{cursor:pointer;color:var(--link);overflow-wrap:anywhere}.application-error-type{margin:7px 0 0;color:var(--muted);font-size:12px}.application-error-technical{max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--page);border-left:3px solid var(--warning-border);padding:10px;margin:8px 0 0;font:12px/1.45 Consolas,"Cascadia Mono",monospace;color:var(--text)}@media(max-width:650px){.application-error-heading{display:block}.application-error-heading .when{display:block;margin-top:3px}}
 .process-policy-row{display:flex;align-items:center;justify-content:space-between;gap:10px}.process-policy-text{min-width:0;overflow-wrap:anywhere}.process-allow-check{flex:0 0 28px;width:28px;height:28px;min-height:28px;padding:0;border:1px solid var(--border);border-radius:50%;background:var(--surface);color:var(--heading);font-size:17px;line-height:1;cursor:pointer}.process-allow-check:hover,.process-allow-check:focus-visible{border-color:#326eff;background:var(--selected);outline:2px solid #326eff55;outline-offset:1px}.process-allow-check:disabled{cursor:wait;opacity:.65}.process-allow-check.allowed{background:#1c7a54;color:white;border-color:#1c7a54;cursor:default}
+.monitor-list,.application-errors-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;background:transparent;border:0}
+.monitor-card,.application-error-card{min-width:0;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:15px 16px;box-shadow:0 1px 2px #0000000b}
+.monitor-card.clickable,.application-error-card.clickable{cursor:pointer;transition:border-color .15s,box-shadow .15s}
+.monitor-card.clickable:hover,.application-error-card.clickable:hover{border-color:#7a9bd4;box-shadow:0 3px 12px #00000012}
+.monitor-card-header,.application-error-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding-bottom:10px;border-bottom:1px solid var(--border-soft)}
+.monitor-card-header>div,.application-error-identity{display:grid;gap:3px;min-width:0}.monitor-card-header strong,.application-error-heading strong{color:var(--heading);font-size:15px;overflow-wrap:anywhere}
+.monitor-card-place{font-size:13px;color:var(--secondary);overflow-wrap:anywhere}.monitor-card-header .when,.application-error-heading .when{white-space:nowrap;font-size:12px;color:var(--muted)}
+.monitor-card-errors,.application-error-items{display:grid}.monitor-card-issue{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:11px 0;border-bottom:1px solid var(--border-soft)}
+.monitor-card-issue:last-child,.application-error-item:last-child{border-bottom:0}.monitor-card-issue.critical{border-left:3px solid var(--danger);padding-left:9px}.monitor-card-issue.warning{border-left:3px solid var(--warning-border);padding-left:9px}
+.monitor-card-description{min-width:0}.monitor-card-description>strong{display:block;color:var(--text);overflow-wrap:anywhere}.monitor-card-description>.meta{display:block;margin-top:2px;font-size:12px}.monitor-card-description p{margin:5px 0 0;color:var(--secondary);font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
+.monitor-issue-actions{display:flex;gap:5px;align-items:flex-start}.issue-action{width:27px;height:27px;min-height:27px;padding:0;border:1px solid var(--border);border-radius:50%;background:var(--surface);font-size:17px;line-height:1;cursor:pointer}.issue-action.resolve{color:var(--success)}.issue-action.ignore{color:var(--muted)}.issue-action:hover{background:var(--selected);border-color:var(--focus)}
+.monitor-card-footer,.application-error-footer{display:flex;justify-content:space-between;gap:8px;padding-top:10px;color:var(--muted);font-size:12px}.application-error-item{padding:10px 0;border-bottom:1px solid var(--border-soft)}
+.application-error-context{margin-top:3px;color:var(--muted);font-size:12px;overflow-wrap:anywhere}.application-error-details{margin-top:6px}.application-error-details summary{cursor:pointer;color:var(--link);font-weight:600;overflow-wrap:anywhere}.application-error-technical{max-height:300px}
+.application-error-charts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.telemetry-button{min-height:27px;padding:3px 9px;font-size:12px}
+.sensor-detail-row{display:flex;justify-content:space-between;align-items:center;gap:8px}.profile-data{color:var(--secondary)}.stale-data{color:var(--muted);font-style:italic;opacity:.75}.profile-data:after{content:"сохранённый профиль";display:block;color:var(--muted);font-size:11px;font-style:italic}
+.telemetry-dialog{width:min(850px,calc(100% - 32px))}.telemetry-chart{width:100%;overflow:auto}.telemetry-svg{display:block;width:100%;min-width:520px;height:auto}.telemetry-grid{stroke:var(--border-soft);stroke-width:1}.telemetry-axis{fill:var(--muted);font:12px "Segoe UI",Arial,sans-serif}.telemetry-line{fill:none;stroke:#3275dc;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}.telemetry-point{fill:var(--surface);stroke:#3275dc;stroke-width:2}.telemetry-stats{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 0;color:var(--secondary);font-weight:600}
+@media(max-width:1000px){.monitor-list,.application-errors-list{grid-template-columns:1fr}}
+@media(max-width:650px){.monitor-card,.application-error-card{padding:12px}.monitor-card-header,.application-error-heading{display:block}.monitor-card-header .when,.application-error-heading .when{display:block;margin-top:5px;white-space:normal}.monitor-card-issue{grid-template-columns:minmax(0,1fr) auto}.monitor-card-footer,.application-error-footer{align-items:flex-end}.sensor-detail-row{align-items:flex-start;flex-wrap:wrap}}
+
+/* Dense operational views: full-width computer records with independent heights. */
+:root{font-size:15px;line-height:1.45}
+.shell{grid-template-columns:196px minmax(0,1fr)}
+.topbar{height:58px;padding:0 20px}.brand{min-height:58px}
+main{max-width:none;padding:18px 20px 30px}
+.page-heading{margin-bottom:14px}.page-heading p:empty{display:none}
+.metrics{margin-bottom:14px}.metrics>div{padding:9px 14px}.metrics strong{font-size:22px;margin-top:2px}
+.filterbar{padding:10px 0;gap:10px}.filterbar label{font-size:14px}.meta,.cell-sub{font-size:13px}
+.split{grid-template-columns:1fr;min-height:0}
+.list-pane .table-scroll{max-height:280px}.detail-pane{border-left:0;border-top:1px solid var(--border);padding:0 16px 20px}
+.data-table td{font-size:15px;padding:9px 12px}.data-table th{font-size:13px}
+.monitor-summary{margin-bottom:14px;padding:9px 14px}
+.monitor-list{grid-template-columns:minmax(0,1fr);gap:10px;align-items:start}
+.application-errors-list{align-items:start}
+.monitor-card{padding:10px 14px;box-shadow:none}
+.monitor-card-header{padding-bottom:8px;align-items:center}
+.monitor-card-header>div{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 14px}
+.monitor-card-header strong{font-size:16px}.monitor-card-place{font-size:14px}
+.monitor-card-header .when{font-size:13px}
+.monitor-card-issue{padding:8px 0;gap:12px}
+.monitor-card-description{display:flex;align-items:baseline;gap:3px 12px;flex-wrap:wrap}
+.monitor-card-description>strong{font-size:15px}
+.monitor-card-description p{flex:1 1 360px;margin:0;font-size:15px;white-space:normal}
+.monitor-card-description>.meta{order:3;margin:0;font-size:13px}
+.monitor-card-footer{font-size:13px;padding-top:7px}
+.run-tabs{display:flex;gap:18px;border-bottom:1px solid var(--border);margin-top:14px}
+.run-tab{padding:9px 2px;border:0;border-bottom:3px solid transparent;background:transparent;color:var(--secondary);font-weight:600}
+.run-tab[aria-selected=true]{border-bottom-color:var(--accent);color:var(--heading)}
+.run-list{padding:10px 0;max-height:130px;flex-wrap:wrap}
+.run-item{font-size:14px;max-width:350px;padding:6px 10px}
+.profile-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 22px;margin:8px 0}
+.profile-facts>div{display:grid;grid-template-columns:88px minmax(0,1fr);gap:8px;padding:7px 0;border-bottom:1px solid var(--border-soft)}
+.profile-facts dt{color:var(--muted);font-size:14px}.profile-facts dd{margin:0;overflow-wrap:anywhere;font-weight:600}
+.device-profile{padding-bottom:10px;border-bottom:1px solid var(--border)}
+.device-profile:empty,.run-tabs:empty,.run-list:empty{display:none}
+.device-profile h3{margin:16px 0 6px}.device-profile .report-section{margin-top:6px;padding:7px 0}
+.detail-row{padding:6px 0}.report-section{margin-top:10px;padding:8px 0}
+.detail-stats{grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:10px 0;padding:0 12px}
+.detail-stats>div{padding:7px 0}.detail-stats span{font-size:13px}.detail-stats strong{font-size:17px}
+.run-detail h3{margin-top:14px}.status:empty{min-height:10px;padding:0}
+@media(max-width:1100px){.profile-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:900px){.shell{display:block}.topbar{padding:0 16px}main{padding:16px}.navigation{padding:0 10px}.nav-item{min-height:42px}}
+@media(max-width:650px){.profile-facts,.detail-stats{grid-template-columns:1fr}.monitor-card-header{align-items:start}.monitor-card-description p{flex-basis:100%}.monitor-card-header>div{display:grid;gap:3px}.monitor-card{padding:10px}.run-item{max-width:100%}.run-list{max-height:180px}.detail-pane{padding:0 12px 16px}.metrics>div{padding:8px 12px}}

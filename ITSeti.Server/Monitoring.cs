@@ -8,9 +8,27 @@ public sealed record MonitorIssue(string Category, string Identity, string Title
 
 public static class Monitoring
 {
+    // Applies to older clients too; resource pressure remains in detailed reports.
+    public const string AlertSqlPredicate = "a.title !~* '(загрузк[аи] (CPU|ЦП|процессора|памяти|ОЗУ)|мало (доступной памяти|места)|небольшой объём памяти)'";
+    public static bool IsResourcePressure(string title, string detail = "") =>
+        Regex.IsMatch(title, @"загрузк[аи] (CPU|ЦП|процессора|памяти|ОЗУ)|мало (доступной памяти|места)|небольшой объём памяти", RegexOptions.IgnoreCase) ||
+        (title == "Новое замечание диагностики" && (SpaceNote.IsMatch(detail) ||
+            detail.StartsWith("ОЗУ:", StringComparison.OrdinalIgnoreCase) ||
+            detail.StartsWith("CPU:", StringComparison.OrdinalIgnoreCase) && !detail.Contains("температур", StringComparison.OrdinalIgnoreCase)));
     private static readonly JsonSerializerOptions SnapshotJsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     public static IReadOnlyList<MonitorIssue> CurrentIssues(JsonElement report) => Extract(report);
+    public static IReadOnlyList<MonitorIssue> AlertsForReport(JsonElement current, JsonElement? previous,
+        JsonElement? previousEvents = null, IReadOnlyList<MonitorIssue>? currentIssues = null)
+    {
+        currentIssues ??= Extract(current);
+        // Historical Windows events still need a baseline; current critical findings do not.
+        return currentIssues.Where(issue => issue.Category != "event" && issue.Severity == 1 &&
+                !IsResourcePressure(issue.Title, issue.Detail))
+            .Concat(NewIssues(current, previous, previousEvents, currentIssues: currentIssues))
+            .DistinctBy(issue => (issue.Category.ToLowerInvariant(), issue.Identity.ToLowerInvariant()))
+            .ToArray();
+    }
     private static readonly Regex SpaceNote = new(@"^([A-Z]:\\?)\s+свободно\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
     private static readonly Regex SpaceAmount = new(@"\bсвободно\s+([0-9]+(?:[.,][0-9]+)?)\s*ГБ", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
     private static readonly Regex BugcheckCode = new(@"\bBugcheckCode\s*[:=]\s*(\d+)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
@@ -26,7 +44,8 @@ public static class Monitoring
         {
             var isConfirmedServiceAlert = JsonRead.String(current, "KindLabel", "Kind", "kind") == "Постоянный мониторинг" &&
                 JsonRead.Property(current, "DiagnosticIssues") is { ValueKind: JsonValueKind.Array };
-            return currentIssues.Where(issue => issue.Category == "identity" || isConfirmedServiceAlert && issue.Severity == 1).ToArray();
+            return currentIssues.Where(issue => !IsResourcePressure(issue.Title, issue.Detail) &&
+                (issue.Category == "identity" || isConfirmedServiceAlert && issue.Severity == 1)).ToArray();
         }
         var eventBaseline = previousEvents ?? previous;
         var previousIssues = Extract(previous.Value);
@@ -36,7 +55,7 @@ public static class Monitoring
             .Concat(previousEventIssues.Where(i => i.Category == "event"));
         var oldKeys = oldIssues.Select(i => i.Category + "|" + i.Identity + "|" + i.Severity).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var hadEventBaseline = eventBaseline is not null && EventArray(eventBaseline.Value) is { ValueKind: JsonValueKind.Array };
-        return currentIssues.Where(i => (i.Category == "identity" || i.Severity == 1 || includeWarnings) && (i.Category != "event" || hadEventBaseline) &&
+        return currentIssues.Where(i => !IsResourcePressure(i.Title, i.Detail) && (i.Category == "identity" || i.Severity == 1 || includeWarnings) && (i.Category != "event" || hadEventBaseline) &&
             !oldKeys.Contains(i.Category + "|" + i.Identity + "|" + i.Severity)).ToArray();
     }
 
@@ -186,7 +205,8 @@ public static class Monitoring
         var isEvent = title.StartsWith("Произошла критическая ошибка Windows", StringComparison.OrdinalIgnoreCase) ||
             title is "В журнале Windows найдены критические события" or "Windows завершила работу некорректно";
         var code = isEvent ? FindingBugcheck.Match(detail).Groups[1].Value : "";
-        return new MonitorIssue(isEvent ? "event" : "finding", title + (code.Length > 0 ? ":" + code : ""), title, detail, severity);
+        return new MonitorIssue(isEvent ? "event" : "finding", title + (code.Length > 0 ? ":" + code : ""), title, detail,
+            IsResourcePressure(title, detail) ? (short)2 : severity);
     }
 
     private static JsonElement? EventArray(JsonElement report)
