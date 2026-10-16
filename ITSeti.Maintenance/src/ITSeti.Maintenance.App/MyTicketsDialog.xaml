@@ -103,7 +103,7 @@
                       <DataTemplate>
                         <Button Click="Download_Click" Tag="{Binding}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Margin="0,8,0,0" ToolTip="Скачать вложение">
                           <DockPanel LastChildFill="True">
-                            <TextBlock Text="&#x2197;" FontFamily="Segoe UI Symbol, Segoe UI" Margin="0,0,8,0" />
+                            <TextBlock Text="&#xE896;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" />
                             <TextBlock Text="{Binding FileName}" TextWrapping="Wrap" />
                           </DockPanel>
                         </Button>
@@ -129,7 +129,7 @@
             <Button x:Name="SendButton" DockPanel.Dock="Right" Content="Отправить ответ" Click="Send_Click" IsEnabled="False" Style="{StaticResource PrimaryActionButton}" />
             <Button x:Name="AttachButton" Click="Attach_Click" HorizontalAlignment="Left" IsEnabled="False">
               <StackPanel Orientation="Horizontal">
-                <TextBlock Text="" FontFamily="Segoe UI Symbol, Segoe UI" Margin="0,0,8,0" />
+                <TextBlock Text="" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" />
                 <TextBlock Text="Прикрепить файл" />
               </StackPanel>
             </Button>
