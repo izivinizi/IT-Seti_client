@@ -651,7 +651,7 @@ internal static class Program
                         System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                         .Invoke(window, null);
                     typeof(MainViewModel).GetField("serviceStatus", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                        .SetValue(window.ViewModel, "Служба работает · 2.4.9");
+                        .SetValue(window.ViewModel, "Служба работает · " + typeof(MainWindow).Assembly.GetName().Version!.ToString(3));
                     typeof(MainViewModel).GetMethod("Notify", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                         .Invoke(window.ViewModel, [Array.Empty<string>()]);
                     window.ViewModel.AdminInventoryInput = "0042";
