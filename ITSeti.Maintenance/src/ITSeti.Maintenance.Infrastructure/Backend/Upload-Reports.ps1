@@ -13,7 +13,7 @@ try {
         $configuredServer.Host -ne 'it-seti.nylenz.ru' -or $configuredServer.Port -notin @(-1,443)) { exit 1 }
     $serverBase = New-Object System.Uri('https://it-seti.nylenz.ru/')
 } catch { exit 1 }
-if (!$device.deviceId -or !$device.deviceKey) { exit 1 }
+if (!$device.deviceId -or !$device.deviceKey) { throw 'В сохранённой привязке нет идентификатора или ключа ПК. Отчёты оставлены в очереди.' }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 function New-ServerUri([string]$route) {
@@ -25,7 +25,7 @@ function Get-Identity {
     $rms = $null
     $anyDesk = $null
     $ocsPresent = $false
-    $admins = @()
+    $admins = $null
     try {
         $value = [IO.File]::ReadAllText((Join-Path $root 'inventory.txt')).Trim()
         if ($value -match '^\d{4}$') { $inventory = $value }
@@ -63,10 +63,10 @@ function Get-Identity {
         }
     } catch {}
     try {
-        $group = Get-WmiObject Win32_Group -Filter "SID='S-1-5-32-544'" -ErrorAction Stop
-        if ($group) {
-            $admins = @($group.GetRelated('Win32_Account') | ForEach-Object { $_.Domain + '\' + $_.Name } |
-                Where-Object { $_ } | Sort-Object -Unique)
+        if (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue) {
+            $group = Get-LocalGroup -SID 'S-1-5-32-544' -ErrorAction Stop
+            $admins = @(Get-LocalGroupMember -Group $group -ErrorAction Stop |
+                ForEach-Object { $_.Name } | Where-Object { $_ } | Sort-Object -Unique)
         }
     } catch {}
     return @{ InventoryNumber = $inventory; RmsId = $rms; AnyDeskId = $anyDesk; OcsPresent = $ocsPresent; AdminAccounts = $admins }
@@ -126,7 +126,9 @@ function Receive-SoftwareCatalog {
 function Send-Report([string]$path, [hashtable]$identity, [bool]$IncludeSoftwareCatalog = $true) {
     $report = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
     foreach ($name in $identity.Keys) {
-        $report | Add-Member -NotePropertyName $name -NotePropertyValue $identity[$name] -Force
+        if ($null -ne $identity[$name] -and ($identity[$name] -isnot [string] -or ![string]::IsNullOrWhiteSpace($identity[$name]))) {
+            $report | Add-Member -NotePropertyName $name -NotePropertyValue $identity[$name] -Force
+        }
     }
     if(!$report.ApplicationErrors -and [string]$report.KindLabel -ne 'Постоянный мониторинг'){
         $errorLog=Join-Path $root 'Logs\application-errors.jsonl'
@@ -300,10 +302,16 @@ foreach ($file in $pending | Select-Object -First 200) {
     } catch {
         $message = $_.Exception.GetType().Name + ': ' + $_.Exception.Message
         $failures += ($file.FullName + ': ' + $message)
+        $networkError = $_.Exception.GetBaseException()
+        if ($networkError -is [Net.WebException] -and $networkError.Status -in @(
+            [Net.WebExceptionStatus]::NameResolutionFailure, [Net.WebExceptionStatus]::ProxyNameResolutionFailure,
+            [Net.WebExceptionStatus]::ConnectFailure, [Net.WebExceptionStatus]::Timeout,
+            [Net.WebExceptionStatus]::ConnectionClosed, [Net.WebExceptionStatus]::ReceiveFailure)) { break }
     }
 }
 if ($failures.Count) {
     [IO.File]::WriteAllText((Join-Path $root 'server-upload-error.txt'),($failures -join [Environment]::NewLine),[Text.Encoding]::UTF8)
+    Write-Error -Message ($failures -join [Environment]::NewLine) -ErrorAction Continue
     exit 1
 }
 if (Test-Path -LiteralPath (Join-Path $root 'server-upload-error.txt')) {

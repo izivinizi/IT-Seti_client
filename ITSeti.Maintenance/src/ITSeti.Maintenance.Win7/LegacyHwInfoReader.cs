@@ -169,6 +169,8 @@ namespace ITSeti.Maintenance.Win7
             }
             catch (Exception ex) when (IsRecoverableSensorError(ex))
             {
+                if ((ex is FileNotFoundException || ex is InvalidDataException) && sensorProcess != null &&
+                    !sensorProcess.HasExited && DateTime.UtcNow - sessionStartedUtc < TimeSpan.FromSeconds(30)) return null;
                 if (ex is FileNotFoundException)
                 {
                     missingMemoryReads++;

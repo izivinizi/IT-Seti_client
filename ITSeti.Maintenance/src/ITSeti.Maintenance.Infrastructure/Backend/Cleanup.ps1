@@ -86,10 +86,37 @@ function Invoke-Cleanup([switch]$Preview) {
     }
     $before = @(Get-WmiObject Win32_LogicalDisk -Filter 'DriveType=3')
     $changed = @()
+    $categoryResults = @()
+    $deadline = [DateTime]::UtcNow.AddMinutes(45)
+    $cleanupExitCode = 0
     try {
-        foreach($key in $selected) { New-ItemProperty -LiteralPath $key.PSPath -Name $flag -PropertyType DWord -Value 2 | Out-Null; $changed += $key.PSPath }
-        $p = Start-Process -FilePath $cleanmgr -ArgumentList "/sagerun:$profile" -WindowStyle Hidden -PassThru -Wait
-        Write-Host "Штатная очистка завершила работу, код: $($p.ExitCode)."
+        foreach($key in $selected) {
+            $name = $key.PSChildName
+            $p = $null
+            $started = [DateTime]::UtcNow
+            try {
+                if ($started -ge $deadline) { throw 'Общий лимит системной очистки 45 минут исчерпан; категория не запускалась.' }
+                if (Get-Process cleanmgr -ErrorAction SilentlyContinue) { throw 'Предыдущий обработчик Windows ещё работает; параллельная очистка не запускалась.' }
+                Section ("Системная очистка: " + $name)
+                New-ItemProperty -LiteralPath $key.PSPath -Name $flag -PropertyType DWord -Value 2 -ErrorAction Stop | Out-Null
+                $changed += $key.PSPath
+                $p = Start-Process -FilePath $cleanmgr -ArgumentList "/sagerun:$profile" -WindowStyle Hidden -PassThru
+                $categoryLimit = if ($name -in @('Update Cleanup','Previous Installations','Device Driver Packages')) { 600000 } else { 180000 }
+                $timeout = [int][math]::Min($categoryLimit, [math]::Max(1, ($deadline - [DateTime]::UtcNow).TotalMilliseconds))
+                if (!$p.WaitForExit($timeout)) {
+                    try { $p.Kill(); [void]$p.WaitForExit(5000) } catch { }
+                    throw ('Категория превысила лимит ' + [math]::Round($timeout/60000,1) + ' мин.; остановлен только запущенный cleanmgr.')
+                }
+                if ($p.ExitCode -ne 0) { throw ('cleanmgr: код ' + $p.ExitCode) }
+                $categoryResults += @{ Category=$name; State='Completed'; Seconds=[int]([DateTime]::UtcNow-$started).TotalSeconds; Error='' }
+            } catch {
+                $cleanupExitCode = 1
+                $categoryResults += @{ Category=$name; State='Failed'; Seconds=[int]([DateTime]::UtcNow-$started).TotalSeconds; Error=$_.Exception.Message }
+            } finally {
+                Remove-ItemProperty -LiteralPath $key.PSPath -Name $flag -ErrorAction SilentlyContinue
+                if ($p) { $p.Dispose() }
+            }
+        }
     } finally { foreach($key in $changed) { Remove-ItemProperty -LiteralPath $key -Name $flag -ErrorAction Continue } }
     $changes=@(Get-WmiObject Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object {
         $currentDisk = $_
@@ -97,10 +124,15 @@ function Invoke-Cleanup([switch]$Preview) {
         New-Object PSObject -Property @{Disk=$_.DeviceID; FreeGB=[math]::Round($_.FreeSpace/1GB,2); ChangeGB=[math]::Round(($_.FreeSpace-$old.FreeSpace)/1GB,2)}
     })
     $script:CleanupResult=@{
-        ExitCode=$p.ExitCode
+        ExitCode=$cleanupExitCode
         ChangeGB=($changes | Measure-Object ChangeGB -Sum).Sum
         SelectedCategories=$selectedNames
         UnavailableCategories=$unavailableNames
+        Categories=$categoryResults
+    }
+    if ($cleanupExitCode -ne 0) {
+        throw ('Часть системных категорий не очищена: ' + (($categoryResults | Where-Object { $_.State -eq 'Failed' } |
+            ForEach-Object { $_.Category + ': ' + $_.Error }) -join '; '))
     }
     if(!$script:CompactOutput) {Table $changes; Write-Host 'Изменение места включает фоновую работу системы.'}
 }

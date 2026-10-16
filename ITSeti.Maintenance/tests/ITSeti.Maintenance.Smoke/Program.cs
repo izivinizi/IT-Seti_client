@@ -36,12 +36,13 @@ internal static class Program
         if (args.Contains("--live-update-contract"))
         {
             var updateClient = new ServerApplicationUpdateClient();
+            var currentVersion = typeof(MainWindow).Assembly.GetName().Version!;
             var release = updateClient.GetUpdateAsync(new Version(2, 3, 6)).GetAwaiter().GetResult();
-            if (release?.Version.ToString(3) != "2.4.9" || !release.DownloadUrl.StartsWith("https://it-seti.nylenz.ru/api/v1/packages/", StringComparison.Ordinal))
-                throw new Exception("Live server did not offer 2.4.9 for 2.3.6");
-            if (updateClient.GetUpdateAsync(new Version(2, 4, 9)).GetAwaiter().GetResult() is not null)
+            if (release?.Version != currentVersion || !release.DownloadUrl.StartsWith("https://it-seti.nylenz.ru/api/v1/packages/", StringComparison.Ordinal))
+                throw new Exception("Live server did not offer the current build for 2.3.6");
+            if (updateClient.GetUpdateAsync(currentVersion).GetAwaiter().GetResult() is not null)
                 throw new Exception("Live server offers reinstall of already-current version");
-            Console.WriteLine("PASS live server: 2.3.6 receives 2.4.9, 2.4.9 is current, authenticated package URL validated");
+            Console.WriteLine($"PASS live server: 2.3.6 receives {currentVersion}, current version is not reinstalled, authenticated package URL validated");
             return 0;
         }
         if (args.Contains("--service-concurrency-contract"))
@@ -263,6 +264,9 @@ internal static class Program
                 sample.WriteMs is { } write && (!double.IsFinite(write) || write < 0 || write > 60000))
                 throw new Exception("Windows returned an invalid disk response sample");
             Console.WriteLine($"PASS live PDH disk response: read={sample.ReadMs?.ToString("N3") ?? "n/a"} ms; write={sample.WriteMs?.ToString("N3") ?? "n/a"} ms");
+            if (sampler.LastReadings.Count == 0 || sampler.LastReadings.Any(disk => disk.Disk == "_Total" || string.IsNullOrWhiteSpace(disk.Disk)))
+                throw new Exception("Per-disk counters lost disk identity");
+            foreach (var disk in sampler.LastReadings) Console.WriteLine($"Physical disk {disk.Disk}: read={disk.ReadMs:N3} ms; write={disk.WriteMs:N3} ms");
             return 0;
         }
         if(args.Contains("--error-log-contract"))
@@ -283,6 +287,33 @@ internal static class Program
                 !ApplicationErrorStore.UserMessage(denied).Contains(deniedPath, StringComparison.Ordinal))
                 throw new Exception("The user-facing access-denied message hid the Windows path and reason");
             Console.WriteLine("PASS error log: details, redaction, duplicate suppression and report marker");return 0;
+        }
+        if (args.Contains("--ticket-shutdown-contract"))
+        {
+            var rootPath = Path.Combine(Path.GetTempPath(), "itseti-ticket-stop-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(rootPath);
+            File.WriteAllText(Path.Combine(rootPath, "server-support.json"), JsonSerializer.Serialize(new {
+                serverUrl = "https://it-seti.nylenz.ru/", deviceId = Guid.NewGuid(), supportKey = "fixture-key" }));
+            var type = System.Reflection.Assembly.Load("ITSeti.Maintenance.Service").GetType("ITSeti.Maintenance.Service.MaintenanceServiceCoordinator")!;
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var coordinator = (IDisposable)Activator.CreateInstance(type, [null, null, null])!;
+            var field = type.GetField("ticketUpdateMonitor", flags)!;
+            ((IDisposable)field.GetValue(coordinator)!).Dispose();
+            using var handler = new BlockingTicketHandler();
+            field.SetValue(coordinator, new TicketUpdateMonitor(rootPath, handler));
+            try
+            {
+                type.GetMethod("RequestTicketUpdatePoll", flags)!.Invoke(coordinator, null);
+                if (!handler.Started.Task.Wait(2000)) throw new Exception("Ticket poll did not start");
+                var elapsed = Stopwatch.StartNew();
+                coordinator.Dispose();
+                if (!handler.Cancelled || elapsed.Elapsed > TimeSpan.FromSeconds(2))
+                    throw new Exception("Shutdown did not cancel and drain the active ticket request");
+                type.GetMethod("RequestTicketUpdatePoll", flags)!.Invoke(coordinator, null);
+                Console.WriteLine("PASS ticket shutdown cancels in-flight HTTP, drains it before disposal and rejects new polling");
+            }
+            finally { Directory.Delete(rootPath, true); }
+            return 0;
         }
         if (args.Contains("--ticket-polling"))
         {
@@ -1946,5 +1977,18 @@ internal sealed class TicketPollHandler : HttpMessageHandler
     {
         LastPath = request.RequestUri!.PathAndQuery;
         return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(Response, Encoding.UTF8, "application/json") });
+    }
+}
+
+internal sealed class BlockingTicketHandler : HttpMessageHandler
+{
+    public TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public bool Cancelled { get; private set; }
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Started.TrySetResult(true);
+        try { await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken); }
+        catch (OperationCanceledException) { Cancelled = true; throw; }
+        throw new InvalidOperationException("Unreachable fixture state");
     }
 }

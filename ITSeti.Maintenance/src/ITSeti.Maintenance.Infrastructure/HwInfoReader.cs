@@ -132,6 +132,10 @@ public static class HwInfoReader
                     missingMemory = ex;
                     if (attempt < 2) await Task.Delay(250, cancellationToken);
                 }
+                catch (InvalidDataException ex) when (attempt < 2 && ex.Message.Contains("updated during", StringComparison.OrdinalIgnoreCase))
+                {
+                    await Task.Delay(100, cancellationToken);
+                }
             }
             if (values is null && missingMemory is not null)
             {
@@ -192,6 +196,9 @@ public static class HwInfoReader
         {
             if (ex is InvalidDataException)
             {
+                if (sensorProcess is { HasExited: false } &&
+                    DateTimeOffset.UtcNow - sensorProcessStartedUtc < TimeSpan.FromSeconds(30))
+                    return null;
                 staleSourceReads++;
                 var details = $"чтение отклонено: {ex.Message}; пропуски подряд={staleSourceReads}; {DescribeSession(executable)}";
                 if (HwInfoRecoveryPolicy.ShouldRestartStaleSource(staleSourceReads, DateTimeOffset.UtcNow, nextRecoveryUtc))

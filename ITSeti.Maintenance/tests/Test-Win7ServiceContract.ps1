@@ -6,10 +6,10 @@ $project = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win
 $uploader = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7\ServerReportUploader.cs') -Raw
 $installer = Get-Content -LiteralPath (Join-Path $Root 'Installer-Win7.iss') -Raw
 $enrollmentClient = Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Win7.Port\Win7ServerEnrollmentDialog.cs') -Raw
-if ($project -notmatch '<Version>2\.4\.7-beta</Version>' -or
+if ($project -notmatch '<Version>2\.4\.9-beta</Version>' -or
     !$uploader.Contains('TimeSpan.FromHours(1)') -or !$uploader.Contains('TryClaimUploadWindow()') -or !$uploader.Contains('SaveSoftwareCatalogResponse(response, serializer)') -or !$uploader.Contains('RefreshSoftwareCatalog(server, device, serializer)') -or !$uploader.Contains('includeCatalog=false') -or
     !$service.Contains('ServerReportUploader.IsUploadDue()') -or $service.Contains('HasPendingReports() && ServerReportUploader.IsUploadDue()') -or
-    $installer -notmatch 'AppVersion=2\.4\.7' -or
+    $installer -notmatch 'AppVersion=2\.4\.9' -or
     !$service.Contains('ServiceBase.Run') -or !$service.Contains('ITSetiMaintenanceWin7') -or
     !$service.Contains('ITSeti.Maintenance.Win7.v1') -or !$service.Contains('LocalSystemSid') -or
     !$service.Contains('AuthenticatedUserSid') -or !$service.Contains('LegacyDiagnostics.Collect(full, token)') -or

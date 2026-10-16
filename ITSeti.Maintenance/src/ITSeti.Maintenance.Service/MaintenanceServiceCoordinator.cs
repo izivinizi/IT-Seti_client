@@ -44,6 +44,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     private bool temperatureProbeFailed;
     private DateTimeOffset nextLiveSnapshotErrorUtc = DateTimeOffset.MinValue;
     private DateTimeOffset nextTemperatureErrorUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset nextStatusErrorUtc = DateTimeOffset.MinValue;
     private readonly object ticketPollGate = new();
     private readonly object reportUploadGate = new();
     private DateTimeOffset lastTemperatureProbe = DateTimeOffset.MinValue;
@@ -51,6 +52,10 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     private DateTimeOffset nextTicketPoll = DateTimeOffset.MinValue;
     private bool ticketPollRunning;
     private bool ticketPollRequested;
+    private readonly CancellationTokenSource ticketLifetime = new();
+    private Task ticketPollTask = Task.CompletedTask;
+    private MonitoringReportBatch monitoringBatch = new();
+    private string MonitoringBatchPath => Path.Combine(Path.GetDirectoryName(statusPath)!, "monitoring-batch.json");
 
     public MaintenanceServiceCoordinator(string? backendRootOverride = null, string? statusPathOverride = null,
         string? pipeNameOverride = null) : this(backendRootOverride, statusPathOverride, pipeNameOverride, true) { }
@@ -69,12 +74,20 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     {
         Directory.CreateDirectory(Path.GetDirectoryName(statusPath)!);
         ValidateInstallation();
+        try
+        {
+            if (File.Exists(MonitoringBatchPath))
+                monitoringBatch = new(JsonSerializer.Deserialize<MonitoringBatchState>(await File.ReadAllTextAsync(MonitoringBatchPath), JsonOptions));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        { ApplicationErrorStore.Record("Мониторинг", "Восстановление очереди", ex); }
+        using var ticketCancellation = cancellationToken.Register(ticketLifetime.Cancel);
         await WriteStatusAsync(null, "Служба запущена", cancellationToken);
         var pipe = RunPipeLoopAsync(cancellationToken);
         var monitor = monitorEnabled ? RunMonitorLoopAsync(cancellationToken) : Task.CompletedTask;
         try { await Task.WhenAll(pipe, monitor); }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
-        finally { StopChildren(); HwInfoReader.StopSession(); }
+        finally { ticketLifetime.Cancel(); StopChildren(); await ticketPollTask; HwInfoReader.StopSession(); }
     }
 
     internal void ValidateInstallation()
@@ -632,31 +645,8 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         if (response.Content.Headers.ContentLength is { } contentLength && contentLength != package.SizeBytes)
             throw new InvalidDataException("Размер загружаемого установщика не совпадает с каталогом.");
 
-        var temporary = destination + ".pending";
-        try
-        {
-            using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            await using var input = await response.Content.ReadAsStreamAsync();
-            await using var output = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None,
-                64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-            var buffer = new byte[64 * 1024];
-            long received = 0;
-            int count;
-            while ((count = await input.ReadAsync(buffer)) > 0)
-            {
-                received += count;
-                if (received > package.SizeBytes) throw new InvalidDataException("Установщик больше объявленного размера.");
-                hasher.AppendData(buffer, 0, count);
-                await output.WriteAsync(buffer.AsMemory(0, count));
-            }
-            await output.FlushAsync();
-            if (received != package.SizeBytes) throw new InvalidDataException("Загрузка установщика оборвалась.");
-            var actualHash = Convert.ToHexString(hasher.GetHashAndReset());
-            if (!actualHash.Equals(package.Sha256, StringComparison.OrdinalIgnoreCase))
-                throw new CryptographicException("SHA-256 установщика не совпадает с серверным каталогом.");
-            File.Move(temporary, destination, true);
-        }
-        finally { try { File.Delete(temporary); } catch (IOException) { } }
+        await using var input = await response.Content.ReadAsStreamAsync();
+        await VerifiedPackageFile.SaveAsync(input, destination, package.SizeBytes, package.Sha256);
     }
 
     private static async Task<bool> IsVerifiedPackageAsync(string path, ServerSoftwarePackage package)
@@ -726,6 +716,10 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             RedirectStandardError = true,
             WorkingDirectory = Path.GetDirectoryName(backendRoot)!
         };
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        var consoleEncoding = Encoding.GetEncoding(System.Globalization.CultureInfo.CurrentCulture.TextInfo.OEMCodePage);
+        info.StandardOutputEncoding = consoleEncoding;
+        info.StandardErrorEncoding = consoleEncoding;
         foreach (var value in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script })
             info.ArgumentList.Add(value);
         foreach (var value in arguments) info.ArgumentList.Add(value);
@@ -754,10 +748,12 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
                 var exitCode = process.ExitCode;
                 var exit = DescribeProcessExit(exitCode);
                 var summary = $"Фоновая операция {operation} аварийно завершилась: {exit}.";
-                var details = $"Операция: {operation}; сценарий: {Path.GetFullPath(script)}; " +
+                var details = $"Операция: {operation}; сценарий: {Path.GetFullPath(Path.Combine(backendRoot, script))}; " +
                     $"исполняемый файл: {process.StartInfo.FileName}; длительность: {elapsed.Elapsed}; завершение: {exit}." +
                     Environment.NewLine + "STDERR (последние строки):" + Environment.NewLine + LimitToTail(error, 5000) +
                     Environment.NewLine + "STDOUT (последние строки):" + Environment.NewLine + LimitToTail(output, 5000);
+                if (unchecked((uint)exitCode) == 0xC0000005)
+                    details += Environment.NewLine + ReadNativeCrashDetails(process.Id);
                 ApplicationErrorStore.Record("Системная служба", $"Фоновая операция: {operation}",
                     new InvalidOperationException(details), summary);
                 failure = BuildOperationFailureStatus(summary, error, output);
@@ -822,6 +818,35 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         return unsigned == 0xC0000005
             ? $"STATUS_ACCESS_VIOLATION (код {exitCode}, 0x{unsigned:X8})"
             : $"код {exitCode} (0x{unsigned:X8})";
+    }
+
+    private static string ReadNativeCrashDetails(int processId)
+    {
+        try
+        {
+            var query = new System.Diagnostics.Eventing.Reader.EventLogQuery("Application",
+                System.Diagnostics.Eventing.Reader.PathType.LogName,
+                "*[System[(EventID=1000) and TimeCreated[timediff(@SystemTime) <= 120000]]]") { ReverseDirection = true };
+            using var reader = new System.Diagnostics.Eventing.Reader.EventLogReader(query);
+            for (var index = 0; index < 10; index++)
+            {
+                using var entry = reader.ReadEvent();
+                if (entry is null) break;
+                var document = new System.Xml.XmlDocument { XmlResolver = null };
+                document.LoadXml(entry.ToXml());
+                var data = document.GetElementsByTagName("Data").Cast<System.Xml.XmlElement>()
+                    .Where(element => element.HasAttribute("Name"))
+                    .ToDictionary(element => element.GetAttribute("Name"), element => element.InnerText);
+                if (!data.TryGetValue("ProcessId", out var pid) ||
+                    !(pid.Equals(processId.ToString(), StringComparison.OrdinalIgnoreCase) ||
+                      pid.Equals("0x" + processId.ToString("x"), StringComparison.OrdinalIgnoreCase))) continue;
+                return "Windows Application Error: " + string.Join("; ", new[] { "AppName", "AppVersion", "ModuleName", "ModuleVersion", "ExceptionCode", "FaultingOffset" }
+                    .Where(data.ContainsKey).Select(name => name + "=" + data[name]));
+            }
+            return "STATUS_ACCESS_VIOLATION: Windows ещё не записала событие 1000 для этого процесса. Очередь отчётов сохранена.";
+        }
+        catch (Exception ex) when (ex is System.Diagnostics.Eventing.Reader.EventLogException or UnauthorizedAccessException or System.Xml.XmlException)
+        { return "STATUS_ACCESS_VIOLATION; журнал Windows недоступен: " + ex.Message; }
     }
 
     private static string BuildOperationFailureStatus(string summary, string error, string output)
@@ -899,9 +924,27 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
                             ? "Ожидается первый снимок мониторинга"
                             : critical.Any(issue => issue.Severity == "Critical") ? "Обнаружено подтверждённое критическое состояние"
                             : critical.Count > 0 ? "Есть подтверждённое предупреждение датчиков" : "Мониторинг работает";
-                await WriteStatusAsync(snapshot, state, cancellationToken, critical);
-                if (snapshot is not null && critical.Count > 0)
-                    await QueueMonitoringReportAsync(snapshot, critical, history, cancellationToken);
+                try { await WriteStatusAsync(snapshot, state, cancellationToken, critical); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    if (DateTimeOffset.UtcNow >= nextStatusErrorUtc)
+                    {
+                        nextStatusErrorUtc = DateTimeOffset.UtcNow.AddMinutes(5);
+                        ApplicationErrorStore.Record("Системная служба", "Сохранение состояния интерфейса", ex);
+                    }
+                }
+                if (snapshot is not null && !liveSnapshotTimedOut)
+                {
+                    monitoringBatch.Add(critical, snapshot.StartedAt);
+                    var ready = monitoringBatch.Ready(snapshot.StartedAt);
+                    if (ready.Count > 0)
+                    {
+                        await QueueMonitoringReportAsync(snapshot, ready.Select(item => item.Issue).ToArray(), history, cancellationToken, ready);
+                        monitoringBatch.MarkSent(snapshot.StartedAt);
+                    }
+                    if (critical.Count > 0 || ready.Count > 0)
+                        await WriteJsonAtomicallyAsync(MonitoringBatchPath, monitoringBatch.Snapshot(), cancellationToken);
+                }
                 TryStartReportUpload();
                 if (DateTimeOffset.UtcNow >= nextTicketPoll) StartTicketUpdatePoll(cancellationToken);
             }
@@ -952,6 +995,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     {
         lock (ticketPollGate)
         {
+            if (ticketLifetime.IsCancellationRequested || stopping) return;
             nextTicketPoll = DateTimeOffset.MaxValue;
             if (ticketPollRunning)
             {
@@ -959,18 +1003,18 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
                 return;
             }
             ticketPollRunning = true;
+            ticketPollTask = PollTicketUpdatesAsync(ticketLifetime.Token);
         }
-        _ = PollTicketUpdatesAsync(CancellationToken.None);
     }
 
     private void StartTicketUpdatePoll(CancellationToken cancellationToken)
     {
         lock (ticketPollGate)
         {
-            if (ticketPollRunning) return;
+            if (ticketPollRunning || ticketLifetime.IsCancellationRequested) return;
             ticketPollRunning = true;
+            ticketPollTask = PollTicketUpdatesAsync(ticketLifetime.Token);
         }
-        _ = PollTicketUpdatesAsync(cancellationToken);
     }
 
     private IReadOnlyList<CriticalMonitoringIssue> EvaluateMonitoring(DiagnosticSnapshot snapshot) =>
@@ -978,7 +1022,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
 
     private Task QueueMonitoringReportAsync(ITSeti.Maintenance.Core.DiagnosticSnapshot snapshot,
         IReadOnlyList<CriticalMonitoringIssue> issues, IReadOnlyList<SensorHistorySample> history,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, IReadOnlyList<MonitoringOccurrence>? occurrences = null)
     {
         var queue = Path.Combine(DataRoot, "MonitoringQueue");
         var report = new
@@ -1014,6 +1058,12 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             snapshot.ActiveUptimeHours,
             snapshot.DiskReadLatencyMs,
             snapshot.DiskWriteLatencyMs,
+            snapshot.DiskLatencies,
+            snapshot.NetworkAdapters,
+            snapshot.SystemDrive,
+            MemoryUsedPercent = snapshot.TotalMemoryBytes == 0 ? (double?)null :
+                100.0 * (snapshot.TotalMemoryBytes - snapshot.AvailableMemoryBytes) / snapshot.TotalMemoryBytes,
+            MonitoringOccurrences = occurrences,
             KindLabel = "Постоянный мониторинг",
             Trigger = "Служба непрерывно контролирует свежие показания датчиков и нагрузки",
             DiagnosticIssues = issues.Select(issue => new
@@ -1180,7 +1230,13 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(value, JsonOptions),
                 new UTF8Encoding(false), cancellationToken);
             step = "атомарная замена целевого файла";
-            File.Move(temporary, path, true);
+            for (var attempt = 0; ; attempt++)
+            {
+                try { File.Move(temporary, path, true); break; }
+                catch (IOException) when (attempt < 4) { await Task.Delay(50 * (attempt + 1), cancellationToken); }
+                catch (UnauthorizedAccessException) when (attempt < 4 && File.Exists(path))
+                { await Task.Delay(50 * (attempt + 1), cancellationToken); }
+            }
         }
         catch (UnauthorizedAccessException ex)
         {
@@ -1253,8 +1309,11 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
 
     public void Dispose()
     {
+        ticketLifetime.Cancel();
         StopChildren();
+        ticketPollTask.GetAwaiter().GetResult();
         ticketUpdateMonitor.Dispose();
+        ticketLifetime.Dispose();
         temperatureLock.Dispose();
         diskLatencySampler.Dispose();
     }

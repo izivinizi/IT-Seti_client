@@ -41,6 +41,38 @@ internal static class RefactorContract
             !HwInfoRecoveryPolicy.ShouldRestartStaleSource(12, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(1)),
             "Missing-map recovery cadence is unsafe");
         var monitoringStart = new DateTimeOffset(2026, 10, 14, 0, 0, 0, TimeSpan.Zero);
+        var batch = new MonitoringReportBatch();
+        var batchIssue = new CriticalMonitoringIssue("test", "test", "test");
+        batch.Add([batchIssue], monitoringStart);
+        Check(batch.Ready(monitoringStart).Count == 1, "First critical episode was lost");
+        batch.MarkSent(monitoringStart);
+        batch.Add([batchIssue], monitoringStart.AddMinutes(1));
+        batch.Add([batchIssue], monitoringStart.AddMinutes(2));
+        batch = new MonitoringReportBatch(JsonSerializer.Deserialize<MonitoringBatchState>(JsonSerializer.Serialize(batch.Snapshot())));
+        Check(batch.Ready(monitoringStart.AddMinutes(59)).Count == 0 && batch.Ready(monitoringStart.AddHours(1)).Single().Count == 2,
+            "Hourly batching or restart persistence failed");
+        batch.MarkSent(monitoringStart.AddHours(1));
+        batch.Add([batchIssue with { Type = MonitoringIssueType.ResourceLoad }], monitoringStart.AddHours(2));
+        Check(batch.Ready(monitoringStart.AddHours(2)).Count == 0, "Resource load entered monitoring queue");
+        var packageRoot = Path.Combine(Path.GetTempPath(), "ITSeti-package-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(packageRoot);
+        try
+        {
+            var content = System.Text.Encoding.UTF8.GetBytes("verified fixture");
+            var packagePath = Path.Combine(packageRoot, "setup.exe");
+            var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(content));
+            VerifiedPackageFile.SaveAsync(new MemoryStream(content), packagePath, content.Length, hash).GetAwaiter().GetResult();
+            Check(File.ReadAllBytes(packagePath).SequenceEqual(content), "Verified file could not be renamed on Windows");
+            try
+            {
+                VerifiedPackageFile.SaveAsync(new MemoryStream(content), packagePath, content.Length, new string('0',64)).GetAwaiter().GetResult();
+                throw new Exception("Wrong SHA-256 accepted");
+            }
+            catch (System.Security.Cryptography.CryptographicException) { }
+            Check(File.ReadAllBytes(packagePath).SequenceEqual(content) && Directory.GetFiles(packageRoot).Length == 1,
+                "Failed download replaced valid package or left a partial file");
+        }
+        finally { foreach (var file in Directory.GetFiles(packageRoot)) File.Delete(file); Directory.Delete(packageRoot); }
         var latencySnapshot = new DiagnosticSnapshot(Guid.NewGuid(), monitoringStart, "fixture", 0, 0, 0, [], [],
             DiskReadLatencyMs: 100);
         var latencyIssue = CriticalMonitoringEvaluator.Evaluate(latencySnapshot);

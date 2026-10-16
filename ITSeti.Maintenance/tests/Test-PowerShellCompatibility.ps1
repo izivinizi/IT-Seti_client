@@ -1,7 +1,12 @@
 param([string]$Root = (Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference = 'Stop'
-$files = @(Get-ChildItem -LiteralPath $Root -Filter '*.ps1' -File -Recurse |
-    Where-Object { $_.FullName -notmatch '\\(bin|obj|dist|artifacts)\\' })
+function Get-SourceScripts([string]$Directory) {
+    Get-ChildItem -LiteralPath $Directory -Filter '*.ps1' -File
+    foreach ($child in Get-ChildItem -LiteralPath $Directory -Directory) {
+        if ($child.Name -notin @('bin','obj','dist','artifacts','.build','.git')) { Get-SourceScripts $child.FullName }
+    }
+}
+$files = @(Get-SourceScripts $Root)
 $failures = @()
 foreach ($file in $files) {
     $bytes = [IO.File]::ReadAllBytes($file.FullName)
