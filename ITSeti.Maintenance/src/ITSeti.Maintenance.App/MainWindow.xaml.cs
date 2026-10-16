@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     private bool syncingAdminPassword;
     private DispatcherOperation? progressScroll;
     private bool closed;
+    private bool closeAfterCheck;
     private bool refreshingSoftware;
     private DateTime catalogWriteTime;
     private readonly DispatcherTimer liveMetricsTimer = new() { Interval = TimeSpan.FromSeconds(5) };
@@ -37,6 +38,18 @@ public partial class MainWindow : Window
             fullRunner, engineerOnly ? new UserCleanupRunner(cleanupUserSid, cleanupUserLocalData) : null);
         ViewModel.SetWindowsDefenderAccess(false);
         DataContext = ViewModel;
+        Closing += (_, args) =>
+        {
+            if (!ViewModel.IsFullCheckRunning) return;
+            args.Cancel = true;
+            closeAfterCheck = true;
+            Hide();
+        };
+        ViewModel.PropertyChanged += (_, _) =>
+        {
+            if (closeAfterCheck && !ViewModel.IsFullCheckRunning)
+                Dispatcher.BeginInvoke(new Action(Close));
+        };
         if (engineerOnly) ConfigureEngineerShell();
         ViewModel.CheckProgressEntries.CollectionChanged += (_, _) => QueueProgressScroll();
         CheckProgressList.IsVisibleChanged += (_, _) => QueueProgressScroll();
@@ -499,18 +512,10 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) { MessageBox.Show(this, ex.Message, "Не удалось определить привязку компании и объекта", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
-    private async void OpenServerAssignment_Click(object sender, RoutedEventArgs e)
+    private void OpenServerAssignment_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            using (var enrollment = new ServerEnrollmentClient())
-            {
-                if (await enrollment.TryAutomaticEnrollmentAsync())
-                {
-                    ViewModel.RefreshIdentity();
-                    return;
-                }
-            }
             var dialog = new ServerAssignmentDialog { Owner = this };
             if (dialog.ShowDialog() == true) ViewModel.RefreshIdentity();
         }

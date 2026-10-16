@@ -126,7 +126,7 @@ try {
     Set-UpdateStatus "Устанавливаю версию $latestVersion."
     $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CLOSEAPPLICATIONS') -PassThru -Wait
     if ($process.ExitCode -ne 0) { throw "Установщик завершился с кодом $($process.ExitCode)." }
-    Set-UpdateStatus "Версия $latestVersion установлена. Запустите приложение снова."
+    Set-UpdateStatus "Версия $latestVersion установлена. Приложение будет перезапущено в пользовательской сессии."
 } catch {
     $message = $_.Exception.Message.Replace("`r", ' ').Replace("`n", ' ')
     try { Set-UpdateStatus ('Ошибка обновления: ' + $message) } catch { }

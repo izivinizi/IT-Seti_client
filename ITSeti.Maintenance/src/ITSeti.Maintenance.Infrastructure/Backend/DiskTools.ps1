@@ -51,6 +51,7 @@ function Complete-DiskToolsBackground {
     $deadline=[DateTime]::UtcNow.AddSeconds($remaining)
     while(!$script:DiskWorker.WaitForExit(500) -and [DateTime]::UtcNow -lt $deadline){
         if(Get-Command Assert-CheckNotCancelled -ErrorAction SilentlyContinue){Assert-CheckNotCancelled}
+        if(Get-Command Publish-SmartProgress -ErrorAction SilentlyContinue){Publish-SmartProgress}
     }
     if(!$script:DiskWorker.HasExited){throw 'Дисковые утилиты ещё работают. Очистка не запущена; подробности в disk-worker.log. Тест не прерван.'}
     $file=Join-Path $ScriptRoot 'disk-result.xml'

@@ -159,6 +159,9 @@ try {
         if(!(Test-Path -LiteralPath $report) -or (Get-Item -LiteralPath $report).LastWriteTime -lt $started.AddSeconds(-2)){throw 'Fresh SMART report not found.'}
         $script:Snapshot.Smart=@(ConvertFrom-CdiReport ([IO.File]::ReadAllText($report)))
         if(!$script:Snapshot.Smart.Count){throw 'SMART report could not be parsed.'}
+        $smartPending=Join-Path $ScriptRoot 'smart-result.pending.xml'
+        @{Smart=$script:Snapshot.Smart} | Export-Clixml -LiteralPath $smartPending
+        Move-Item -LiteralPath $smartPending -Destination (Join-Path $ScriptRoot 'smart-result.xml') -Force
         Write-DiskProgress "CrystalDiskInfo: SMART data received for $($script:Snapshot.Smart.Count) drive(s)"
         } catch {$script:Snapshot.Notes+=('SMART: '+$_.Exception.Message);Write-DiskProgress ('CrystalDiskInfo: '+$_.Exception.Message)}
     }

@@ -117,7 +117,7 @@ namespace ITSeti.Maintenance.App
                 if (!running) return;
                 args.Cancel = true;
                 closeAfterCheck = true;
-                StopCheck();
+                Hide();
             };
         }
 

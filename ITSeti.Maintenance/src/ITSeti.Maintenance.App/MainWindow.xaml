@@ -117,7 +117,7 @@
      </StackPanel>
      <Button x:Name="ExitAdminButton" DockPanel.Dock="Bottom" Click="ExitAdmin_Click" Content="К пользователю" Padding="10,10" Cursor="Hand" Margin="0,12,0,0"/>
      <ListBox x:Name="AdminNavigation" BorderThickness="0" Background="Transparent" ItemContainerStyle="{StaticResource AdminNavItem}" SelectedIndex="{Binding SelectedIndex, ElementName=AdminTabs, Mode=TwoWay}" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-      <ListBoxItem Content="Обзор"/><ListBoxItem Content="Накопители"/><ListBoxItem Content="Сеть"/><ListBoxItem Content="Процессы"/><ListBoxItem Content="События"/>
+      <ListBoxItem Content="Обзор"/><ListBoxItem Content="Накопители"/><ListBoxItem Content="Сеть и датчики"/><ListBoxItem Content="Процессы"/><ListBoxItem Content="События"/>
       <ListBoxItem Content="ПО"/><ListBoxItem Content="История"/><ListBoxItem Content="Отладка"/><ListBoxItem Content="Обслуживание"/><ListBoxItem Content="Ход проверки"/>
      </ListBox>
     </DockPanel>
@@ -223,9 +223,22 @@
         <TextBlock Text="{Binding HwInfoStatus}" Style="{StaticResource SecondaryText}"/>
        </StackPanel>
       </DockPanel>
-      <Grid Grid.Row="1"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="2*"/><RowDefinition Height="Auto"/><RowDefinition Height="3*"/></Grid.RowDefinitions>
+      <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><StackPanel>
+       <TextBlock Text="Датчики HWiNFO" FontSize="18" FontWeight="SemiBold" Foreground="#143C87" Margin="0,4,0,10"/>
+       <ItemsControl ItemsSource="{Binding HwInfoSensors}" Margin="-5,0,-5,18">
+        <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate><DataTemplate>
+         <Border Width="230" MinHeight="125" Margin="5" Padding="14" CornerRadius="8" BorderBrush="#CBD9E6" BorderThickness="1" Background="White" ToolTip="{Binding Name}">
+          <StackPanel>
+           <TextBlock Text="{Binding Category}" Foreground="#597087" FontSize="12"/>
+           <TextBlock Text="{Binding Value}" Foreground="#143C87" FontSize="23" FontWeight="SemiBold" Margin="0,6,0,6"/>
+           <TextBlock Text="{Binding Name}" Foreground="#263F55" TextWrapping="Wrap" FontSize="12"/>
+          </StackPanel>
+         </Border>
+        </DataTemplate></ItemsControl.ItemTemplate>
+       </ItemsControl>
        <TextBlock Text="Сеть" FontWeight="SemiBold" Foreground="#143C87" Margin="0,0,0,6"/>
-       <DataGrid Grid.Row="1" ItemsSource="{Binding NetworkAdapters}" RowHeight="NaN" MinRowHeight="44">
+       <DataGrid ItemsSource="{Binding NetworkAdapters}" RowHeight="NaN" MinRowHeight="44" MinHeight="100" MaxHeight="300">
         <DataGrid.Columns>
          <DataGridTextColumn Header="Адаптер" Binding="{Binding Name}" Width="150"/>
          <DataGridTextColumn Header="Тип" Binding="{Binding Type}" Width="85"/>
@@ -235,11 +248,7 @@
          <DataGridTemplateColumn Header="IP-адреса" Width="*"><DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding Addresses}" TextWrapping="Wrap" Padding="4,6"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
         </DataGrid.Columns>
        </DataGrid>
-       <TextBlock Grid.Row="2" Text="Датчики" FontWeight="SemiBold" Foreground="#143C87" Margin="0,12,0,6"/>
-       <DataGrid Grid.Row="3" ItemsSource="{Binding HwInfoSensors}" IsReadOnly="True" AutoGenerateColumns="False" RowHeight="NaN" MinRowHeight="38">
-        <DataGrid.Columns><DataGridTextColumn Header="Категория" Binding="{Binding Category}" Width="130"/><DataGridTextColumn Header="Датчик" Binding="{Binding Name}" Width="*"/><DataGridTextColumn Header="Значение" Binding="{Binding Value}" Width="115"/><DataGridTextColumn Header="Снято" Binding="{Binding CapturedAt}" Width="145"/></DataGrid.Columns>
-       </DataGrid>
-      </Grid>
+      </StackPanel></ScrollViewer>
      </Grid>
     </TabItem>
     <TabItem Header="Процессы">
@@ -247,7 +256,7 @@
       <TextBlock Text="{Binding ProcessStatus}" Foreground="#2D4354" Margin="0,0,0,6" TextWrapping="Wrap"/>
       <TextBlock Grid.Row="1" Text="{Binding ProcessAllowStatus}" Foreground="#2D4354" Margin="0,0,0,10" TextWrapping="Wrap"/>
       <DataGrid Grid.Row="2" ItemsSource="{Binding Processes}" SelectionMode="Single"><DataGrid.Columns>
-       <DataGridTextColumn Header="Процесс" Binding="{Binding Name}" Width="130"/><DataGridTextColumn Header="Название" Binding="{Binding Description}" Width="*"/><DataGridTextColumn Header="Издатель" Binding="{Binding Publisher}" Width="220"/><DataGridTextColumn Header="Подпись" Binding="{Binding Signature}" Width="90"/><DataGridTemplateColumn Header="Правило" Width="76"><DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><Button Content="&#xE73E;" FontFamily="Segoe MDL2 Assets" Click="AllowProcess_Click" Tag="{Binding}" Width="28" Height="28" Padding="0" Margin="1" ToolTip="Разрешить этот процесс на сервере" AutomationProperties.Name="Разрешить процесс"/><Button Content="&#xE72E;" FontFamily="Segoe MDL2 Assets" Click="TrustProcessPublisher_Click" Tag="{Binding}" IsEnabled="{Binding CanTrustPublisher}" Width="28" Height="28" Padding="0" Margin="1" ToolTip="Доверять издателю с действительной подписью" AutomationProperties.Name="Доверять издателю"/></StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+       <DataGridTextColumn Header="Процесс" Binding="{Binding Name}" Width="130"/><DataGridTextColumn Header="Название" Binding="{Binding Description}" Width="*"/><DataGridTextColumn Header="Издатель" Binding="{Binding Publisher}" Width="220"/><DataGridTextColumn Header="Подпись" Binding="{Binding Signature}" Width="90"/><DataGridTemplateColumn Header="Правило" Width="76"><DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><Button Content="&#x2713;" FontFamily="Segoe UI Symbol, Segoe UI" Click="AllowProcess_Click" Tag="{Binding}" Width="28" Height="28" Padding="0" Margin="1" ToolTip="Разрешить этот процесс на сервере" AutomationProperties.Name="Разрешить процесс"/><Button Content="&#x2699;" FontFamily="Segoe UI Symbol, Segoe UI" Click="TrustProcessPublisher_Click" Tag="{Binding}" IsEnabled="{Binding CanTrustPublisher}" Width="28" Height="28" Padding="0" Margin="1" ToolTip="Доверять издателю с действительной подписью" AutomationProperties.Name="Доверять издателю"/></StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
       </DataGrid.Columns></DataGrid>
      </Grid>
     </TabItem>

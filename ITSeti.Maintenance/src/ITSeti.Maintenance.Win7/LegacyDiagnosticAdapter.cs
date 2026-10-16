@@ -15,6 +15,9 @@ namespace ITSeti.Maintenance.Win7
             Guid.TryParse(source.Id, out id);
             DateTimeOffset.TryParse(source.StartedAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out started);
             var sensors = new List<HwInfoSensorReading>();
+            foreach (var sensor in source.HwInfoSensors ?? new List<LegacyHwInfoSensor>())
+                if (HwInfoSensorPolicy.IsValidValue(sensor.Category, sensor.Value))
+                    sensors.Add(new HwInfoSensorReading(sensor.Name, sensor.Value, sensor.Unit, sensor.Category));
             Add(sensors, "CPU", "CpuTemperature", source.CpuTemperatureC, "°C");
             Add(sensors, "VRM", "VrmTemperature", source.VrmTemperatureC, "°C");
             Add(sensors, "PCH", "PchTemperature", source.PchTemperatureC, "°C");
@@ -33,7 +36,7 @@ namespace ITSeti.Maintenance.Win7
                 new List<PhysicalDiskDetails>(), smart, new List<ProcessDetails>(),
                 source.Events.Select(e => new EventDetails(e.Log ?? "", e.Source ?? "", (int)e.Id, e.Level, e.Time ?? "", e.Message ?? "")).ToList(),
                 0, 0, false, new DiskBenchmark(benchmark?.TargetVolume ?? system?.Name ?? "C:", system?.MediaType ?? "",
-                    benchmark?.ReadMbps, benchmark?.WriteMbps, 0, benchmark?.State ?? "Skipped", benchmark?.Error ?? "", "DiskSpd"), "");
+                    benchmark?.ReadMbps, benchmark?.WriteMbps, 0, benchmark?.State ?? "Skipped", benchmark?.Error ?? "", "DiskSpd"), "", MemoryType: source.MemoryType);
             return new DiagnosticSnapshot(id, started, source.ComputerName ?? "", source.CpuPercent ?? -1,
                 Bytes(source.TotalMemoryGb), Bytes(source.FreeMemoryGb),
                 source.Disks.Select(d => new DiskSnapshot(d.Name ?? "", d.TotalBytes, d.FreeBytes)).ToList(),
@@ -81,7 +84,8 @@ namespace ITSeti.Maintenance.Win7
         private static ulong Bytes(double? gib) => gib.HasValue && Numeric.IsFinite(gib.Value) && gib.Value > 0 ? (ulong)(gib.Value * 1073741824.0) : 0;
         private static void Add(List<HwInfoSensorReading> values, string name, string category, double? value, string unit)
         {
-            if (value.HasValue && HwInfoSensorPolicy.IsValidValue(category, value.Value)) values.Add(new HwInfoSensorReading(name, value.Value, unit, category));
+            if (value.HasValue && HwInfoSensorPolicy.IsValidValue(category, value.Value) && !values.Any(item => item.Category == category))
+                values.Add(new HwInfoSensorReading(name, value.Value, unit, category));
         }
     }
 }

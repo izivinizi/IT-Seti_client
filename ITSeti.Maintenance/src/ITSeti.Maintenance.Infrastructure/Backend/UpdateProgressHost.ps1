@@ -13,8 +13,8 @@ try {
       <TextBlock x:Name="VersionLabel" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" FontSize="16" Foreground="#263C52" Margin="0,7,0,18"/>
       <ProgressBar x:Name="Progress" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Height="8" IsIndeterminate="True" Foreground="#326EFF" Background="#E6EDF2" BorderThickness="0"/>
       <TextBlock x:Name="StatusLabel" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Text="Ожидаем закрытия приложения…" FontSize="16" Foreground="#263C52" TextWrapping="Wrap" Margin="0,16,0,0"/>
-      <TextBlock Text="После завершения запустите приложение снова." FontSize="14" Foreground="#52677A" TextWrapping="Wrap" Margin="0,10,0,0"/>
-      <Button x:Name="CloseButton" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Content="Закрыть" Padding="18,8" HorizontalAlignment="Right" Margin="0,20,0,0" Visibility="Collapsed"/>
+      <TextBlock Text="После установки приложение откроется автоматически. Это окно можно закрыть." FontSize="14" Foreground="#52677A" TextWrapping="Wrap" Margin="0,10,0,0"/>
+      <Button x:Name="CloseButton" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Content="Закрыть" Padding="18,8" HorizontalAlignment="Right" Margin="0,20,0,0"/>
     </StackPanel>
   </Border>
 </Window>
@@ -30,8 +30,15 @@ try {
     $closeButton.Add_Click({$window.Close()})
     $timer=New-Object Windows.Threading.DispatcherTimer
     $timer.Interval=[TimeSpan]::FromMilliseconds(500)
+    $deadline=[DateTime]::UtcNow.AddMinutes(30)
     $timer.Add_Tick({
         try {
+            if([DateTime]::UtcNow -ge $deadline){
+                $statusLabel.Text='Ожидание установки превысило 30 минут. Подробности доступны в журнале обновления.'
+                $progress.IsIndeterminate=$false
+                $timer.Stop()
+                return
+            }
             if(!(Test-Path -LiteralPath $StatusPath -PathType Leaf)){return}
             $line=[IO.File]::ReadAllText($StatusPath,[Text.Encoding]::UTF8)
             $separator=$line.IndexOf('|')
@@ -39,12 +46,13 @@ try {
             if(!$message -or $message -eq $script:lastMessage){return}
             $script:lastMessage=$message
             $statusLabel.Text=$message
-            if($message -match 'установлена\. Запустите приложение снова\.'){
+            if($message -match 'Версия \d+\.\d+\.\d+(?:\.\d+)? установлена|обновление не требуется'){
                 $heading.Text='Обновление завершено'
                 $progress.IsIndeterminate=$false
                 $progress.Value=100
                 $closeButton.Visibility='Visible'
                 $timer.Stop()
+                $window.Close()
             } elseif($message.StartsWith('Ошибка обновления:')) {
                 $heading.Text='Обновление не выполнено'
                 $progress.IsIndeterminate=$false

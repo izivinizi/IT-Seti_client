@@ -20,7 +20,10 @@ $appStartup=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Ap
 $mainWindow=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml.cs') -Raw
 $organizationRunner=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\OrganizationSetupRunner.cs') -Raw
 $server=Get-Content -LiteralPath (Join-Path (Split-Path $Root -Parent) 'ITSeti.Server\Program.cs') -Raw
-if($serviceProject -notmatch '<Version>2\.4\.9</Version>' -or
+$appProject=[xml](Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.App\ITSeti.Maintenance.App.csproj') -Raw)
+$serviceVersion=([xml]$serviceProject).Project.PropertyGroup.Version | Where-Object {$_} | Select-Object -First 1
+$appVersion=$appProject.Project.PropertyGroup.Version | Where-Object {$_} | Select-Object -First 1
+if(!$serviceVersion -or $serviceVersion -ne $appVersion -or
    !$protocol.Contains('ITSetiMaintenanceService') -or !$protocol.Contains('ITSeti.Maintenance.Service.v1') -or
    !$coordinator.Contains('BuiltinUsersSid') -or !$coordinator.Contains('PipeAccessRights.ReadWrite') -or
    !$coordinator.Contains('ResolveOperation') -or $coordinator.Contains('ProcessStartInfo(request') -or
@@ -103,8 +106,8 @@ if(!$coordinator.Contains('TicketUpdateMonitor') -or !$coordinator.Contains('Pol
    !$server.Contains('if (!since.HasValue) { cursor = serverTime; cursorId = Guid.Empty; }')) {
     throw 'Service-owned ticket polling, durable deduplicated queue, or silent initial cursor is missing.'
 }
-if(!$ticketMonitor.Contains('onIncomingMessages?.Invoke(incoming)') -or
-   !$coordinator.Contains('new TicketUpdateMonitor(onIncomingMessages: WtsTicketNotification.Show)') -or
+if(!$ticketMonitor.Contains('PendingNotifications') -or
+   !$coordinator.Contains('new TicketUpdateMonitor(tryDeliverMessages: WtsTicketNotification.Show)') -or
    !$wtsNotification.Contains('WTSEnumerateSessionsW') -or !$wtsNotification.Contains('WTSSendMessageW') -or
    !$wtsNotification.Contains('WtsActive') -or !$wtsNotification.Contains('NotificationTimeoutSeconds = 30') -or
    !$wtsNotification.Contains('NotificationTimeoutSeconds, out _, false') -or
@@ -113,7 +116,7 @@ if(!$ticketMonitor.Contains('onIncomingMessages?.Invoke(incoming)') -or
    !$install.Contains("Remove-Item -LiteralPath (Join-Path `$InstallRoot 'Notifier')") -or
    $install.Contains("Set-ItemProperty -Path `$runKey -Name 'ITSeti-Maintenance-Tickets'") -or
    $appStartup.Contains('StartTicketNotifier') -or $mainWindow.Contains('TicketMessagePoller') -or
-   $mainWindow.Contains('Closing +=') -or $builder.Contains('dotnet publish $notifierProject') -or
+   $builder.Contains('dotnet publish $notifierProject') -or
    $installer.Contains('{#PackageRoot}\Notifier\*') -or
    !$uninstall.Contains("'ITSeti-Maintenance-Tickets'")) {
     throw 'Ticket polling must suspend when idle and service notifications must target active user sessions without a notifier process.'

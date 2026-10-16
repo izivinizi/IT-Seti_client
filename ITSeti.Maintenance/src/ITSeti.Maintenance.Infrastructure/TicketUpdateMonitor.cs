@@ -17,17 +17,20 @@ public sealed class TicketUpdateMonitor : IDisposable
     private readonly HttpClient http;
     private readonly TimeSpan requestTimeout;
     private readonly Action<IReadOnlyList<TicketUpdateMessage>>? onIncomingMessages;
+    private readonly Func<IReadOnlyList<TicketUpdateMessage>, bool>? tryDeliverMessages;
 
     public string StatePath => statePath;
 
     public TicketUpdateMonitor(string? dataRoot = null, HttpMessageHandler? handler = null, TimeSpan? requestTimeout = null,
-        Action<IReadOnlyList<TicketUpdateMessage>>? onIncomingMessages = null)
+        Action<IReadOnlyList<TicketUpdateMessage>>? onIncomingMessages = null,
+        Func<IReadOnlyList<TicketUpdateMessage>, bool>? tryDeliverMessages = null)
     {
         this.dataRoot = dataRoot ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance");
         supportPath = Path.Combine(this.dataRoot, "server-support.json");
         statePath = Path.Combine(this.dataRoot, "Service", "ticket-updates.json");
         this.requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(15);
         this.onIncomingMessages = onIncomingMessages;
+        this.tryDeliverMessages = tryDeliverMessages;
         if (this.requestTimeout <= TimeSpan.Zero || this.requestTimeout.TotalMilliseconds > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(requestTimeout));
         http = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
@@ -90,12 +93,21 @@ public sealed class TicketUpdateMonitor : IDisposable
             }
         }
 
+        var pending = (state.PendingNotifications ?? []).Concat(incoming).DistinctBy(item => item.Id).TakeLast(500).ToArray();
         var next = new TicketUpdateState(config.DeviceId, cursorValue, cursorId, activeCount,
-            DateTimeOffset.UtcNow, messages.TakeLast(500).ToArray());
+            DateTimeOffset.UtcNow, messages.TakeLast(500).ToArray(), pending);
         await WriteStateAsync(next, cancellationToken);
         if (incoming.Count > 0) onIncomingMessages?.Invoke(incoming);
+        // Commit the cursor before delivery, but retain the notice until Windows
+        // actually has an interactive session. Boot and logon are separate events.
+        if (pending.Length > 0 && tryDeliverMessages?.Invoke(pending) == true)
+        {
+            next = next with { PendingNotifications = [] };
+            await WriteStateAsync(next, cancellationToken);
+        }
         if (hasMore) return TimeSpan.FromSeconds(1);
-        return activeCount > 0 ? TimeSpan.FromSeconds(30) : Timeout.InfiniteTimeSpan;
+        return activeCount > 0 || next.PendingNotifications is { Count: > 0 } && tryDeliverMessages is not null
+            ? TimeSpan.FromSeconds(30) : Timeout.InfiniteTimeSpan;
     }
 
     private TicketSupportConfiguration? ReadSupportConfiguration()
@@ -128,7 +140,10 @@ public sealed class TicketUpdateMonitor : IDisposable
             if (new FileInfo(statePath).Length > 512 * 1024) return TicketUpdateState.Empty(deviceId);
             var state = JsonSerializer.Deserialize<TicketUpdateState>(File.ReadAllText(statePath), JsonOptions);
             return state?.DeviceId == deviceId && state.Messages is not null
-                ? state with { Messages = state.Messages.Where(message => message is not null && message.Id != Guid.Empty).TakeLast(500).ToArray() }
+                ? state with {
+                    Messages = state.Messages.Where(message => message is not null && message.Id != Guid.Empty).TakeLast(500).ToArray(),
+                    PendingNotifications = (state.PendingNotifications ?? []).Where(message => message is not null && message.Id != Guid.Empty).TakeLast(500).ToArray()
+                }
                 : TicketUpdateState.Empty(deviceId);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException or KeyNotFoundException)
@@ -160,7 +175,8 @@ public sealed class TicketUpdateMonitor : IDisposable
 public sealed record TicketUpdateMessage(Guid Id, string Title, DateTimeOffset CreatedAt);
 
 public sealed record TicketUpdateState(string DeviceId, DateTimeOffset? Cursor, Guid CursorId, int ActiveCount,
-    DateTimeOffset UpdatedAtUtc, IReadOnlyList<TicketUpdateMessage> Messages)
+    DateTimeOffset UpdatedAtUtc, IReadOnlyList<TicketUpdateMessage> Messages,
+    IReadOnlyList<TicketUpdateMessage>? PendingNotifications = null)
 {
     public static TicketUpdateState Empty(string deviceId) => new(deviceId, null, Guid.Empty, 0, DateTimeOffset.MinValue, []);
 }

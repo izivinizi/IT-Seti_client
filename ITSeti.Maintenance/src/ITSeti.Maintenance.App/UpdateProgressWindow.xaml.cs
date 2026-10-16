@@ -5,10 +5,12 @@ namespace ITSeti.Maintenance.App;
 
 public partial class UpdateProgressWindow : Window
 {
-    private readonly Func<IProgress<string>?, Task<bool>> runUpdate;
-    private bool operationFinished;
+    private readonly Func<IProgress<string>?, CancellationToken, Task<bool>> runUpdate;
+    private readonly CancellationTokenSource cancellation = new();
+    private bool closed;
+    private bool runCompleted;
 
-    public UpdateProgressWindow(string targetVersion, Func<IProgress<string>?, Task<bool>> runUpdate)
+    public UpdateProgressWindow(string targetVersion, Func<IProgress<string>?, CancellationToken, Task<bool>> runUpdate)
     {
         InitializeComponent();
         this.runUpdate = runUpdate;
@@ -16,9 +18,10 @@ public partial class UpdateProgressWindow : Window
             ? "Подготовка обновления с сервера"
             : $"Версия {targetVersion}";
         Loaded += async (_, _) => await RunAsync();
-        Closing += (_, args) =>
+        Closing += (_, _) =>
         {
-            if (!operationFinished) args.Cancel = true;
+            closed = true;
+            if (!runCompleted) cancellation.Cancel();
         };
     }
 
@@ -27,12 +30,12 @@ public partial class UpdateProgressWindow : Window
         var progress = new Progress<string>(SetStatus);
         try
         {
-            if (await runUpdate(progress))
+            if (await runUpdate(progress, cancellation.Token))
             {
+                if (closed) return;
                 StatusLabel.Text = "Установщик загружен и проверен. Приложение закроется для установки.";
-                HintLabel.Text = "После завершения откройте приложение снова.";
-                await Task.Delay(1100);
-                operationFinished = true;
+                HintLabel.Text = "После установки приложение откроется автоматически.";
+                await Task.Delay(500, cancellation.Token);
                 DialogResult = true;
                 return;
             }
@@ -41,21 +44,23 @@ public partial class UpdateProgressWindow : Window
             UpdateProgress.Value = 0;
             HintLabel.Text = "Приложение осталось открытым. Можно закрыть это окно и повторить попытку позже.";
             CloseButton.Visibility = Visibility.Visible;
-            operationFinished = true;
         }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         catch (Exception ex)
         {
+            if (closed) return;
             SetStatus("Не удалось обновить приложение: " + ex.Message);
             UpdateProgress.IsIndeterminate = false;
             UpdateProgress.Value = 0;
             HintLabel.Text = "Приложение осталось открытым. Проверьте подключение и повторите попытку.";
             CloseButton.Visibility = Visibility.Visible;
-            operationFinished = true;
         }
+        finally { runCompleted = true; cancellation.Dispose(); }
     }
 
     private void SetStatus(string message)
     {
+        if (closed) return;
         StatusLabel.Text = message;
         var match = Regex.Match(message, @"Скачивание установщика:\s*(?<percent>\d{1,3})%");
         if (!match.Success || !double.TryParse(match.Groups["percent"].Value, out var percent)) return;

@@ -125,12 +125,10 @@ namespace ITSeti.Maintenance.App
             window.ShowDialog();
         }
 
-        private async void OpenServerAssignment_Click(object sender, RoutedEventArgs e)
+        private void OpenServerAssignment_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                using (var enrollment = new Win7ServerEnrollmentClient())
-                    if (await enrollment.TryAutomaticEnrollmentAsync()) { if (current != null) Render(current); return; }
                 new Win7ServerEnrollmentDialog(this).ShowDialog();
                 if (current != null) Render(current);
             }

@@ -23,6 +23,8 @@ public partial class ServerAssignmentDialog : Window
         InitializeComponent();
         CompanyBox.AddHandler(TextBoxBase.TextChangedEvent, new TextChangedEventHandler(CompanyBox_TextChanged));
         SiteBox.AddHandler(TextBoxBase.TextChangedEvent, new TextChangedEventHandler(SiteBox_TextChanged));
+        CompanyBox.DropDownOpened += (_, _) => ExpandChoices(CompanyBox, () => RefreshCompanies(null));
+        SiteBox.DropDownOpened += (_, _) => ExpandChoices(SiteBox, () => RefreshSites());
         Loaded += LoadAsync;
     }
 
@@ -40,7 +42,7 @@ public partial class ServerAssignmentDialog : Window
             CompanyBox.ItemsSource = companies;
             SiteBox.ItemsSource = sites;
             updating = true;
-            RefreshCompanies(current.CompanyId > 0 ? current.Company : null);
+            RefreshCompanies(null);
             CompanyBox.SelectedItem = companies.FirstOrDefault(item => item.Id == current.CompanyId);
             RefreshSites();
             if (current.SiteId is { } siteId && sites.FirstOrDefault(item => item.Id == siteId) is { } selectedSite)
@@ -63,6 +65,15 @@ public partial class ServerAssignmentDialog : Window
         var value = query?.Trim() ?? "";
         companies.Clear();
         foreach (var item in allCompanies.Where(item => value.Length == 0 || item.Name.Contains(value, StringComparison.CurrentCultureIgnoreCase))) companies.Add(item);
+    }
+
+    private void ExpandChoices(ComboBox box, Action refresh)
+    {
+        if (updating || busy || box.SelectedItem is not { } selected) return;
+        updating = true;
+        try { refresh(); box.SelectedItem = selected; }
+        finally { updating = false; }
+        UpdateSaveState();
     }
 
     private void RefreshSites(string? query = null)

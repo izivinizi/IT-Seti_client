@@ -29,17 +29,20 @@ internal static class Program
         Environment.SetEnvironmentVariable("ITSETI_DISABLE_REPORT_UPLOAD", "1");
         if (args.Contains("--performance-contract")) return PerformanceContract.Run();
         if (args.Contains("--refactor-contract")) return RefactorContract.Run();
+        if (args.Contains("--feedback-regressions")) return FeedbackRegressionChecks.Run(args.Contains("--live-hardware"));
+        if (args.Contains("--icons-contract")) return CheckRestoredIcons();
         if (args.Contains("--monitoring-history-contract")) return CheckMonitoringHistoryContract();
         if (args.Contains("--installed-report-reader-contract")) return CheckInstalledReportReaderContract();
         if (args.Contains("--live-update-contract"))
         {
             var updateClient = new ServerApplicationUpdateClient();
+            var currentVersion = typeof(MainWindow).Assembly.GetName().Version!;
             var release = updateClient.GetUpdateAsync(new Version(2, 3, 6)).GetAwaiter().GetResult();
-            if (release?.Version != new Version(2, 4, 7) || !release.DownloadUrl.StartsWith("https://it-seti.nylenz.ru/api/v1/packages/", StringComparison.Ordinal))
-                throw new Exception("Live server did not offer 2.4.8 for 2.3.6");
-            if (updateClient.GetUpdateAsync(new Version(2, 4, 7)).GetAwaiter().GetResult() is not null)
+            if (release?.Version != currentVersion || !release.DownloadUrl.StartsWith("https://it-seti.nylenz.ru/api/v1/packages/", StringComparison.Ordinal))
+                throw new Exception("Live server did not offer the current build for 2.3.6");
+            if (updateClient.GetUpdateAsync(currentVersion).GetAwaiter().GetResult() is not null)
                 throw new Exception("Live server offers reinstall of already-current version");
-            Console.WriteLine("PASS live server: 2.3.6 receives 2.4.8, 2.4.8 is current, authenticated package URL validated");
+            Console.WriteLine($"PASS live server: 2.3.6 receives {currentVersion}, current version is not reinstalled, authenticated package URL validated");
             return 0;
         }
         if (args.Contains("--service-concurrency-contract"))
@@ -615,7 +618,13 @@ internal static class Program
                 var adminShell = (UIElement)window.FindName("AdminShell")!;
                 if (args.Contains("--readme-screenshots"))
                 {
-                    await Task.Delay(500);
+                    var initialized = (TaskCompletionSource)typeof(MainWindow).GetField("initializationCompleted",
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(window)!;
+                    await initialized.Task;
+                    ((System.Windows.Threading.DispatcherTimer)typeof(MainWindow).GetField("liveMetricsTimer",
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(window)!).Stop();
+                    typeof(MainViewModel).GetField("live", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                        .SetValue(window.ViewModel, null);
                     var now = DateTimeOffset.Now;
                     var full = new FullDiagnosticDetails("Intel Core i7-13700", "NVIDIA GeForce RTX 4070", false,
                         [new PhysicalDiskDetails("NVMe SSD", "SSD", "Healthy", 1280)],
@@ -642,7 +651,7 @@ internal static class Program
                         System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                         .Invoke(window, null);
                     typeof(MainViewModel).GetField("serviceStatus", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                        .SetValue(window.ViewModel, "Служба работает · 2.4.8");
+                        .SetValue(window.ViewModel, "Служба работает · " + typeof(MainWindow).Assembly.GetName().Version!.ToString(3));
                     typeof(MainViewModel).GetMethod("Notify", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                         .Invoke(window.ViewModel, [Array.Empty<string>()]);
                     window.ViewModel.AdminInventoryInput = "0042";
@@ -1877,6 +1886,47 @@ internal static class Program
         {
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
+    }
+
+    private static int CheckRestoredIcons()
+    {
+        var app = new App(); app.InitializeComponent();
+        var window = new MainWindow(Path.Combine(Path.GetTempPath(), "itseti-icons-" + Guid.NewGuid().ToString("N") + ".db"));
+        static IEnumerable<TextBlock> Blocks(DependencyObject root)
+        {
+            if (root is TextBlock text) yield return text;
+            for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+                foreach (var block in Blocks(VisualTreeHelper.GetChild(root, index))) yield return block;
+        }
+        static void RequireGlyph(TextBlock block)
+        {
+            if (block.FontFamily.Source != "Segoe MDL2 Assets" ||
+                !new Typeface(block.FontFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal).TryGetGlyphTypeface(out var font) ||
+                !font.CharacterToGlyphMap.TryGetValue(block.Text[0], out var glyph) || glyph == 0)
+                throw new Exception("Missing original icon: " + block.Text);
+        }
+        var content = (FrameworkElement)window.Content;
+        void Layout() { content.Measure(new Size(1200, 900)); content.Arrange(new Rect(0, 0, 1200, 900)); content.UpdateLayout(); }
+        Layout();
+        var contact = Blocks((DependencyObject)window.FindName("ContactsButton")!).Single(block => block.Text.Length == 1);
+        if (contact.Text != "\uE77B") throw new Exception("Contacts icon was replaced by a smiley or another symbol.");
+        RequireGlyph(contact);
+        ((UIElement)window.FindName("UserShell")!).Visibility = Visibility.Collapsed;
+        ((UIElement)window.FindName("AdminShell")!).Visibility = Visibility.Visible;
+        ((TabControl)window.FindName("AdminTabs")!).SelectedIndex = 8;
+        Layout();
+        var icons = Blocks((DependencyObject)((TabItem)window.FindName("MaintenanceTab")!).Content)
+            .Where(block => block.DataContext is SystemToolShortcut tool && block.Text == tool.Icon).ToArray();
+        if (icons.Length != window.ViewModel.SystemTools.Count) throw new Exception("System utility icons were not rendered.");
+        foreach (var icon in icons) RequireGlyph(icon);
+        Directory.CreateDirectory("artifacts");
+        var bitmap = new RenderTargetBitmap(1200, 900, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(content);
+        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using (var stream = File.Create("artifacts/restored-maintenance-icons.png")) encoder.Save(stream);
+        window.Close(); app.Shutdown();
+        Console.WriteLine($"PASS: original Contacts icon and {icons.Length} rendered system utility icons have actual MDL2 glyphs.");
+        return 0;
     }
 
     private static T? Find<T>(DependencyObject parent) where T : DependencyObject
