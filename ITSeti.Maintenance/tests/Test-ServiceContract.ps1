@@ -20,7 +20,7 @@ $appStartup=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Ap
 $mainWindow=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.App\MainWindow.xaml.cs') -Raw
 $organizationRunner=Get-Content -LiteralPath (Join-Path $Root 'src\ITSeti.Maintenance.Infrastructure\OrganizationSetupRunner.cs') -Raw
 $server=Get-Content -LiteralPath (Join-Path (Split-Path $Root -Parent) 'ITSeti.Server\Program.cs') -Raw
-if($serviceProject -notmatch '<Version>2\.4\.7</Version>' -or
+if($serviceProject -notmatch '<Version>2\.4\.9</Version>' -or
    !$protocol.Contains('ITSetiMaintenanceService') -or !$protocol.Contains('ITSeti.Maintenance.Service.v1') -or
    !$coordinator.Contains('BuiltinUsersSid') -or !$coordinator.Contains('PipeAccessRights.ReadWrite') -or
    !$coordinator.Contains('ResolveOperation') -or $coordinator.Contains('ProcessStartInfo(request') -or

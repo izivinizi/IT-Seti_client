@@ -114,6 +114,8 @@ namespace ITSeti.Maintenance.App
             private Task monitorTask;
             private NamedPipeServerStream activePipe;
             private readonly MonitoringConfirmation monitoring = new MonitoringConfirmation();
+            private MonitoringReportBatch monitoringBatch = new MonitoringReportBatch();
+            private static string BatchPath { get { return Path.Combine(ServiceRoot, "monitoring-batch.json"); } }
             private DateTime nextSmartAttempt;
             private DateTime nextReportUploadCheckUtc;
 
@@ -129,6 +131,7 @@ namespace ITSeti.Maintenance.App
             protected override void OnStart(string[] args)
             {
                 Directory.CreateDirectory(ServiceRoot);
+                RestoreMonitoringBatch();
                 stop = new CancellationTokenSource();
                 WriteStatus(new Win7ServiceStatus { State = "Starting", Message = "Служба запускается.", StartedAtUtc = UtcNow() });
                 pipeTask = Task.Run(() => PipeLoop(stop.Token));
@@ -556,12 +559,53 @@ namespace ITSeti.Maintenance.App
 
                 var diagnostic = LegacyDiagnosticAdapter.ToSnapshot(snapshot);
                 var confirmed = monitoring.Observe(CriticalMonitoringEvaluator.Evaluate(diagnostic), diagnostic.StartedAt);
-                var critical = confirmed.Select(issue => issue.Title + ". " + issue.Detail).ToList();
-                if (critical.Count == 0) return;
+                monitoringBatch.Add(confirmed, diagnostic.StartedAt);
+                var ready = monitoringBatch.Ready(diagnostic.StartedAt);
+                if (ready.Count == 0)
+                {
+                    if (confirmed.Count > 0) SaveMonitoringBatch();
+                    return;
+                }
                 snapshot.Kind = "Постоянный мониторинг";
-                snapshot.Findings = critical;
+                snapshot.Findings = ready.Select(item => item.Issue.Title + ". " + item.Issue.Detail +
+                    (item.Count > 1 ? " Повторов: " + item.Count + "." : "")).ToList();
                 ServerReportUploader.Queue(snapshot);
+                monitoringBatch.MarkSent(diagnostic.StartedAt);
+                SaveMonitoringBatch();
                 if (ServerReportUploader.Upload() != 0) ServerReportUploader.Trigger();
+            }
+
+            private void SaveMonitoringBatch()
+            {
+                var state = monitoringBatch.Snapshot();
+                WriteAtomically(BatchPath, new JavaScriptSerializer().Serialize(new {
+                    lastSent = state.LastSentAtUtc.HasValue ? state.LastSentAtUtc.Value.ToString("O") : null,
+                    pending = state.Pending.Select(item => new { identity=item.Issue.Identity, title=item.Issue.Title,
+                        detail=item.Issue.Detail, first=item.FirstAtUtc.ToString("O"), last=item.LastAtUtc.ToString("O"), count=item.Count }).ToArray()
+                }));
+            }
+
+            private void RestoreMonitoringBatch()
+            {
+                try
+                {
+                    if (!File.Exists(BatchPath)) return;
+                    var state = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(BatchPath));
+                    DateTimeOffset lastSent;
+                    var sent = state.ContainsKey("lastSent") && DateTimeOffset.TryParse(Convert.ToString(state["lastSent"]), out lastSent)
+                        ? (DateTimeOffset?)lastSent : null;
+                    var pending = new List<MonitoringOccurrence>();
+                    if (state.ContainsKey("pending")) foreach (var value in (System.Collections.IEnumerable)state["pending"])
+                    {
+                        var item = (Dictionary<string, object>)value;
+                        pending.Add(new MonitoringOccurrence(new CriticalMonitoringIssue(Convert.ToString(item["identity"]),
+                            Convert.ToString(item["title"]), Convert.ToString(item["detail"])),
+                            DateTimeOffset.Parse(Convert.ToString(item["first"])), DateTimeOffset.Parse(Convert.ToString(item["last"])), Convert.ToInt32(item["count"])));
+                    }
+                    monitoringBatch = new MonitoringReportBatch(new MonitoringBatchState(sent, pending));
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException ||
+                    ex is FormatException || ex is InvalidCastException || ex is KeyNotFoundException) { WriteError(ex); }
             }
 
             private static bool IsAdministrator(NamedPipeServerStream pipe)

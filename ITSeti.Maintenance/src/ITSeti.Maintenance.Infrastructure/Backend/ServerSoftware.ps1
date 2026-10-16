@@ -60,7 +60,9 @@ function Assert-ServerPackage($Package) {
     $extension = [IO.Path]::GetExtension([string]$Package.fileName).ToLowerInvariant()
     if ($id -eq [Guid]::Empty -or $key -notin @('rms','anydesk','ocs','panel','winrar','yandex') -or
         [string]$Package.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or [long]$Package.sizeBytes -le 0 -or [long]$Package.sizeBytes -gt 1GB -or
-        ($key -eq 'rms' -and $extension -ne '.msi') -or ($key -ne 'rms' -and $extension -ne '.exe')) { throw 'Invalid package metadata or installer type.' }
+        ($key -eq 'rms' -and $extension -ne '.msi') -or
+        ($key -eq 'yandex' -and $extension -notin @('.exe','.msi')) -or
+        ($key -notin @('rms','yandex') -and $extension -ne '.exe')) { throw 'Invalid package metadata or installer type.' }
 }
 try {
     try {
@@ -189,6 +191,11 @@ try {
                 'winrar' { '/S' }
                 'yandex' { '--silent --system-level --do-not-launch-browser' }
             }
+            if ($key -eq 'yandex' -and $extension -eq '.msi') {
+                $executable = Join-Path $env:WINDIR 'System32\msiexec.exe'
+                $arguments = '/i "'+$installer+'" /qn /norestart REBOOT=ReallySuppress /l*v "'+(Join-Path $root 'server-yandex-install.log')+'"'
+            }
+            $installStartedUtc = [DateTime]::UtcNow
             $process = Start-Process -FilePath $executable -ArgumentList $arguments -WorkingDirectory $downloadRoot -WindowStyle Hidden -PassThru
             $completedFromInstallMarker = $false
             try {
@@ -223,6 +230,19 @@ try {
                                 $detail += " MSI log: $msiLog" + [Environment]::NewLine + ($logTail -join [Environment]::NewLine)
                             } else { $detail += " MSI log exists but its final 80 lines could not be read: $msiLog" }
                         } else { $detail += " MSI log was not created: $msiLog" }
+                    }
+                    if ($key -eq 'yandex') {
+                        foreach ($log in @((Join-Path $root 'server-yandex-install.log'),
+                            (Join-Path $env:WINDIR 'Temp\yandex_browser_installer.log'),
+                            (Join-Path $env:WINDIR 'SystemTemp\yandex_browser_installer.log'),
+                            (Join-Path $env:WINDIR 'Temp\browser_installer.log'))) {
+                            if ((Test-Path -LiteralPath $log -PathType Leaf) -and
+                                (Get-Item -LiteralPath $log).LastWriteTimeUtc -ge $installStartedUtc.AddSeconds(-5)) {
+                                $detail += [Environment]::NewLine + "Installer log: $log" + [Environment]::NewLine +
+                                    ((Get-Content -LiteralPath $log -Tail 60 -ErrorAction SilentlyContinue) -join [Environment]::NewLine)
+                            }
+                        }
+                        $detail += [Environment]::NewLine + 'Для установки под SYSTEM используйте полный корпоративный EXE или MSI-пакет Яндекс Браузера. Онлайн-установщику нужен доступ к серверам загрузки из-под SYSTEM.'
                     }
                     throw $detail
                 }

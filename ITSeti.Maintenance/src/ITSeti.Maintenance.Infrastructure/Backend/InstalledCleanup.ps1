@@ -1,7 +1,9 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $base = Join-Path $env:ProgramData 'ITSeti\Maintenance'
 $queue = Join-Path $base 'CleanupRequests'
 $worker = Join-Path $PSScriptRoot 'AppCleanupWorker.ps1'
+$failures = @()
+if (!(Test-Path -LiteralPath $queue -PathType Container)) { exit 0 }
 foreach ($request in @(Get-ChildItem -LiteralPath $queue -Filter '*.request' -File -ErrorAction Stop | Sort-Object CreationTimeUtc)) {
     $job = $null
     $run = $null
@@ -18,6 +20,8 @@ foreach ($request in @(Get-ChildItem -LiteralPath $queue -Filter '*.request' -Fi
         if (!(Test-Path -LiteralPath (Join-Path $job 'ready.txt') -PathType Leaf)) { throw 'User cleanup worker is not ready.' }
         & $worker -JobRoot $job -TrustedScriptsRoot $PSScriptRoot -StatusRoot $run
     } catch {
+        $failures += $_.Exception.Message
+        Write-Error -Message ('Системная очистка: ' + $_.Exception.Message) -ErrorAction Continue
         if ($run -and (Test-Path -LiteralPath $run -PathType Container)) {
             try { [IO.File]::WriteAllText((Join-Path $run 'admin-stage.txt'), ('System cleanup failed: ' + $_.Exception.Message), [Text.Encoding]::UTF8) } catch { }
         }
@@ -28,3 +32,4 @@ foreach ($request in @(Get-ChildItem -LiteralPath $queue -Filter '*.request' -Fi
         Remove-Item -LiteralPath $request.FullName -Force -ErrorAction SilentlyContinue
     }
 }
+if ($failures.Count) { exit 1 }

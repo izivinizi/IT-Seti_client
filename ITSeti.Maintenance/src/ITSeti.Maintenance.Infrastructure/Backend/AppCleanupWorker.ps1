@@ -5,6 +5,7 @@ $script:CompactOutput=$true
 $OriginalIdentity=(Get-Acl -LiteralPath $JobRoot).Owner
 function Write-Stage([string]$Text) {$Text | Set-Content -LiteralPath (Join-Path $StatusRoot 'admin-stage.txt') -Encoding UTF8}
 function Section([string]$Text) {Write-Stage $Text}
+$failures = @()
 try {
     if(!$script:Admin){throw 'Повышенные права не получены.'}
     if(Get-Process cleanmgr,dism,sfc -ErrorAction SilentlyContinue){throw 'Уже работает очистка или восстановление Windows.'}
@@ -15,13 +16,17 @@ try {
     try {
         $userResult=Invoke-OriginalUserCleanup $JobRoot $StatusRoot
         $userResult | Set-Content -LiteralPath (Join-Path $StatusRoot 'user-cleanup.txt') -Encoding UTF8
-    } catch {('Не выполнена: '+$_.Exception.Message) | Set-Content -LiteralPath (Join-Path $StatusRoot 'user-cleanup.txt') -Encoding UTF8}
+    } catch {$failures += $_.Exception.Message; ('Не выполнена: '+$_.Exception.Message) | Set-Content -LiteralPath (Join-Path $StatusRoot 'user-cleanup.txt') -Encoding UTF8}
     Write-Stage 'Очистка системных файлов и обновлений Windows…'
     try {
         Invoke-Cleanup
         $selectedText=if($script:CleanupResult.SelectedCategories.Count){$script:CleanupResult.SelectedCategories -join ', '}else{'нет'}
         $unavailableText=if($script:CleanupResult.UnavailableCategories.Count){$script:CleanupResult.UnavailableCategories -join ', '}else{'нет'}
         ('Код {0}; системные категории: {1}; отсутствуют в этой Windows: {2}; изменение свободного места {3:N2} ГБ (включая работу других программ).' -f $script:CleanupResult.ExitCode,$selectedText,$unavailableText,$script:CleanupResult.ChangeGB) | Set-Content -LiteralPath (Join-Path $StatusRoot 'admin-cleanup.txt') -Encoding UTF8
-    } catch {('Не выполнена: '+$_.Exception.Message) | Set-Content -LiteralPath (Join-Path $StatusRoot 'admin-cleanup.txt') -Encoding UTF8}
-    Write-Stage 'Очистка завершена.'
-} catch {Write-Stage ('Ошибка очистки: '+$_.Exception.Message)}
+    } catch {$failures += $_.Exception.Message; ('Не выполнена: '+$_.Exception.Message) | Set-Content -LiteralPath (Join-Path $StatusRoot 'admin-cleanup.txt') -Encoding UTF8}
+    if ($script:CleanupResult) {
+        $script:CleanupResult | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $StatusRoot 'cleanup-categories.json') -Encoding UTF8
+    }
+    Write-Stage $(if ($failures.Count) { 'Очистка завершена частично; подробности сохранены.' } else { 'Очистка завершена.' })
+} catch {$failures += $_.Exception.Message; Write-Stage ('Ошибка очистки: '+$_.Exception.Message)}
+if ($failures.Count) { throw ($failures -join [Environment]::NewLine) }

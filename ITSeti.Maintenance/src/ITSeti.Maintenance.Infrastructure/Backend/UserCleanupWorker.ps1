@@ -96,7 +96,10 @@ try {
                 $start.CreateNoWindow=$true
                 $start.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
                 $p=[Diagnostics.Process]::Start($start)
-                $p.WaitForExit()
+                if (!$p.WaitForExit(600000)) {
+                    try { $p.Kill() } catch { }
+                    throw 'Штатная очистка профиля превысила 10 минут; выполняется базовая очистка.'
+                }
                 if($p.ExitCode -ne 0){throw ('cleanmgr: код '+$p.ExitCode)}
             } catch {
                 $cleanmgrError=([string]$_.Exception.Message) -replace '[\r\n]+',' '

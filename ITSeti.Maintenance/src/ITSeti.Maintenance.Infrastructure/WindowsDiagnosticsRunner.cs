@@ -69,7 +69,7 @@ public sealed class WindowsDiagnosticsRunner : IDiagnosticsRunner
             CpuTemperatureCapturedAtUtc: temperature.CapturedAtUtc,
             CpuPercentCapturedAtUtc: cpuLoadCapturedAt,
             MemoryUsedPercentCapturedAtUtc: memoryLoadCapturedAt,
-            NetworkAdapters: ReadNetworkAdapters());
+            NetworkAdapters: ReadNetworkAdapters(), DiskLatencies: diskLatencySampler?.LastReadings);
     }, cancellationToken);
 
     internal static async Task<double> ReadCpuPercentAsync(double? hwInfoLoad, bool allowProcessFallback, CancellationToken cancellationToken)
