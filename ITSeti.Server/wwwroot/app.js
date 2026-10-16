@@ -141,6 +141,7 @@ function sensorHistoryValues(history, category) {
       property(sensor, 'name') === sensorName);
     const sensor = value && typeof value === 'object' ? value : null;
     if (sensor) value = property(sensor, 'value');
+    if (value == null || value === '' || typeof value === 'boolean') return [];
     const numeric = Number(value);
     return capturedAt && Number.isFinite(numeric) ? [{ capturedAt: new Date(capturedAt), value: numeric, sensorName }] : [];
   }).filter(point => Number.isFinite(point.capturedAt.getTime())).sort((a, b) => a.capturedAt - b.capturedAt);
@@ -194,7 +195,6 @@ function showTelemetryChart(history, category, label) {
   $('telemetry-stats').replaceChildren(
     node('span', `Мин. ${min.toFixed(2)}${suffix}`), node('span', `Сред. ${average.toFixed(2)}${suffix}`), node('span', `Макс. ${max.toFixed(2)}${suffix}`));
   $('telemetry-dialog').showModal();
-  navigationDialog = { kind: 'telemetry', history, category, label }; rememberNavigation();
 }
 
 function telemetryButton(history, category, label) {
@@ -404,20 +404,38 @@ async function selectDevice(device, requestedRunId = null, remember = true) {
   blockButton.textContent = device.ticketsBlocked ? 'Разрешить заявки' : 'Заблокировать заявки';
   blockButton.classList.toggle('danger', !device.ticketsBlocked);
   $('run-list').replaceChildren(); $('run-detail').replaceChildren();
+  $('device-profile').replaceChildren(); $('run-tabs').replaceChildren();
   try {
     const runs = await api('/api/admin/devices/' + device.id + '/runs');
     if (requestId !== state.selectionRequest) return;
     if (!runs.length) { $('run-detail').append(node('p', 'Проверок пока нет.', 'detail-empty')); return; }
-    for (const run of runs) {
+    const selectedRun = runs.find(run => run.id === requestedRunId) || runs.find(run => !isMonitoringRun(run)) || runs[0];
+    renderRunNavigation(runs, isMonitoringRun(selectedRun));
+    await selectRun(selectedRun, false);
+    if (requestId === state.selectionRequest) rememberNavigation(true);
+    $('selected-title').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (error) { if (requestId === state.selectionRequest) $('run-detail').replaceChildren(node('p', error.message, 'signal-error')); }
+}
+
+function isMonitoringRun(run) { return String(run.kind || '').toLowerCase().includes('мониторинг'); }
+
+function renderRunNavigation(runs, monitoringSelected) {
+  $('run-tabs').replaceChildren(); $('run-list').replaceChildren();
+  for (const [monitoring, label] of [[false, 'Проверки'], [true, 'Мониторинг']]) {
+    const values = runs.filter(run => isMonitoringRun(run) === monitoring);
+    const tab = node('button', `${label} · ${values.length}`, 'run-tab');
+    tab.type = 'button'; tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', String(monitoring === monitoringSelected)); tab.disabled = values.length === 0;
+    tab.addEventListener('click', () => { renderRunNavigation(runs, monitoring); if (values.length) selectRun(values[0]); });
+    $('run-tabs').append(tab);
+  }
+  for (const run of runs.filter(run => isMonitoringRun(run) === monitoringSelected)) {
       const button = node('button', date(run.startedAt) + ' · ' + run.kind + ' · ' +
         (property(run.summary, 'result') || 'Результат сохранён'), 'run-item');
       button.type = 'button'; button.dataset.runId = run.id;
       button.addEventListener('click', () => selectRun(run));
       $('run-list').append(button);
-    }
-    await selectRun(runs.find(run => run.id === requestedRunId) || runs[0], false);
-    if (requestId === state.selectionRequest) rememberNavigation(true);
-  } catch (error) { if (requestId === state.selectionRequest) $('run-detail').replaceChildren(node('p', error.message, 'signal-error')); }
+  }
 }
 
 function clearDeviceSelection() {
@@ -431,6 +449,7 @@ function clearDeviceSelection() {
   $('ticket-block-toggle').textContent = 'Заявки ПК';
   $('ticket-block-toggle').classList.remove('danger');
   $('run-list').replaceChildren();
+  $('device-profile').replaceChildren(); $('run-tabs').replaceChildren();
   $('run-detail').replaceChildren();
   for (const row of $('device-rows').rows) row.classList.remove('selected');
 }
@@ -469,6 +488,7 @@ async function allowRunProcess(process, button) {
 
 
 function detailSection(root, title, values, emptyText, collapsed = false) {
+  if (!values.length) return;
   const container = collapsed ? node('details', undefined, 'report-section') : root;
   container.append(node(collapsed ? 'summary' : 'h3', title + (collapsed ? ' · ' + values.length : '')));
   if (!values.length) container.append(node('p', emptyText, 'detail-empty'));
@@ -507,11 +527,12 @@ function telemetryDetailRow(label, value, history, category) {
 
 function renderRun(run) {
   const root = $('run-detail'); root.replaceChildren();
+  renderDeviceProfile(run);
   const report = run.details || {}, full = property(report, 'full') || {};
   const profile = run.hardwareProfile || {};
   const profileUpdatedAt = run.hardwareProfileUpdatedAt || property(profile, 'capturedAtUtc');
   const history = property(report, 'sensorHistory');
-  root.append(node('h3', 'Результат проверки'));
+  root.append(node('h3', isMonitoringRun(run) ? 'События мониторинга' : 'Результат проверки'));
   root.append(node('span', date(run.startedAt) + ' · ' + run.kind, 'meta'));
   if (property(report, 'trigger')) {
     const origin = ['Источник запуска: ' + property(report, 'trigger'),
@@ -525,7 +546,8 @@ function renderRun(run) {
     property(report, 'anyDeskId') && 'AnyDesk ' + property(report, 'anyDeskId')].filter(Boolean);
   if (identifiers.length) root.append(node('div', identifiers.join(' · '), 'detail-row'));
   const stats = node('div', undefined, 'detail-stats');
-  const cpuPercent = Number(property(report, 'cpuPercent'));
+  const rawCpu = property(report, 'cpuPercent');
+  const cpuPercent = rawCpu == null ? NaN : Number(rawCpu);
   const cpuLabel = Number.isFinite(cpuPercent) && cpuPercent >= 0 && cpuPercent <= 100 ? Math.round(cpuPercent) + '%' : 'Нет данных';
   const items = [
     ['Процессор', cpuLabel],
@@ -533,8 +555,8 @@ function renderRun(run) {
     ['ОЗУ', property(report, 'memoryUsedPercent') == null ? 'Нет данных' : Number(property(report, 'memoryUsedPercent')).toFixed(0) + '%'],
     ['Windows', [property(report, 'windowsEdition', 'osName'), property(report, 'windowsRelease', 'osVersion')].filter(Boolean).join(' ') || 'Нет данных']
   ];
-  for (const [label, value] of items) { const cell = node('div'); cell.append(node('span', label), node('strong', String(value))); stats.append(cell); }
-  root.append(stats);
+  for (const [label, value] of items.filter(([,value]) => value !== 'Нет данных')) { const cell = node('div'); cell.append(node('span', label), node('strong', String(value))); stats.append(cell); }
+  if (stats.children.length) root.append(stats);
   const totalMemory = property(report, 'totalMemoryBytes');
   const savedMemory = property(profile, 'totalMemoryBytes');
   const memoryText = bytes => bytes == null ? null : `${(Number(bytes) / 1073741824).toFixed(1)} ГБ`;
@@ -549,15 +571,8 @@ function renderRun(run) {
     profileDetailRow('Windows', [property(report, 'windowsEdition'), property(report, 'windowsRelease'), property(report, 'windowsBuild') && `сборка ${property(report, 'windowsBuild')}`].filter(Boolean).join(' ') || null,
       [property(profile, 'windowsEdition'), property(profile, 'windowsRelease'), property(profile, 'windowsBuild') && `сборка ${property(profile, 'windowsBuild')}`].filter(Boolean).join(' ') || null, profileUpdatedAt)
   ].filter(Boolean);
-  detailSection(root, 'Конфигурация компьютера', configRows,
-    'Данные конфигурации ещё не получены. Они появятся после очередного отчёта компьютера.');
-  if (profileUpdatedAt) root.append(node('span', `Профиль оборудования сохранён ${date(profileUpdatedAt)}.`, 'meta'));
   const adapters = list(property(report, 'networkAdapters', 'network'));
   const savedAdapters = list(property(profile, 'networkAdapters'));
-  detailSection(root, 'Сеть', (adapters.length ? adapters : savedAdapters).map(adapter => ({
-    text: [property(adapter, 'name'), property(adapter, 'macAddress', 'mac'), property(adapter, 'addresses', 'ipAddresses')]
-      .filter(Boolean).join(' · '), className: adapters.length ? 'detail-row' : 'detail-row stale-data'
-  })), 'Сетевые данные не переданы.', true);
   const nestedHwInfo = property(report, 'hwiNFO', 'hwInfo');
   const legacySensorFields = ['cpuTemperatureC', 'vrmTemperatureC', 'pchTemperatureC', 'rail12V', 'rail5V', 'rail3V']
     .some(name => property(report, name) != null);
@@ -607,11 +622,11 @@ function renderRun(run) {
   const profileDisks = list(property(profile, 'physicalDisks'));
   const smart = list(property(full, 'smartDisks') || property(report, 'smartDisks'));
   const profileSmart = list(property(profile, 'smartDisks'));
-  detailSection(root, 'Накопители', (disks.length ? disks : profileDisks).map(disk => {
+  detailSection(root, 'Диски в этом отчёте', disks.map(disk => {
     const free = property(disk, 'freeBytes'), total = property(disk, 'totalBytes');
     return { text: `${property(disk, 'name', 'model') || 'Диск'} · ${free != null && total != null ? (free / 1073741824).toFixed(1) + ' из ' + (total / 1073741824).toFixed(1) + ' ГБ свободно' : [property(disk, 'mediaType'), property(disk, 'health')].filter(Boolean).join(' · ') || 'нет данных о свободном месте'}`,
       className: disks.length ? 'detail-row' : 'detail-row stale-data' };
-  }).concat((smart.length ? smart : profileSmart).map(disk => ({ text: [property(disk, 'model'), property(disk, 'status', 'health'), property(disk, 'smartWarnings')].filter(Boolean).join(' · '),
+  }).concat(smart.map(disk => ({ text: [property(disk, 'model'), property(disk, 'status', 'health'), property(disk, 'smartWarnings')].filter(Boolean).join(' · '),
     className: smart.length ? 'detail-row' : 'detail-row stale-data' }))), 'Данные о дисках не переданы.');
   const previous = run.previous || {}, prevFull = property(previous, 'full') || {};
   const processes = list(run.unknownProcesses || property(full, 'processes') || property(report, 'processes'));
@@ -641,6 +656,45 @@ function renderRun(run) {
   const admins = list(property(report, 'adminAccounts', 'localAdminAccounts', 'administrators') || property(full, 'adminAccounts', 'localAdminAccounts', 'administrators'));
   detailSection(root, 'Локальные администраторы', admins.map(account => ({ text: typeof account === 'string' ? account : property(account, 'name', 'account') || JSON.stringify(account) })), 'Список не передан клиентом.');
   detailSection(root, 'Журнал выполнения', list(property(report, 'notes', 'findings')).filter(visibleNote).map(text => ({ text: String(text) })), 'Журнал не передан.', true);
+  const latencies = list(property(report, 'diskLatencies'));
+  detailSection(root, 'Отклик накопителей', latencies.map(disk => ({ text: `${property(disk,'disk')}: ` +
+    [property(disk,'readMs') != null ? `чтение ${Number(property(disk,'readMs')).toFixed(1)} мс` : '',
+      property(disk,'writeMs') != null ? `запись ${Number(property(disk,'writeMs')).toFixed(1)} мс` : ''].filter(Boolean).join(' · ') })), '', true);
+}
+
+function renderDeviceProfile(run) {
+  const root = $('device-profile'); root.replaceChildren();
+  const report = run.details || {}, full = property(report, 'full') || {};
+  const profile = run.hardwareProfile || {}, hwInfo = property(report, 'hwInfo', 'hwiNFO') || {};
+  const capturedAt = run.hardwareProfileUpdatedAt || property(profile, 'capturedAtUtc');
+  const current = !isMonitoringRun(run) && Object.keys(full).length > 0;
+  const choose = (value, saved) => current && value != null && value !== '' ? value : saved;
+  const facts = [
+    ['Компьютер', choose(property(report,'computerName'), property(profile,'computerName'))],
+    ['CPU', choose(property(full,'cpuName'), property(profile,'cpuModel'))],
+    ['ОЗУ', choose(property(report,'totalMemoryBytes'), property(profile,'totalMemoryBytes')) == null ? null :
+      (Number(choose(property(report,'totalMemoryBytes'), property(profile,'totalMemoryBytes'))) / 1073741824).toFixed(1) + ' ГБ'],
+    ['Память', choose(property(full,'memoryType'), property(profile,'memoryType'))],
+    ['GPU', choose(property(full,'gpuName'), property(profile,'gpuModel'))],
+    ['Плата', choose(property(hwInfo,'motherboard'), property(profile,'motherboard'))],
+    ['BIOS', choose(property(hwInfo,'biosVersion'), property(profile,'biosVersion'))],
+    ['Windows', choose([property(report,'windowsEdition'),property(report,'windowsRelease'),property(report,'windowsBuild')].filter(Boolean).join(' '),
+      [property(profile,'windowsEdition'),property(profile,'windowsRelease'),property(profile,'windowsBuild')].filter(Boolean).join(' '))]
+  ].filter(([,value]) => value != null && value !== '' && value !== 'нет данных');
+  if (!facts.length && !Object.keys(profile).length) return;
+  root.append(node('h3','Конфигурация и последние измерения'));
+  if (capturedAt) root.append(node('p', `Конфигурация: ${date(current ? run.startedAt : capturedAt)}`, 'meta'));
+  const grid = node('dl', undefined, 'profile-facts');
+  for (const [label,value] of facts) { const pair=node('div'); pair.append(node('dt',label),node('dd',String(value))); grid.append(pair); }
+  root.append(grid);
+  const adapters = current && list(property(report,'networkAdapters')).length ? list(property(report,'networkAdapters')) : list(property(profile,'networkAdapters'));
+  detailSection(root,'Сеть',adapters.map(adapter=>({text:[property(adapter,'name'),property(adapter,'addresses','ipAddresses'),property(adapter,'macAddress','mac'),property(adapter,'linkSpeed')].filter(Boolean).join(' · ')})), '', true);
+  const disks = current && list(property(full,'physicalDisks')).length ? list(property(full,'physicalDisks')) : list(property(profile,'physicalDisks'));
+  detailSection(root,'Накопители',disks.map(disk=>({text:[property(disk,'model'),property(disk,'mediaType'),property(disk,'health'),property(disk,'powerOnHours') != null ? property(disk,'powerOnHours')+' ч' : ''].filter(Boolean).join(' · ')})), '', true);
+  const smart = current && list(property(full,'smartDisks')).length ? list(property(full,'smartDisks')) : list(property(profile,'smartDisks'));
+  detailSection(root,'SMART · '+date(current ? run.startedAt : property(profile,'smartAtUtc') || capturedAt),smart.map(disk=>({text:[property(disk,'letters'),property(disk,'model'),property(disk,'status','health'),property(disk,'smartWarnings'),property(disk,'transferMode')].filter(Boolean).join(' · ')})), '', true);
+  const benchmark = current && (property(property(full,'benchmark'),'read') > 0 || property(property(full,'benchmark'),'write') > 0) ? property(full,'benchmark') : property(profile,'benchmark');
+  if (benchmark) detailSection(root,'DiskSpd · '+date(current ? run.startedAt : property(profile,'benchmarkAtUtc') || capturedAt),[{text:[property(benchmark,'drive'),property(benchmark,'engine'),property(benchmark,'read') != null ? `чтение ${Number(property(benchmark,'read')).toFixed(1)} МБ/с` : '',property(benchmark,'write') != null ? `запись ${Number(property(benchmark,'write')).toFixed(1)} МБ/с` : ''].filter(Boolean).join(' · ')}], '', false);
 }
 
 function monitoringParameters() {
@@ -779,7 +833,7 @@ async function loadMonitoring() {
         const row = node('div', undefined, 'monitor-card-issue ' + (Number(issue.severity) === 1 ? 'critical' : 'warning'));
         const description = node('div', undefined, 'monitor-card-description');
         description.append(node('strong', issue.title || 'Проблема'));
-        description.append(node('span', [issue.category === 'event' ? 'Журнал Windows' : 'Проверка', date(issue.detectedAt)].join(' · '), 'meta'));
+        description.append(node('span', [date(issue.detectedAt), Number(issue.occurrences) > 1 ? `${issue.occurrences} повторов · с ${date(issue.firstDetectedAt)}` : ''].filter(Boolean).join(' · '), 'meta'));
         description.append(node('p', issue.detail || 'Подробности не переданы.'));
         row.append(description);
         if (String($('monitor-state').value) === 'open') {

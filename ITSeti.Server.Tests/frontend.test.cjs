@@ -5,7 +5,7 @@ const path = require('node:path');
 const elements = new Map();
 const created = [];
 function element() {
-  return { children: [], rows: [], value: '', textContent: '', className: '', title: '', disabled: false, handlers: {},
+  return { children: [], rows: [], dataset: {}, value: '', textContent: '', className: '', title: '', disabled: false, handlers: {},
     classList: { toggle() {}, remove() {}, add(name) { this.owner.className += ' ' + name; } },
     setAttribute(name, value) { this[name] = value; }, addEventListener(name, callback) { this.handlers[name] = callback; },
     replaceChildren(...children) { this.children = children; }, append(...children) { this.children.push(...children); },
@@ -78,6 +78,15 @@ async function test() {
   assert.equal(policyRequest.options.method, 'POST');
   assert.equal(JSON.parse(policyRequest.options.body).name, 'unknown.exe');
   assert.equal(processButton.textContent, '✓');
+  vm.runInContext(`renderRun({kind:'Постоянный мониторинг',startedAt:'2026-10-16T10:00:00Z',details:{diagnosticIssues:[{title:'Disk latency',detail:'0 C: 150 ms',severity:'Critical'}]},hardwareProfile:{cpuModel:'Saved CPU',smartDisks:[{model:'SSD',status:'Good'}],smartAtUtc:'2026-10-16T01:00:00Z',benchmark:{drive:'C:',read:500,write:450,engine:'DiskSpd'},benchmarkAtUtc:'2026-10-16T01:00:00Z'}})`, context);
+  const textOf = item => [item.textContent || '', ...item.children.map(textOf)].join(' ');
+  assert.doesNotMatch(textOf(elements.get('run-detail')), /Нет данных|не передан|Локальные администраторы|Журнал Windows/,
+    'a monitoring event must not render empty check sections or null CPU as zero');
+  assert.match(textOf(elements.get('device-profile')), /Saved CPU.*SMART.*SSD.*DiskSpd.*500/s,
+    'monitoring keeps the saved configuration, SMART and benchmark above event details');
+  vm.runInContext(`renderRunNavigation([{id:'m',kind:'Постоянный мониторинг'},{id:'f',kind:'Плановая проверка'}],false)`,context);
+  assert.equal(elements.get('run-list').children.length,1,'checks can be opened without scanning monitoring history');
+  assert.equal(elements.get('run-list').children[0].dataset.runId,'f');
   console.log('PASS: temperatures, stale responses, cleared selection, application errors and compact process approval');
 }
 test().catch(error => { console.error(error); process.exitCode = 1; });

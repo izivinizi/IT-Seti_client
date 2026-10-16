@@ -11,7 +11,10 @@ public sealed partial record DiagnosticSnapshot(
     double? ActiveUptimeHours = null, double? DiskReadLatencyMs = null, double? DiskWriteLatencyMs = null,
     HwInfoSnapshot? HwInfo = null, List<NetworkAdapterSnapshot>? NetworkAdapters = null, string SystemDrive = "C:",
     DateTimeOffset? CpuTemperatureCapturedAtUtc = null, DateTimeOffset? CpuPercentCapturedAtUtc = null,
-    DateTimeOffset? MemoryUsedPercentCapturedAtUtc = null);
+    DateTimeOffset? MemoryUsedPercentCapturedAtUtc = null,
+    IReadOnlyList<DiskLatencyReading>? DiskLatencies = null);
+
+public sealed record DiskLatencyReading(string Disk, double? ReadMs, double? WriteMs);
 
 public sealed record PhysicalDiskDetails(string Model, string MediaType, string Health, long? PowerOnHours = null);
 public sealed record NetworkAdapterSnapshot(string Name, string Type, string Status, string LinkSpeed,

@@ -415,7 +415,10 @@ Check(Monitoring.NewIssues(repeated, first).Count == 0, "changing readings and r
 
 var oldReadings = Report("""{"Notes":["Наработка после последнего запуска: 61 ч.","C:\\ свободно 8,1 ГБ"]}""");
 var newReadings = Report("""{"Notes":["Наработка после последнего запуска: 63 ч.","C:\\ свободно 4,2 ГБ"]}""");
-Check(Monitoring.NewIssues(newReadings, oldReadings).Count == 1, "warning escalating to critical generates an alert");
+Check(Monitoring.NewIssues(newReadings, oldReadings).Count == 0, "low disk space stays in reports and never enters monitoring");
+var legacyResource = Report("""{"KindLabel":"Постоянный мониторинг","DiagnosticIssues":[{"Title":"Критическая загрузка CPU","Detail":"100%","Severity":"Critical"},{"Title":"Критическая загрузка памяти","Detail":"99%","Severity":"Critical"}]}""");
+Check(Monitoring.NewIssues(legacyResource, null).Count == 0 && Monitoring.CurrentIssues(legacyResource).All(issue => issue.Severity == 2),
+    "old clients cannot promote CPU or memory pressure to critical monitoring alerts");
 
 var newError = Report("""
     {"Notes":["CPU: температура 80 °C достигла порога 75 °C.","ОЗУ: менее 500 МБ доступно и активная подкачка"],
@@ -443,6 +446,14 @@ var win7Old = Report("""{"Findings":[],"Events":[{"Log":"Application","Source":"
 var win7New = Report("""{"Findings":[],"Events":[{"Log":"Application","Source":"App","Id":101,"Level":1,"Message":"Error"}]}""");
 Check(Monitoring.NewIssues(win7New, win7Old).Single().Title == "App #101", "Windows 7 event format is supported");
 var declared = Report("""{"DiagnosticIssues":[{"Title":"Критическая проблема","Detail":"Диск неисправен","Severity":"Critical"},{"Title":"Предупреждение","Detail":"Мало памяти","Severity":"Warning"}],"Notes":["Пароль уже бессрочный"]}""");
+Check(Monitoring.AlertsForReport(declared, null).Single().Severity == 1,
+    "first report critical findings enter monitoring without waiting for a change");
+Check(Monitoring.AlertsForReport(declared, declared).Single().Severity == 1,
+    "repeated critical findings refresh monitoring instead of disappearing behind the baseline");
+Check(Monitoring.AlertsForReport(win7New, null).Count == 0,
+    "historical Windows events still establish a baseline before monitoring");
+Check(Monitoring.AlertsForReport(legacyResource, legacyResource).Count == 0,
+    "repeated resource pressure never enters monitoring");
 Check(Monitoring.CurrentIssues(declared).Count == 2 && Monitoring.NewIssues(declared, quick).Single().Severity == 1,
     "client warnings remain in results but only client critical issues become alerts");
 Check(Monitoring.CurrentIssues(Report("""{"Notes":["Пароль уже бессрочный","Без доступа к исполняемому файлу процессов: 13","Автоматическая установка обновлений отключена."]}""")).Count == 0,
