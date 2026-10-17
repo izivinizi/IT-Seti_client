@@ -6,6 +6,12 @@ using System.Security.Cryptography;
 using System.Text;
 using ITSeti.Maintenance.Core;
 
+if (args.Length == 2 && args[0] == "--pe-metadata-contract")
+{
+    PeMetadataChecks.Run(args[1]);
+    return;
+}
+
 TicketMergeChecks.Run();
 
 if (args.Contains("--feedback-database"))

@@ -29,6 +29,23 @@ public static class PackageVersionDetector
             // Portable installers can omit PE version resources; use their filenames instead.
         }
 
+        try
+        {
+            var resource = PeVersionResource.Read(path);
+            if (resource is not null)
+            {
+                if (!string.IsNullOrWhiteSpace(resource.ProductName) || !string.IsNullOrWhiteSpace(resource.Description))
+                    name = DetectName(resource.ProductName, resource.Description, safeFileName);
+                if (TryParse(resource.ProductVersion, out var productVersion)) version = productVersion;
+                else if (TryParse(resource.FileVersion, out var fileVersion)) version = fileVersion;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or BadImageFormatException
+            or ArgumentException or OverflowException or InvalidOperationException or NotSupportedException)
+        {
+            // Non-PE, absent, truncated or malformed resources retain the platform and filename fallbacks.
+        }
+
         if (version is null)
         {
             var match = VersionPattern.Match(safeFileName);
