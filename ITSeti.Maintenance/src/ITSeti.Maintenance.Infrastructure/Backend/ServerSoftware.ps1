@@ -56,7 +56,7 @@ function Find-InstalledFile([string]$Key) {
 }
 function Assert-ServerPackage($Package) {
     $id = [Guid]::Parse([string]$Package.id)
-    $key = ([string]$Package.key).ToLowerInvariant()
+    $key = Normalize-ComponentKey ([string]$Package.key)
     $extension = [IO.Path]::GetExtension([string]$Package.fileName).ToLowerInvariant()
     if ($id -eq [Guid]::Empty -or $key -notin @('rms','anydesk','ocs','panel','winrar','yandex') -or
         [string]$Package.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or [long]$Package.sizeBytes -le 0 -or [long]$Package.sizeBytes -gt 1GB -or
@@ -140,7 +140,8 @@ try {
     $failures = @()
     foreach ($package in $selected) {
         try {
-            $key = ([string]$package.key).ToLowerInvariant()
+            $key = Normalize-ComponentKey ([string]$package.key)
+            if ($AutoUpdate -and $key -notin @('rms','anydesk','ocs','panel','winrar','yandex')) { continue }
             if ($key -notin @('rms','anydesk','ocs','panel','winrar','yandex')) { throw "No verified silent installation recipe for $key." }
             $unknownMarker = Join-Path $root ('server-install-'+$key+'.unknown')
             if (Test-Path -LiteralPath $unknownMarker) { throw 'Previous installer timed out. An administrator must review it before retrying.' }
@@ -157,7 +158,7 @@ try {
             $size = [long]$package.sizeBytes
             $extension = [IO.Path]::GetExtension([string]$package.fileName).ToLowerInvariant()
             Assert-ServerPackage $package
-            $downloadRoot = Join-Path $root 'ServerPackages'
+            $downloadRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'Tools\Software'
             New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
             $installer = Join-Path $downloadRoot ($id.ToString('N') + $extension)
             $partial = $installer + '.pending'

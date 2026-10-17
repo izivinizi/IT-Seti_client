@@ -19,6 +19,9 @@ public static class MaintenanceServiceClient
         SendAsync(new MaintenanceServiceRequest("authenticate", Password: password), cancellationToken);
 
     public static void ClearEngineerAuthorization() => authorizationToken = null;
+    public static Task<MaintenanceServiceCallResult> RemoveLocalAdministratorAsync(string sid,
+        CancellationToken cancellationToken = default) =>
+        SendAsync(new MaintenanceServiceRequest("remove-local-admin", MaintenanceServiceOperation.RemoveLocalAdministrator, Target: sid), cancellationToken);
 
     public static Task<MaintenanceServiceCallResult> PingAsync(CancellationToken cancellationToken = default) =>
         SendAsync(new MaintenanceServiceRequest("ping"), cancellationToken);

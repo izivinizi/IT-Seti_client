@@ -37,9 +37,9 @@ public sealed class WindowsDefenderController
 
     private static async Task<WindowsDefenderState> RunAsync(string action, CancellationToken cancellationToken)
     {
-        if (action != "Status")
         {
-            var operation = action == "Enable" ? MaintenanceServiceOperation.EnableWindowsDefender : MaintenanceServiceOperation.DisableWindowsDefender;
+            var operation = action == "Status" ? MaintenanceServiceOperation.ReadWindowsDefenderStatus
+                : action == "Enable" ? MaintenanceServiceOperation.EnableWindowsDefender : MaintenanceServiceOperation.DisableWindowsDefender;
             var previousWrite = File.Exists(StatusPath) ? File.GetLastWriteTimeUtc(StatusPath) : DateTime.MinValue;
             var service = await MaintenanceServiceClient.StartAsync(operation, cancellationToken);
             if (service.Connected)
@@ -54,7 +54,8 @@ public sealed class WindowsDefenderController
                         var completed = await ReadResultAsync(StatusPath, cancellationToken);
                         if (completed is { } completedResult)
                         {
-                            if (!completedResult.Success) throw new InvalidOperationException("Windows не изменила защиту: " + (completedResult.Error ?? "операция завершилась ошибкой."));
+                            if (!completedResult.Success) throw new InvalidOperationException("Ошибка Microsoft Defender: " + (completedResult.Error ?? "операция завершилась ошибкой."));
+                            if (action == "Status") return ToState(completedResult);
                             var expected = action == "Enable";
                             if (completedResult.Available && completedResult.RealTimeProtectionEnabled == expected)
                                 return ToState(completedResult);
@@ -65,12 +66,13 @@ public sealed class WindowsDefenderController
                 }
                 throw new TimeoutException("Служба не вернула результат изменения Microsoft Defender за 30 секунд.");
             }
-            if (!IsAdministrator()) throw new InvalidOperationException("Служба обслуживания недоступна; запустить изменение без повышения прав нельзя.");
+            if (action != "Status" && !IsAdministrator()) throw new InvalidOperationException("Служба обслуживания недоступна; запустить изменение без повышения прав нельзя.");
         }
         if (!File.Exists(ScriptPath)) throw new FileNotFoundException("Скрипт управления Microsoft Defender не найден.", ScriptPath);
 
         var powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
             "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+        var localStatusPath = Path.Combine(Path.GetTempPath(), "ITSeti-defender-" + Guid.NewGuid().ToString("N") + ".json");
         using var process = new Process
         {
             StartInfo = new ProcessStartInfo(powershell)
@@ -82,7 +84,7 @@ public sealed class WindowsDefenderController
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8,
                 WorkingDirectory = AppContext.BaseDirectory,
-                ArgumentList = { "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ScriptPath, "-Action", action }
+                ArgumentList = { "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ScriptPath, "-Action", action, "-StatusPath", localStatusPath }
             }
         };
 
@@ -99,6 +101,7 @@ public sealed class WindowsDefenderController
         }
 
         var output = await stdout;
+        try { File.Delete(localStatusPath); } catch (IOException) { }
         var errorOutput = (await stderr).Trim();
         CommandResult? result;
         try { result = JsonSerializer.Deserialize<CommandResult>(output.Trim(), JsonOptions); }

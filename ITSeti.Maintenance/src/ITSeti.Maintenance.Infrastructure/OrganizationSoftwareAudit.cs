@@ -84,6 +84,10 @@ public static class OrganizationSoftwareAudit
                 var state = !installed ? "Не найдено" : outdated ? "Требует обновления" : "Установлено";
                 serverRows.Add(row with { State=state, Detail=$"На сервере: {package.Version}."+(installed ? $" На ПК: {currentText ?? "не определена"}." : " Программа не обнаружена."), Package="На сервере",NeedsAttention=state!="Установлено", IsSelected=state!="Установлено" });
             }
+            foreach (var required in rows.Where(row => row.InstallKey is "AnyDesk" or "RMS" or "OCS"))
+                if (required.NeedsAttention && !serverRows.Any(row => row.InstallKey == required.InstallKey))
+                    serverRows.Add(required with { Package = "Нет в каталоге сервера",
+                        Detail = required.Detail + " Установщик отсутствует в каталоге сервера.", IsSelected = false });
             return serverRows;
         }
         return [];

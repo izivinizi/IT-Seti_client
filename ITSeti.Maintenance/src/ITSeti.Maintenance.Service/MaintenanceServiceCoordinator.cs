@@ -50,6 +50,8 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
     private DateTimeOffset lastTemperatureProbe = DateTimeOffset.MinValue;
     private DateTimeOffset lastUpload = DateTimeOffset.MinValue;
     private DateTimeOffset nextTicketPoll = DateTimeOffset.MinValue;
+    private DateTimeOffset nextSoftwareRefresh = DateTimeOffset.UtcNow.AddSeconds(30);
+    private string? lastUpdaterFailure;
     private bool ticketPollRunning;
     private bool ticketPollRequested;
     private readonly CancellationTokenSource ticketLifetime = new();
@@ -194,6 +196,33 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             return token is null
                 ? new(false, "Неверный пароль инженера или временная блокировка после нескольких попыток.", GetVersion())
                 : new(true, "Режим инженера открыт.", GetVersion(), token);
+        }
+        if (string.Equals(request.Command, "remove-local-admin", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!engineerAuthorization.IsAuthorized(request.AuthorizationToken, client))
+                return new(false, "Требуется авторизация инженера.", GetVersion());
+            if (request.Target is null || !System.Text.RegularExpressions.Regex.IsMatch(request.Target, @"^S-1-5-21-\d+-\d+-\d+-\d+$"))
+                return new(false, "Некорректный SID локальной учётной записи.", GetVersion());
+            lock (operationStartGate)
+            {
+                if (running.ContainsKey(MaintenanceServiceOperation.RemoveLocalAdministrator))
+                    return new(false, "Изменение учётной записи уже выполняется.", GetVersion());
+                Process? process = null;
+                try
+                {
+                    process = CreatePowerShellProcess("Remove-LocalAdministrator.ps1", ["-Sid", request.Target]);
+                    if (!process.Start()) throw new InvalidOperationException("Windows не запустила операцию.");
+                    running[MaintenanceServiceOperation.RemoveLocalAdministrator] = process;
+                    _ = ObserveProcessAsync(MaintenanceServiceOperation.RemoveLocalAdministrator, "Remove-LocalAdministrator.ps1", process);
+                    return new(true, "Изменение прав запущено.", GetVersion());
+                }
+                catch (Exception ex) when (ex is IOException or Win32Exception or InvalidOperationException or UnauthorizedAccessException)
+                {
+                    process?.Dispose();
+                    ApplicationErrorStore.Record("Учётные записи", "Снятие прав администратора", ex);
+                    return new(false, ex.Message, GetVersion());
+                }
+            }
         }
         if (string.Equals(request.Command, "refresh-ticket-updates", StringComparison.OrdinalIgnoreCase))
         {
@@ -488,7 +517,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
 
     private static bool IsSerializedSoftwareOperation(MaintenanceServiceOperation operation) => operation is
         MaintenanceServiceOperation.OrganizationSetup or MaintenanceServiceOperation.UploadReports or
-        MaintenanceServiceOperation.RefreshSoftwareCatalog;
+        MaintenanceServiceOperation.RefreshSoftwareCatalog or MaintenanceServiceOperation.UpdateServerSoftware;
 
     private async Task RunTemperatureOperationAsync()
     {
@@ -531,6 +560,8 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
         MaintenanceServiceOperation.OrganizationSetup => ("InstalledOrganizationSetup.ps1", []),
         MaintenanceServiceOperation.UploadReports => ("Upload-Reports.ps1", []),
         MaintenanceServiceOperation.RefreshSoftwareCatalog => ("ServerSoftware.ps1", ["-CatalogOnly"]),
+        MaintenanceServiceOperation.ReadWindowsDefenderStatus => ("WindowsDefender.ps1", ["-Action", "Status"]),
+        MaintenanceServiceOperation.UpdateServerSoftware => ("ServerSoftware.ps1", ["-AutoUpdate"]),
         MaintenanceServiceOperation.DisableWindowsUpdates => ("Set-WindowsAutomaticUpdates.ps1", ["-Action", "Disable"]),
         MaintenanceServiceOperation.RestoreWindowsUpdates => ("Set-WindowsAutomaticUpdates.ps1", ["-Action", "Restore"]),
         MaintenanceServiceOperation.DisableWindowsDefender => ("WindowsDefender.ps1", ["-Action", "Disable", "-StatusPath", Path.Combine(DataRoot, "WindowsDefender", "status.json")]),
@@ -579,7 +610,7 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             var package = ServerSoftwareCatalog.Read().SingleOrDefault(item => item.Id == packageId)
                 ?? throw new InvalidOperationException("Пакет отсутствует в актуальном каталоге сервера.");
             var extension = ValidateInteractivePackage(package);
-            var packageDirectory = Path.GetFullPath(Path.Combine(DataRoot, "ServerPackages"));
+            var packageDirectory = Path.GetFullPath(Path.Combine(backendRoot, "..", "Tools", "Software"));
             Directory.CreateDirectory(packageDirectory);
             var installerPath = Path.GetFullPath(Path.Combine(packageDirectory, packageId.ToString("N") + extension));
             if (!installerPath.StartsWith(packageDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
@@ -773,10 +804,18 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
             }
             process.Dispose();
             await StartPendingOperationsAsync();
+            if (operation == MaintenanceServiceOperation.UpdateServerSoftware && !stopping &&
+                !running.Any(pair => IsRunning(pair.Value)))
+                await new ApplicationUpdateRunner().TryStartScheduledUpdateAsync();
             if (operation == MaintenanceServiceOperation.OrganizationSetup) RequestTicketUpdatePoll();
             if (IsDiagnosticOperation(operation) || operation == MaintenanceServiceOperation.Cleanup)
             {
-                try { TryStartReportUpload(); }
+                try
+                {
+                    if (IsDiagnosticOperation(operation) && operation != MaintenanceServiceOperation.DailySmartCheck)
+                        StartOperation(MaintenanceServiceOperation.UpdateServerSoftware);
+                    TryStartReportUpload();
+                }
                 catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
                 { await WriteServiceErrorAsync(ex); }
             }
@@ -946,6 +985,20 @@ internal sealed class MaintenanceServiceCoordinator : IDisposable
                         await WriteJsonAtomicallyAsync(MonitoringBatchPath, monitoringBatch.Snapshot(), cancellationToken);
                 }
                 TryStartReportUpload();
+                var updaterStatus = ApplicationUpdateRunner.GetStatusMessage(ApplicationUpdateRunner.ReadRawStatus());
+                if (updaterStatus.StartsWith("Ошибка обновления:", StringComparison.Ordinal) && updaterStatus != lastUpdaterFailure)
+                {
+                    lastUpdaterFailure = updaterStatus;
+                    ApplicationErrorStore.Record("Обновление", "Автоматическая установка", new InvalidOperationException(updaterStatus));
+                }
+                if (ServerUpdateHint.TakeNewerThan(typeof(MaintenanceServiceCoordinator).Assembly.GetName().Version!))
+                    nextSoftwareRefresh = DateTimeOffset.MinValue;
+                if (DateTimeOffset.UtcNow >= nextSoftwareRefresh && !HasRunningDiagnostic() &&
+                    !running.Keys.Any(IsSerializedSoftwareOperation) && File.Exists(Path.Combine(DataRoot, "server-device.json")))
+                {
+                    nextSoftwareRefresh = DateTimeOffset.UtcNow.AddMinutes(5);
+                    StartOperation(MaintenanceServiceOperation.UpdateServerSoftware);
+                }
                 if (DateTimeOffset.UtcNow >= nextTicketPoll) StartTicketUpdatePoll(cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }

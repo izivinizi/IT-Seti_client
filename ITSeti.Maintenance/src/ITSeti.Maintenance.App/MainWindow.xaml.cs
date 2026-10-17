@@ -23,6 +23,8 @@ public partial class MainWindow : Window
     private bool closeAfterCheck;
     private bool refreshingSoftware;
     private DateTime catalogWriteTime;
+    private bool automaticUpdateRunning;
+    private DateTime nextAutomaticUpdate = DateTime.UtcNow.AddSeconds(30);
     private readonly DispatcherTimer liveMetricsTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     public MainWindow() : this(DefaultHistoryDatabasePath(), false) { }
 
@@ -40,7 +42,7 @@ public partial class MainWindow : Window
         DataContext = ViewModel;
         Closing += (_, args) =>
         {
-            if (!ViewModel.IsFullCheckRunning) return;
+            if (!ViewModel.IsFullCheckRunning || FullDiagnosticsRunner.IsInstalled) return;
             args.Cancel = true;
             closeAfterCheck = true;
             Hide();
@@ -61,6 +63,7 @@ public partial class MainWindow : Window
                 ViewModel.RefreshMaintenanceStatus();
                 var changed = File.GetLastWriteTimeUtc(ServerSoftwareCatalog.CachePath);
                 if (changed != catalogWriteTime) { catalogWriteTime = changed; ViewModel.RefreshSetupAudit(); }
+                await TryAutomaticApplicationUpdateAsync();
             }
             catch (Exception ex)
             {
@@ -85,6 +88,25 @@ public partial class MainWindow : Window
             initializationCompleted.TrySetResult();
             _ = RefreshSoftwareCatalogAsync();
         };
+    }
+
+    private async Task TryAutomaticApplicationUpdateAsync()
+    {
+        if (closed || automaticUpdateRunning || !FullDiagnosticsRunner.IsInstalled ||
+            ViewModel.IsFullCheckRunning || ViewModel.IsBackgroundMaintenanceRunning || !ViewModel.CanManageSetup ||
+            MaintenanceServiceStatusReader.HasActiveWork() ||
+            OwnedWindows.Cast<Window>().Any(window => window.IsVisible) ||
+            Keyboard.FocusedElement is TextBox or PasswordBox) return;
+        if (!ServerUpdateHint.TakeNewerThan(typeof(MainWindow).Assembly.GetName().Version!) && DateTime.UtcNow < nextAutomaticUpdate) return;
+        automaticUpdateRunning = true;
+        nextAutomaticUpdate = DateTime.UtcNow.AddMinutes(5);
+        try
+        {
+            await ViewModel.CheckApplicationUpdatesAsync(automatic: true);
+            if (!closed) await InstallAvailableUpdateAsync(confirm: false);
+        }
+        catch (Exception ex) { ApplicationErrorStore.Record("Обновление", "Автоматическое обновление приложения", ex); }
+        finally { automaticUpdateRunning = false; }
     }
 
     private async Task TryAutomaticServerEnrollmentAsync()
@@ -131,6 +153,44 @@ public partial class MainWindow : Window
     }
     private void StopFullCheck_Click(object sender, RoutedEventArgs e) => ViewModel.StopFullCheck();
     private async void RunCleanup_Click(object sender, RoutedEventArgs e) => await ViewModel.RunCleanupAsync();
+    private void LoadMoreErrorHistory_Click(object sender, RoutedEventArgs e) => ViewModel.RefreshErrorHistory(loadMore: true);
+    private async void RemoveLocalAdministrator_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string account } button) return;
+        if (MessageBox.Show(this, $"Убрать {account} из локальных администраторов? Новые права вступят в силу после выхода пользователя из учётной записи.",
+            "Изменение прав", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        button.IsEnabled = false;
+        try
+        {
+            var sid = ((System.Security.Principal.SecurityIdentifier)new System.Security.Principal.NTAccount(account)
+                .Translate(typeof(System.Security.Principal.SecurityIdentifier))).Value;
+            var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ITSeti", "Maintenance", "Accounts", sid + ".json");
+            var started = DateTime.UtcNow;
+            var response = await MaintenanceServiceClient.RemoveLocalAdministratorAsync(sid);
+            if (!response.Accepted) throw new InvalidOperationException(response.Message);
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (File.Exists(path) && File.GetLastWriteTimeUtc(path) >= started)
+                {
+                    using var result = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(path));
+                    var message = result.RootElement.GetProperty("Message").GetString();
+                    if (!result.RootElement.GetProperty("Success").GetBoolean()) throw new InvalidOperationException(message);
+                    await ViewModel.RefreshAdminAccountAuditAsync();
+                    MessageBox.Show(this, message, "Права изменены", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+                await Task.Delay(250);
+            }
+            throw new TimeoutException("Служба не вернула результат изменения прав за 30 секунд.");
+        }
+        catch (Exception ex)
+        {
+            var error = ApplicationErrorStore.Record("Учётные записи", "Снятие прав администратора", ex);
+            MessageBox.Show(this, error.Summary, "Права не изменены", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally { button.IsEnabled = true; }
+    }
     private async void RunRepair_Click(object sender, RoutedEventArgs e)
     {
         if (MessageBox.Show(this, "Запустить DISM и SFC? Проверка может занять длительное время и не перезагрузит компьютер автоматически.", "Восстановление Windows", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)

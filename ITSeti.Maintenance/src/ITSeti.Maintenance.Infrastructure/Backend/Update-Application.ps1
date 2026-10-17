@@ -7,7 +7,10 @@ $appAssemblyPath = Join-Path $appDirectory 'ITSeti.Maintenance.dll'
 $updateRoot = Join-Path $env:ProgramData 'ITSeti\Maintenance\Updates'
 $statusPath = Join-Path $updateRoot 'last-result.txt'
 $logPath = Join-Path $updateRoot 'updater.log'
-$partial = Join-Path $updateRoot ($assetName + '.download')
+$downloadRoot = Join-Path $appDirectory 'Tools\Software'
+$partial = Join-Path $downloadRoot ($assetName + '.download')
+$updateMutex = $null
+$updateLocked = $false
 
 function Set-UpdateStatus([string]$Message) {
     New-Item -ItemType Directory -Path $updateRoot -Force | Out-Null
@@ -25,9 +28,12 @@ function ConvertTo-AppVersion([string]$Text) {
 }
 
 try {
-    Set-UpdateStatus 'Обновление запущено системной задачей.'
     $systemSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     if ($systemSid -ne 'S-1-5-18') { throw 'Задача обновления должна выполняться от LocalSystem.' }
+    $updateMutex = New-Object Threading.Mutex($false,'Global\ITSeti-ApplicationUpdate')
+    try { $updateLocked = $updateMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $updateLocked = $true }
+    if (!$updateLocked) { exit 0 }
+    Set-UpdateStatus 'Обновление запущено системной задачей.'
     if (!(Test-Path -LiteralPath $appPath -PathType Leaf) -or !(Test-Path -LiteralPath $appAssemblyPath -PathType Leaf)) { throw 'Установленное приложение не найдено.' }
 
     Set-UpdateStatus 'Проверяю каталог обновлений на сервере.'
@@ -41,7 +47,7 @@ try {
     if ($serverBase.Scheme -ne 'https') { throw 'Сервер обновлений должен использовать HTTPS.' }
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $updateUrl = New-Object Uri($serverBase, '/api/v1/application-update?platform=windows')
-    $headers = @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/2.4.9'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache'; 'X-Device-Id' = [string]$device.deviceId; 'X-Device-Key' = [string]$device.deviceKey }
+    $headers = @{ 'User-Agent' = 'ITSeti-Maintenance-Updater/2.4.11'; 'Accept' = 'application/json'; 'Cache-Control' = 'no-cache'; 'X-Device-Id' = [string]$device.deviceId; 'X-Device-Key' = [string]$device.deviceKey }
     $release = Invoke-RestMethod -Uri $updateUrl -Headers $headers -TimeoutSec 30
     if ($null -eq $release) {
         Set-UpdateStatus "Установлена последняя версия $currentVersion; обновление не требуется."
@@ -64,7 +70,8 @@ try {
     $expectedHash = $Matches[1].ToUpperInvariant()
     $downloadUrl = New-Object Uri($serverBase, ('api/v1/packages/' + $packageId.ToString('D') + '/download'))
 
-    $installer = Join-Path $updateRoot $assetName
+    New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
+    $installer = Join-Path $downloadRoot $assetName
     $cached=(Test-Path -LiteralPath $installer -PathType Leaf) -and
         (Get-Item -LiteralPath $installer).Length -eq $assetSize -and
         (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ceq $expectedHash
@@ -73,7 +80,7 @@ try {
         Set-UpdateStatus "Найдена версия $latestVersion. Подготавливаю установщик."
         $request = [Net.HttpWebRequest]::Create($downloadUrl)
         $request.Method = 'GET'
-        $request.UserAgent = 'ITSeti-Maintenance-Updater/2.4.9'
+        $request.UserAgent = 'ITSeti-Maintenance-Updater/2.4.11'
         $request.Headers.Add('X-Device-Id', [string]$device.deviceId)
         $request.Headers.Add('X-Device-Key', [string]$device.deviceKey)
         $request.Timeout = 30000
@@ -89,6 +96,7 @@ try {
             while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
                 $outputStream.Write($buffer, 0, $read)
                 $receivedBytes += $read
+                if ($receivedBytes -gt $assetSize) { throw 'Размер загрузки превышает размер установщика в манифесте.' }
                 if ($totalBytes -gt 0) {
                     $percent = [int][Math]::Floor(($receivedBytes * 100.0) / $totalBytes)
                     if ($percent -ge $lastPercent + 2 -or $percent -eq 100) {
@@ -123,6 +131,14 @@ try {
         exit 0
     }
 
+    $serviceStatePath=Join-Path $env:ProgramData 'ITSeti\Maintenance\Service\status.json'
+    if(Test-Path -LiteralPath $serviceStatePath){
+        $serviceState=Get-Content -LiteralPath $serviceStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if(@($serviceState.RunningOperations).Count -gt 0){
+            Set-UpdateStatus 'Пакет загружен и проверен. Ожидает завершения операций службы.'
+            exit 0
+        }
+    }
     Set-UpdateStatus "Устанавливаю версию $latestVersion."
     $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CLOSEAPPLICATIONS') -PassThru -Wait
     if ($process.ExitCode -ne 0) { throw "Установщик завершился с кодом $($process.ExitCode)." }
@@ -132,5 +148,9 @@ try {
     try { Set-UpdateStatus ('Ошибка обновления: ' + $message) } catch { }
     exit 1
 } finally {
-    Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+    if($updateLocked){
+        Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+        $updateMutex.ReleaseMutex()
+    }
+    if($updateMutex){$updateMutex.Dispose()}
 }

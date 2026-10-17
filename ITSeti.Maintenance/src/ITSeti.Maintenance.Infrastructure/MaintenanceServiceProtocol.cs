@@ -20,7 +20,10 @@ public enum MaintenanceServiceOperation
     RestoreWindowsDiagnosticData,
     OpenSystemTool,
     OpenUtility,
-    OpenServerPackage
+    OpenServerPackage,
+    ReadWindowsDefenderStatus,
+    UpdateServerSoftware,
+    RemoveLocalAdministrator
 }
 
 public sealed record MaintenanceServiceRequest(

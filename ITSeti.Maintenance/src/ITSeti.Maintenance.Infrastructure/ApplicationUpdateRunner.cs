@@ -52,7 +52,7 @@ public sealed class ApplicationUpdateRunner
     public static bool IsPendingInstall(string? status)
     {
         var message = GetStatusMessage(status);
-        return IsReadyToInstall(status) || message.StartsWith("Пакет загружен и проверен. Ожидает закрытия приложения.", StringComparison.OrdinalIgnoreCase);
+        return IsReadyToInstall(status) || message.StartsWith("Пакет загружен и проверен. Ожидает ", StringComparison.OrdinalIgnoreCase);
     }
 
     public static string? FilterStatusForVersion(string? status, Version? runningVersion)
@@ -115,6 +115,7 @@ public sealed class ApplicationUpdateRunner
         }
         catch (Exception ex) when (ex is InvalidOperationException or TimeoutException)
         {
+            ApplicationErrorStore.Record("Обновление", "Запуск автоматического обновления", ex);
             return false;
         }
     }

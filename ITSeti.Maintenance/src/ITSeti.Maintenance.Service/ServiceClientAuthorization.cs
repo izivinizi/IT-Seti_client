@@ -40,5 +40,5 @@ internal static class ServiceClientAuthorization
         MaintenanceServiceOperation.FullCheck or MaintenanceServiceOperation.QuickCheck or
         MaintenanceServiceOperation.Cleanup or
         MaintenanceServiceOperation.UploadReports or MaintenanceServiceOperation.RefreshSoftwareCatalog or
-        MaintenanceServiceOperation.ProbeTemperature;
+        MaintenanceServiceOperation.ProbeTemperature or MaintenanceServiceOperation.ReadWindowsDefenderStatus;
 }

@@ -14,7 +14,10 @@ public sealed record ApplicationErrorEntry(
     string ExceptionType,
     string TechnicalDetails,
     string Version,
-    IReadOnlyList<ITSeti.Maintenance.Core.SensorHistorySample>? SensorHistory = null);
+    IReadOnlyList<ITSeti.Maintenance.Core.SensorHistorySample>? SensorHistory = null)
+{
+    public string LocalTime => OccurredAt.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss");
+}
 
 public static class ApplicationErrorStore
 {
@@ -74,6 +77,21 @@ public static class ApplicationErrorStore
                     .Select(TryDeserialize).Where(entry => entry is not null).Cast<ApplicationErrorEntry>()
                     .TakeLast(Math.Min(limit, MaximumEntries)).Reverse().ToArray();
             }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
+    }
+
+    public static IReadOnlyList<ApplicationErrorEntry> ReadHistory(int limit = 100, int skip = 0)
+    {
+        try
+        {
+            var archive = Path.Combine(DirectoryPath, "Archive");
+            var files = new[] { JsonLogPath }.Concat(Directory.Exists(archive)
+                ? Directory.EnumerateFiles(archive, "*.jsonl").OrderByDescending(File.GetLastWriteTimeUtc) : []);
+            return files.Where(File.Exists).SelectMany(path => File.ReadLines(path).Reverse())
+                .Select(TryDeserialize).Where(entry => entry is not null).Cast<ApplicationErrorEntry>()
+                .DistinctBy(entry => entry.Id).Skip(Math.Max(0, skip)).Take(Math.Clamp(limit, 1, 200))
+                .Select(entry => entry with { SensorHistory = null }).ToArray();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
     }
@@ -194,7 +212,17 @@ public static class ApplicationErrorStore
     {
         var file = new FileInfo(JsonLogPath);
         if (!file.Exists || file.Length < 2 * 1024 * 1024) return;
-        var lines = File.ReadLines(JsonLogPath).TakeLast(MaximumEntries).ToArray();
+        var archive = Path.Combine(DirectoryPath, "Archive");
+        Directory.CreateDirectory(archive);
+        File.Copy(JsonLogPath, Path.Combine(archive, DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N") + ".jsonl"));
+        var lines = new List<string>();
+        var characters = 0;
+        foreach (var line in File.ReadLines(JsonLogPath).Reverse())
+        {
+            if (lines.Count > 0 && (characters + line.Length > 128 * 1024 || lines.Count >= MaximumEntries)) break;
+            lines.Add(line); characters += line.Length;
+        }
+        lines.Reverse();
         File.WriteAllLines(JsonLogPath, lines, new UTF8Encoding(false));
         var text = lines.Select(TryDeserialize).Where(entry => entry is not null).Select(entry =>
             $"[{entry!.OccurredAt:O}] {entry.Id:N} | {entry.Component} | {entry.Operation} | {entry.Summary}\r\n{entry.TechnicalDetails}\r\n");

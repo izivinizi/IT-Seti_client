@@ -110,18 +110,29 @@ internal static class FeedbackRegressionChecks
         var saved = new DiagnosticSnapshot(Guid.NewGuid(), DateTimeOffset.UtcNow, "Fixture", 5, 100, 90,
             [new("C:", 1000, 900)], [], Full: full);
         model.Selected = saved;
+        var sensorTime = DateTimeOffset.UtcNow;
+        model.Selected = saved with { HwInfo = new HwInfoSnapshot("fixture", "", sensorTime, null, null, null, null,
+            [new("Board / VRM MOS", 57, "°C", "VrmTemperature"),
+             new("CPU / Total CPU Usage", 30, "%", "CpuLoad"),
+             new("Board / +12V", 12.1, "V", "Rail12V")]) };
+        typeof(MainViewModel).GetMethod("RefreshHwInfoSensors", flags)!.Invoke(model, null);
+        if (model.HwInfoSensors.Count != 3 || model.HwInfoSensors.Any(sensor => sensor.Name.Contains('/')) ||
+            model.HwInfoSensors.Select(sensor => sensor.Group).Distinct().Count() != 3)
+            throw new Exception("Sensor labels retained source prefixes or lost type grouping.");
+        model.Selected = saved;
         typeof(MainViewModel).GetField("live", flags)!.SetValue(model, saved with { Full = null, Disks = [new("C:", 1000, 100)] });
         if (model.Gpu != "GPU fixture" || model.MemoryType != "DDR4" || !model.DiskCount.Contains("90"))
             throw new Exception("Live resource sampling erased hardware identity or overview disk usage.");
         using var cancellation = new CancellationTokenSource();
         typeof(MainViewModel).GetField("fullCheckCancellation", flags)!.SetValue(model, cancellation);
         window.Close();
-        if (cancellation.IsCancellationRequested || !(bool)typeof(MainWindow).GetField("closeAfterCheck", flags)!.GetValue(window)!)
+        var waitsForPortableCheck = (bool)typeof(MainWindow).GetField("closeAfterCheck", flags)!.GetValue(window)!;
+        if (cancellation.IsCancellationRequested || waitsForPortableCheck == FullDiagnosticsRunner.IsInstalled)
             throw new Exception("Closing the window interrupted the check.");
         typeof(MainViewModel).GetField("fullCheckCancellation", flags)!.SetValue(model, null);
         window.Close(); app.Shutdown();
         Directory.Delete(root, true);
-        Console.WriteLine("PASS: live monitoring preserves GPU/DDR, overview uses live disk usage, closing hides until check completes");
+        Console.WriteLine("PASS: live monitoring preserves GPU/DDR, overview uses live disk usage, installed UI closes without cancelling service work");
     }
 
     private static async Task CheckUpdaterPolling()
