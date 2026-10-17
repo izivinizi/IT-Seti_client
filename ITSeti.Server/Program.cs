@@ -558,15 +558,15 @@ app.MapGet("/api/v1/tickets/{requestId:guid}/messages", async (Guid requestId, H
     ownership.Parameters.AddWithValue("device", deviceId);
     if (await ownership.ExecuteScalarAsync() is null) return Results.NotFound();
     await using var messagesQuery = new NpgsqlCommand("""
-        SELECT id,direction,content,state,COALESCE(okdesk_created_at,created_at),last_error FROM ticket_messages
-        WHERE request_id=@id AND is_public ORDER BY COALESCE(okdesk_created_at,created_at),id LIMIT 500
+        SELECT id,direction,content,state,COALESCE(okdesk_created_at,created_at),last_error,okdesk_comment_id FROM ticket_messages
+        WHERE request_id=@id AND is_public ORDER BY COALESCE(okdesk_created_at,created_at),okdesk_comment_id NULLS LAST,created_at,id LIMIT 500
         """, connection);
     messagesQuery.Parameters.AddWithValue("id", requestId);
     await using var reader = await messagesQuery.ExecuteReaderAsync();
     var messages = new List<object>();
     while (await reader.ReadAsync()) messages.Add(new
     {
-        id = reader.GetGuid(0), direction = reader.GetString(1), content = reader.GetString(2),
+        id = reader.GetGuid(0), direction = reader.GetString(1), content = OkdeskCommentText.ForDisplay(reader.GetString(2),!reader.IsDBNull(6) && reader.GetString(1)=="engineer"),
         status = reader.GetString(3), createdAt = reader.GetDateTime(4),
         error = reader.IsDBNull(5) ? null : reader.GetString(5)
     });

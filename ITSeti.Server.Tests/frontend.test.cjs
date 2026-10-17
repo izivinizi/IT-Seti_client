@@ -101,6 +101,11 @@ async function test() {
   vm.runInContext(`renderRunNavigation([{id:'m',kind:'Постоянный мониторинг'},{id:'f',kind:'Плановая проверка'}],false)`,context);
   assert.equal(elements.get('run-list').children.length,1,'checks can be opened without scanning monitoring history');
   assert.equal(elements.get('run-list').children[0].dataset.runId,'f');
+  vm.runInContext(`activeTicket={requestId:'merged-fixture'}; api=async()=>[{createdAt:'2026-10-14T06:19:20Z',content:'Комментарий объединённой заявки',direction:'engineer',source:'okdesk',isPublic:true,state:'created'},{createdAt:'2026-10-15T07:44:43Z',content:'Текст <literal>',direction:'user',source:'local',isPublic:true,state:'created'}];`,context);
+  await vm.runInContext('loadConversation()',context);
+  assert.match(textOf(elements.get('ticket-conversation').children[0]),/Комментарий Okdesk/);
+  assert.doesNotMatch(textOf(elements.get('ticket-conversation').children[0]),/Отправлена в Okdesk/);
+  assert.match(textOf(elements.get('ticket-conversation').children[1]),/Пользователь.*Текст <literal>/s);
   console.log('PASS: temperatures, stale responses, cleared selection, application errors and compact process approval');
 }
 test().catch(error => { console.error(error); process.exitCode = 1; });

@@ -6,6 +6,8 @@ using System.Security.Cryptography;
 using System.Text;
 using ITSeti.Maintenance.Core;
 
+TicketMergeChecks.Run();
+
 if (args.Contains("--feedback-database"))
 {
     await FeedbackDatabaseChecks.RunAsync();

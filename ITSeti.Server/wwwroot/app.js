@@ -1026,7 +1026,9 @@ async function loadConversation() {
     const container = $('ticket-conversation'); container.replaceChildren();
     for (const message of messages) {
       const row = node('div', undefined, 'detail-row');
-      row.append(node('span', date(message.createdAt) + (message.isPublic ? ' · Публичный ответ' : ' · Внутренний комментарий') + ' · ' + (ticketStates[message.state] || message.state), 'meta'),
+      const author = message.direction === 'user' ? 'Пользователь' : message.source === 'okdesk' ? 'Комментарий Okdesk' : 'Ответ инженера';
+      const delivery = message.source === 'okdesk' ? '' : ' · ' + (ticketStates[message.state] || message.state);
+      row.append(node('span', date(message.createdAt) + ' · ' + author + (message.isPublic ? '' : ' · Внутренний') + delivery, 'meta'),
         node('p', message.content, 'ticket-description'));
       if (message.error) row.append(node('p', message.error, 'signal-error'));
       container.append(row);
