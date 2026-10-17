@@ -8,7 +8,8 @@ function element() {
   return { children: [], rows: [], dataset: {}, value: '', textContent: '', className: '', title: '', disabled: false, handlers: {},
     classList: { toggle() {}, remove() {}, add(name) { this.owner.className += ' ' + name; } },
     setAttribute(name, value) { this[name] = value; }, addEventListener(name, callback) { this.handlers[name] = callback; },
-    replaceChildren(...children) { this.children = children; }, append(...children) { this.children.push(...children); },
+    replaceChildren(...children) { this.children = children; }, append(...children) { children.forEach(child=>child.parent=this); this.children.push(...children); },
+    remove() { if(this.parent)this.parent.children=this.parent.children.filter(child=>child!==this); },
     get childElementCount() { return this.children.length; }, showModal() { this.open = true; }, close() { this.open = false; } };
 }
 function createElement() { const item = element(); item.classList.owner = item; created.push(item); return item; }
@@ -30,6 +31,20 @@ assert.match(server, /admin\.MapPost\("\/process-policy\/allow"/);
 vm.runInContext(source.slice(0, source.indexOf("for (const button of document.querySelectorAll('[data-view]'))")), context);
 vm.runInContext('globalThis.actualRenderRun = renderRun; globalThis.pending = []; api = () => new Promise((resolve, reject) => pending.push({resolve,reject})); renderRun = run => { globalThis.rendered = run.id; };', context);
 async function test() {
+  vm.runInContext("notifyError('Проверка ошибки'); notifyError('Проверка ошибки');", context);
+  assert.equal(elements.get('notifications').children.length,1,'duplicate failures share a notification');
+  vm.runInContext("for(let i=0;i<5;i++)notifyError('Ошибка '+i);",context);
+  assert.equal(elements.get('notifications').children.length,4,'notifications have a bounded queue');
+  const toast=elements.get('notifications').children[0];
+  assert.equal(toast.role,'alert'); toast.children[1].handlers.click();
+  assert.equal(elements.get('notifications').children.length,3,'notification close removes the message');
+
+  vm.runInContext("state.remoteAccess={fixture:{rms:'123-456',anyDesk:'987654'}}; globalThis.accessLine=remoteAccessLine({deviceId:'fixture'});",context);
+  assert.deepEqual(Array.from(context.accessLine.children,item=>item.textContent),['RMS 123-456','AnyDesk 987654']);
+  assert.ok(context.accessLine.children.every(item=>item.className !== 'button'),'remote IDs are plain text without copy controls');
+  let stopped=false;context.accessLine.handlers.click({stopPropagation(){stopped=true;}});
+  assert.equal(stopped,true,'selecting remote IDs must not open the computer card');
+
   context.noiseNote = 'Без доступа к исполняемому файлу процессов: 8';
   assert.equal(vm.runInContext('visibleNote(noiseNote)', context), false);
   assert.equal(vm.runInContext("visibleNote('SMART: неисправность')", context), true);
@@ -65,8 +80,7 @@ async function test() {
   assert.equal(elements.get('app-errors-next').disabled, false, 'application error paging follows hasMore');
   vm.runInContext('renderRun = actualRenderRun;', context);
   vm.runInContext("actualRenderRun({kind:'Проверка',startedAt:'2026-10-14T10:00:00Z',details:{trigger:'Запуск пользователем из приложения',requestedByWindowsSessionId:4,windowsSessionId:0}})", context);
-  assert.ok(elements.get('run-detail').children.some(item => item.textContent.includes('запрос из сеанса Windows 4') &&
-    item.textContent.includes('процесс проверки в сеансе Windows 0')), 'run detail distinguishes requesting and service process sessions');
+  assert.ok(elements.get('run-detail').children.some(item => item.textContent.includes('Запуск: Запуск пользователем')), 'run detail retains launch reason without internal session remarks');
   let policyRequest;
   context.api = async (path, options) => { policyRequest = { path, options }; return { allowedNames: ['unknown.exe'] }; };
   vm.runInContext(`renderRun({id:'process-test',details:{full:{processes:[{name:'unknown.exe',publisher:'Fixture signer',signature:'Valid',path:'C:/tools/unknown.exe'}]}},unknownProcesses:[{name:'unknown.exe',publisher:'Fixture signer',signature:'Valid',path:'C:/tools/unknown.exe'}]})`, context);
@@ -82,7 +96,7 @@ async function test() {
   const textOf = item => [item.textContent || '', ...item.children.map(textOf)].join(' ');
   assert.doesNotMatch(textOf(elements.get('run-detail')), /Нет данных|не передан|Локальные администраторы|Журнал Windows/,
     'a monitoring event must not render empty check sections or null CPU as zero');
-  assert.match(textOf(elements.get('device-profile')), /Saved CPU.*SMART.*SSD.*DiskSpd.*500/s,
+  assert.match(textOf(elements.get('device-profile')), /Saved CPU.*Накопители.*SSD.*SMART.*DiskSpd.*500/s,
     'monitoring keeps the saved configuration, SMART and benchmark above event details');
   vm.runInContext(`renderRunNavigation([{id:'m',kind:'Постоянный мониторинг'},{id:'f',kind:'Плановая проверка'}],false)`,context);
   assert.equal(elements.get('run-list').children.length,1,'checks can be opened without scanning monitoring history');

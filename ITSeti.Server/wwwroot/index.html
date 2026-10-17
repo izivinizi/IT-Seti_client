@@ -7,9 +7,9 @@
   <link rel="icon" href="/favicon.ico" sizes="any">
   <title>ИТ-Сети · Сервер</title>
   <script src="/theme.js?v=1"></script>
-  <link rel="stylesheet" href="/app.css?v=2.4.10">
+  <link rel="stylesheet" href="/app.css?v=20261017-ui1">
   <link rel="stylesheet" href="/package-admin.css?v=1">
-  <script src="/app.js?v=2.4.10" defer></script>
+  <script src="/app.js?v=20261017-ui1" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -41,7 +41,7 @@
             <div><span>Объектов</span><strong id="stat-sites">—</strong></div>
           </div>
           <div class="filterbar">
-            <label class="search-field"><span>Инвентарный номер</span><input id="device-search" class="field" placeholder="Введите часть номера" autocomplete="off"></label>
+            <label class="search-field"><span>PC №</span><input id="device-search" class="field" placeholder="Введите часть номера" autocomplete="off"></label>
             <label><span>Компания</span><select id="device-company" class="field"><option value="">Все компании</option></select></label>
             <label><span>Объект</span><select id="device-site" class="field"><option value="">Все объекты</option></select></label>
             <button id="sync-okdesk" type="button" class="secondary sync-button">Синхронизировать Okdesk</button>
@@ -55,7 +55,7 @@
               <div class="pager"><button id="device-prev" type="button" class="secondary compact">Назад</button><span id="device-page">Страница 1</span><button id="device-next" type="button" class="secondary compact">Далее</button></div>
             </section>
             <section class="detail-pane" aria-label="Проверки компьютера">
-              <div class="section-heading"><div><h2 id="selected-title">Выберите компьютер</h2><span id="selected-meta" class="meta"></span></div><button id="ticket-block-toggle" type="button" class="secondary compact" disabled>Заявки ПК</button></div>
+              <div class="section-heading"><div><h2 id="selected-title">Выберите компьютер</h2><div id="selected-access"></div><span id="selected-meta" class="meta"></span></div><button id="ticket-block-toggle" type="button" class="secondary compact" disabled>Заявки ПК</button></div>
               <div id="device-profile" class="device-profile"></div>
               <div id="run-tabs" class="run-tabs" role="tablist" aria-label="Тип отчёта"></div>
               <div id="run-list" class="run-list"></div>
@@ -72,7 +72,7 @@
           <div id="monitor-connections-empty" class="empty hidden">Новых компьютеров за выбранный период нет.</div>
         </section>
         <section id="view-application-errors" class="view" aria-labelledby="application-errors-title">
-          <div class="page-heading"><div><h1 id="application-errors-title">Ошибки приложения</h1><p>Ошибки собраны по компьютерам; нажмите карточку, чтобы открыть его проверку.</p></div><button id="refresh-application-errors" type="button" class="secondary">Обновить</button></div>
+          <div class="page-heading"><div><h1 id="application-errors-title">Ошибки приложения</h1><p></p></div><button id="refresh-application-errors" type="button" class="secondary">Обновить</button></div>
           <div class="filterbar">
             <label><span>Период</span><select id="app-errors-days" class="field"><option value="1">24 часа</option><option value="7" selected>7 дней</option><option value="30">30 дней</option><option value="90">90 дней</option></select></label>
             <label><span>Компания</span><select id="app-errors-company" class="field"><option value="">Все компании</option></select></label>
@@ -84,10 +84,11 @@
           <div class="pager"><button id="app-errors-prev" type="button" class="secondary compact">Назад</button><span id="app-errors-page">Страница 1</span><button id="app-errors-next" type="button" class="secondary compact">Далее</button></div>
         </section>
         <section id="view-monitoring" class="view" aria-labelledby="monitoring-title">
-          <div class="page-heading"><div><h1 id="monitoring-title">Мониторинг</h1><p>Проблемы по компьютерам; действия применяются к конкретной причине на этом ПК.</p></div><button id="refresh-monitoring" type="button" class="secondary">Обновить</button></div>
+          <div class="page-heading"><div><h1 id="monitoring-title">Мониторинг</h1><p></p></div><button id="refresh-monitoring" type="button" class="secondary">Обновить</button></div>
           <div class="monitor-summary"><strong id="monitor-total">—</strong><span>новых событий за 7 дней по всем ПК</span></div>
           <div class="filterbar monitoring-filters">
-            <label><span>Важность</span><select id="monitor-severity" class="field"><option value="1">Только критические</option><option value="2">Предупреждения</option><option value="0" selected>Все проблемы</option></select></label>
+            <label class="search-field"><span>Компьютер</span><input id="monitor-search" class="field" type="search" placeholder="PC № или имя ПК"></label>
+            <label><span>Важность</span><select id="monitor-severity" class="field"><option value="1" selected>Только критические</option><option value="2">Предупреждения</option><option value="0">Все проблемы</option></select></label>
             <label><span>Период</span><select id="monitor-days" class="field"><option value="1">24 часа</option><option value="7" selected>7 дней</option><option value="30">30 дней</option><option value="90">90 дней</option></select></label>
             <label><span>Компания</span><select id="monitor-company" class="field"><option value="">Все компании</option></select></label>
             <label><span>Объект</span><select id="monitor-site" class="field"><option value="">Все объекты</option></select></label>
@@ -117,7 +118,7 @@
             <label><span>Объект</span><select id="ticket-site" class="field"><option value="">Все объекты</option></select></label>
           </div>
           <div id="ticket-status" class="status" role="status"></div>
-          <div class="table-scroll"><table class="data-table ticket-table"><thead><tr><th>Тема и сервис</th><th>Инвентарный номер и объект</th><th>Создана</th><th>Статус</th></tr></thead><tbody id="ticket-rows"></tbody></table></div>
+          <div class="table-scroll"><table class="data-table ticket-table"><thead><tr><th>Тема и сервис</th><th>PC № и объект</th><th>Создана</th><th>Статус</th></tr></thead><tbody id="ticket-rows"></tbody></table></div>
           <div id="ticket-empty" class="empty hidden">Заявок пока нет.</div>
           <div class="pager"><button id="ticket-prev" type="button" class="secondary compact">Назад</button><span id="ticket-page">Страница 1</span><button id="ticket-next" type="button" class="secondary compact">Далее</button></div>
         </section>
@@ -169,5 +170,6 @@
     <div id="telemetry-chart" class="telemetry-chart"></div>
     <div id="telemetry-stats" class="telemetry-stats"></div>
   </dialog>
+  <aside id="notifications" class="notifications" aria-label="Уведомления"></aside>
 </body>
 </html>

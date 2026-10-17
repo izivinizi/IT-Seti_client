@@ -1373,8 +1373,9 @@ admin.MapPost("/devices/{id:guid}/ticket-block", async (Guid id, TicketBlockRequ
     return await command.ExecuteNonQueryAsync(context.RequestAborted) == 1
         ? Results.Ok(new { id, blocked = body.Blocked }) : Results.NotFound();
 });
+DeviceMonitoringEndpoints.Map(admin);
 admin.MapGet("/monitoring", async (NpgsqlDataSource db, int? days, long? companyId, long? siteId,
-    string? category, int? page, int? severity, string? state, string? types) =>
+    string? category, int? page, int? severity, string? state, string? types, string? q) =>
 {
     const int pageSize = 40;
     var since = DateTime.UtcNow.AddDays(-Math.Clamp(days ?? 7, 1, 90));
@@ -1399,7 +1400,7 @@ admin.MapGet("/monitoring", async (NpgsqlDataSource db, int? days, long? company
         )
         SELECT d.id,d.serial_number,d.inventory_number,d.computer_name,c.name,s.name,max(a.detected_at),
                jsonb_agg(jsonb_build_object('id',a.id,'runId',a.run_id,'detectedAt',a.detected_at,
-                 'category',a.category,'title',a.title,'detail',a.detail,'severity',a.severity,
+                 'identity',a.identity,'category',a.category,'title',a.title,'detail',a.detail,'severity',a.severity,
                  'occurrences',a.occurrences,'firstDetectedAt',a.first_detected_at)
                  ORDER BY a.detected_at DESC,a.id DESC)::text
         FROM grouped a JOIN devices d ON d.id=a.device_id
@@ -1410,10 +1411,12 @@ admin.MapGet("/monitoring", async (NpgsqlDataSource db, int? days, long? company
           AND (@severity=0 OR a.severity=@severity) AND a.detected_at>=@since AND (@company IS NULL OR d.company_id=@company)
           AND (@site IS NULL OR d.service_object_id=@site) AND (@category IS NULL OR a.category=@category)
           AND (@types IS NULL OR ({MonitoringKinds.Sql})=ANY(@types))
+          AND (@q IS NULL OR concat_ws(' ',d.inventory_number,d.computer_name,c.name,s.name) ILIKE '%'||@q||'%')
         GROUP BY d.id,d.serial_number,d.inventory_number,c.name,s.name
         ORDER BY max(a.detected_at) DESC,d.id LIMIT @limit OFFSET @offset
         """, connection);
     command.Parameters.AddWithValue("since", since);
+    command.Parameters.Add("q", NpgsqlDbType.Text).Value = string.IsNullOrWhiteSpace(q) ? DBNull.Value : q.Trim()[..Math.Min(q.Trim().Length,120)];
     command.Parameters.AddWithValue("severity", severity ?? 1);
     command.Parameters.AddWithValue("state", state ?? "open");
     command.Parameters.Add("company", NpgsqlDbType.Bigint).Value = (object?)companyId ?? DBNull.Value;
@@ -1505,7 +1508,9 @@ admin.MapGet("/new-connections", async (NpgsqlDataSource db, int? days, long? co
     var since = DateTime.UtcNow.AddDays(-Math.Clamp(days ?? 7, 1, 90));
     await using var connection = await db.OpenConnectionAsync();
     await using var command = new NpgsqlCommand($"""
-        SELECT d.id,d.created_at,d.serial_number,d.inventory_number,c.name,s.name,d.os_name,d.os_version
+        SELECT d.id,d.created_at,d.serial_number,d.inventory_number,c.name,s.name,d.os_name,d.os_version,d.computer_name,
+          (SELECT coalesce(details->>'RmsId',details->>'rmsId') FROM check_runs WHERE device_id=d.id AND coalesce(details->>'RmsId',details->>'rmsId','')<>'' ORDER BY started_at DESC LIMIT 1),
+          (SELECT coalesce(details->>'AnyDeskId',details->>'anyDeskId') FROM check_runs WHERE device_id=d.id AND coalesce(details->>'AnyDeskId',details->>'anyDeskId','')<>'' ORDER BY started_at DESC LIMIT 1)
         FROM devices d
         LEFT JOIN companies c ON c.id=d.company_id
         LEFT JOIN service_objects s ON s.id=d.service_object_id
@@ -1526,7 +1531,9 @@ admin.MapGet("/new-connections", async (NpgsqlDataSource db, int? days, long? co
         company = reader.IsDBNull(4) ? null : reader.GetString(4),
         site = reader.IsDBNull(5) ? null : reader.GetString(5),
         os = reader.IsDBNull(6) ? null : reader.GetString(6),
-        osVersion = reader.IsDBNull(7) ? null : reader.GetString(7)
+        osVersion = reader.IsDBNull(7) ? null : reader.GetString(7),
+        computer=reader.GetString(8), rms=reader.IsDBNull(9) ? null : reader.GetString(9),
+        anyDesk=reader.IsDBNull(10) ? null : reader.GetString(10)
     });
     return Results.Ok(new { items = rows });
 });
