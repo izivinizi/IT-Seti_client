@@ -314,6 +314,9 @@ app.MapPost("/api/v1/auto-enroll", async (HttpRequest request, AutoEnrollRequest
             return Results.Conflict(new { error = "Для этого IP нет одной однозначной компании и объекта. Выберите их вручную." });
     }
 
+    assignment = await SiteAssignmentResolver.CompleteAsync(connection, assignment, clientIp, existingId,
+        request.HttpContext.RequestAborted, transaction);
+
     var id = existingId ?? Guid.NewGuid();
     var key = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
     var supportKey = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
@@ -325,10 +328,11 @@ app.MapPost("/api/v1/auto-enroll", async (HttpRequest request, AutoEnrollRequest
         await using var update = new NpgsqlCommand("""
             UPDATE devices SET computer_name=@name,
               serial_number=COALESCE(NULLIF(@serial,''),serial_number),inventory_number=@inventory,
-              api_key_hash=@key,support_key_hash=@support,last_ip=@ip::inet,last_seen_at=now()
+              service_object_id=@site,api_key_hash=@key,support_key_hash=@support,last_ip=@ip::inet,last_seen_at=now()
             WHERE id=@id
             """, connection, transaction);
         update.Parameters.AddWithValue("id", id);
+        update.Parameters.Add("site", NpgsqlDbType.Bigint).Value = (object?)assignment.SiteId ?? DBNull.Value;
         update.Parameters.AddWithValue("name", body.ComputerName.Trim());
         update.Parameters.Add("serial", NpgsqlDbType.Text).Value = (object?)body.SerialNumber?.Trim() ?? DBNull.Value;
         update.Parameters.Add("inventory", NpgsqlDbType.Text).Value = (object?)body.InventoryNumber ?? DBNull.Value;
@@ -452,6 +456,8 @@ app.MapPost("/api/v1/assignment/resolve", async (HttpRequest request, ResolveAss
         await saveInventory.ExecuteNonQueryAsync(request.HttpContext.RequestAborted);
         return Results.Ok(new { matched = false });
     }
+    assignment = await SiteAssignmentResolver.CompleteAsync(connection, assignment, ip, deviceId,
+        request.HttpContext.RequestAborted);
     await using var update = new NpgsqlCommand("""
         UPDATE devices SET company_id=@company,service_object_id=@site,inventory_number=@inventory,
           last_ip=COALESCE(@ip::inet,last_ip),last_seen_at=now() WHERE id=@id

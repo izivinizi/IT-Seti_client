@@ -67,5 +67,6 @@ internal static class FeedbackDatabaseChecks
                 throw new Exception("Monitoring type checkboxes filter the wrong records.");
         }
         Console.WriteLine("PASS PostgreSQL: all monitoring kinds, no selected kinds, selected subset, temperature before CPU classification");
+        await AssignmentDatabaseChecks.RunAsync(connection);
     }
 }
