@@ -191,7 +191,7 @@ try {
         $oldTask=Get-ScheduledTask -TaskName $obsoleteQuickTask -ErrorAction SilentlyContinue
         if($oldTask){Unregister-ScheduledTask -TaskName $obsoleteQuickTask -Confirm:$false -ErrorAction Stop;Write-InstallLog "Удалена устаревшая задача быстрой проверки $obsoleteQuickTask."}
     }
-    foreach($name in @($taskName,'ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair','ITSeti-Maintenance-Cleanup','ITSeti-Maintenance-OrganizationSetup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates','ITSeti-Maintenance-Update',$uploadTaskName,$catalogTaskName)){
+    foreach($name in @($taskName,'ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair','ITSeti-Maintenance-Cleanup','ITSeti-Maintenance-OrganizationSetup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates','ITSeti-Maintenance-Update','ITSeti-Maintenance-ServiceHealth',$uploadTaskName,$catalogTaskName)){
         $installStage="Регистрация задачи $name"
         $script=if($name -eq $uploadTaskName){Join-Path $install 'Backend\Upload-Reports.ps1'}elseif($name -eq 'ITSeti-Maintenance-Repair'){Join-Path $install 'Backend\InstalledRepair.ps1'}elseif($name -eq 'ITSeti-Maintenance-Cleanup'){Join-Path $install 'Backend\InstalledCleanup.ps1'}elseif($name -eq 'ITSeti-Maintenance-OrganizationSetup'){Join-Path $install 'Backend\InstalledOrganizationSetup.ps1'}elseif($name -eq 'ITSeti-Maintenance-Update'){Join-Path $install 'Backend\Update-Application.ps1'}elseif($name -match 'Updates$'){Join-Path $install 'Backend\Set-WindowsAutomaticUpdates.ps1'}else{$worker}
         $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$script+'"'
@@ -200,11 +200,18 @@ try {
             $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$script+'" -CatalogOnly'
         }
         if($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$arguments+=' -StartRepair'}
+        if($name -eq 'ITSeti-Maintenance-ServiceHealth'){
+            $script=Join-Path $install 'Backend\ServiceHealth.ps1'
+            $arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$script+'"'
+        }
         if($name -eq 'ITSeti-Maintenance-DisableUpdates'){$arguments+=' -Action Disable'}
         if($name -eq 'ITSeti-Maintenance-RestoreUpdates'){$arguments+=' -Action Restore'}
         if(!(Test-Path -LiteralPath $script -PathType Leaf)){throw "Task script is missing: $script"}
         $taskAction=New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $install
         $trigger=if($name -eq $uploadTaskName){$uploadTrigger}elseif($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$autoFullTrigger}else{$taskTrigger}
+        if($name -eq 'ITSeti-Maintenance-ServiceHealth'){
+            $trigger=@((New-ScheduledTaskTrigger -AtStartup),(New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(15) -RepetitionInterval (New-TimeSpan -Minutes 15)))
+        }
         $settings=if($name -eq 'ITSeti-Maintenance-AutoFullRepair'){$autoFullSettings}elseif($name -eq 'ITSeti-Maintenance-Update'){$updateTaskSettings}else{$taskSettings}
         try {
             $lastTaskError=$null
@@ -230,7 +237,7 @@ try {
             }
             if(!$task){throw "Task Scheduler did not expose registered task $name."}
             $engineerTask=$name -in @('ITSeti-Maintenance-AutoFullRepair','ITSeti-Maintenance-Repair',
-                'ITSeti-Maintenance-OrganizationSetup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates')
+                'ITSeti-Maintenance-OrganizationSetup','ITSeti-Maintenance-DisableUpdates','ITSeti-Maintenance-RestoreUpdates','ITSeti-Maintenance-ServiceHealth')
             $task.SetSecurityDescriptor($(if($engineerTask){'D:P(A;;FA;;;SY)(A;;FA;;;BA)'}
                 else{'D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;BU)'}),0)
             $definition=$task.Definition
@@ -303,6 +310,8 @@ if($existingService){
 if($LASTEXITCODE -ne 0){throw 'Не удалось включить автоматический запуск службы.'}
 & sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Не удалось настроить восстановление службы.'}
+& sc.exe failureflag $serviceName 1 | Out-Null
+if($LASTEXITCODE -ne 0){throw 'Не удалось включить восстановление при аварийном завершении службы.'}
 & sc.exe description $serviceName 'Диагностика, мониторинг и системные операции ИТ-Сети.' | Out-Null
 Start-Service -Name $serviceName -ErrorAction Stop
 for($attempt=0;$attempt -lt 120;$attempt++){

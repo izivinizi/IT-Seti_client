@@ -96,7 +96,8 @@ public sealed class OkdeskApiClient : IOkdeskClient
             var author = JsonRead.Property(item, "author") ?? default;
             comments.Add(new(id.Value, JsonRead.String(item, "content") ?? "",
                 JsonRead.String(author, "type") ?? "employee",
-                long.TryParse(JsonRead.String(author, "id"), out var authorId) ? authorId : null));
+                long.TryParse(JsonRead.String(author, "id"), out var authorId) ? authorId : null,
+                CreatedAt: JsonRead.Date(item,"created_at","createdAt")));
         }
         return comments;
     }

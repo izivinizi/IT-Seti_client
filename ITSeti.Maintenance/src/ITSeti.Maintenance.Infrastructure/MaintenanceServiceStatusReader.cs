@@ -5,6 +5,16 @@ namespace ITSeti.Maintenance.Infrastructure;
 
 public static class MaintenanceServiceStatusReader
 {
+    public static bool HasActiveWork()
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(File.ReadAllText(StatusPath));
+            return !json.RootElement.TryGetProperty("runningOperations", out var running) ||
+                running.ValueKind != JsonValueKind.Array || running.GetArrayLength() > 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException) { return true; }
+    }
     private static readonly string StatusPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
         "ITSeti", "Maintenance", "Service", "status.json");

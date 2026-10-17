@@ -20,7 +20,7 @@ public sealed class MonitoringReportBatch
 
     public void Add(IEnumerable<CriticalMonitoringIssue> issues, DateTimeOffset now)
     {
-        foreach (var issue in issues.Where(issue => issue.Severity == "Critical" && issue.Type != MonitoringIssueType.ResourceLoad))
+        foreach (var issue in issues.Where(issue => issue.Severity is "Critical" or "Warning"))
         {
             pending[issue.Identity] = pending.TryGetValue(issue.Identity, out var previous)
                 ? previous with { Issue = issue, LastAtUtc = now, Count = previous.Count + 1 }

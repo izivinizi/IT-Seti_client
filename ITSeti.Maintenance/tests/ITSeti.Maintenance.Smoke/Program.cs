@@ -45,6 +45,22 @@ internal static class Program
             Console.WriteLine($"PASS live server: 2.3.6 receives {currentVersion}, current version is not reinstalled, authenticated package URL validated");
             return 0;
         }
+        if (args.Contains("--update-hint-contract"))
+        {
+            using var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK) {
+                RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://it-seti.nylenz.ru/api/v1/catalog") };
+            response.Headers.TryAddWithoutValidation("X-ITSeti-Application-Version", new[] { "2.4.12", "2.4.13" });
+            ServerUpdateHint.Observe(response);
+            if (ServerUpdateHint.TakeNewerThan(new Version(2,4,11))) throw new Exception("Ambiguous update hint accepted");
+            response.Headers.Remove("X-ITSeti-Application-Version");
+            response.Headers.Add("X-ITSeti-Application-Version", "2.4.12");
+            ServerUpdateHint.Observe(response);
+            if (!ServerUpdateHint.TakeNewerThan(new Version(2,4,11))) throw new Exception("Newer update hint ignored");
+            ServerUpdateHint.Observe(response);
+            if (ServerUpdateHint.TakeNewerThan(new Version(2,4,11))) throw new Exception("Duplicate hint causes repeated update requests");
+            Console.WriteLine("PASS optional server update hints: newer version, malformed header and duplicate suppression");
+            return 0;
+        }
         if (args.Contains("--service-concurrency-contract"))
         {
             var type = System.Reflection.Assembly.Load("ITSeti.Maintenance.Service")
@@ -124,6 +140,15 @@ internal static class Program
                     Guid.NewGuid().ToString("D"), Guid.NewGuid().ToString("N"), Process.GetCurrentProcess().SessionId), identity])!;
             if ((bool)response.GetType().GetProperty("Success")!.GetValue(response)!)
                 throw new Exception("Unauthenticated client launched a SYSTEM installer");
+            var remove = (MaintenanceServiceResponse)type.GetMethod("HandleRequest", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(coordinator, [new MaintenanceServiceRequest("remove-local-admin", Target: "S-1-5-21-1-2-3-1001"), identity])!;
+            if (remove.Success) throw new Exception("Unauthenticated client changed local administrator membership");
+            var ordinaryOperation = assembly.GetType("ITSeti.Maintenance.Service.ServiceClientAuthorization")!
+                .GetMethod("OrdinaryOperation", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)!;
+            if (!(bool)ordinaryOperation.Invoke(null, [MaintenanceServiceOperation.ReadWindowsDefenderStatus])! ||
+                (bool)ordinaryOperation.Invoke(null, [MaintenanceServiceOperation.DisableWindowsDefender])! ||
+                (bool)ordinaryOperation.Invoke(null, [MaintenanceServiceOperation.UpdateServerSoftware])!)
+                throw new Exception("Status reading and elevated mutation permissions are not separated");
             Console.WriteLine("PASS interactive installer validates catalog metadata and requires engineer authorization");
             return 0;
         }
@@ -286,7 +311,17 @@ internal static class Program
             if(!denied.Summary.Contains(deniedPath, StringComparison.Ordinal) ||
                 !ApplicationErrorStore.UserMessage(denied).Contains(deniedPath, StringComparison.Ordinal))
                 throw new Exception("The user-facing access-denied message hid the Windows path and reason");
-            Console.WriteLine("PASS error log: details, redaction, duplicate suppression and report marker");return 0;
+            var archive = Path.Combine(Path.GetDirectoryName(ApplicationErrorStore.JsonLogPath)!, "Archive");
+            Directory.CreateDirectory(archive);
+            var archived = error with { Id = Guid.NewGuid(), OccurredAt = error.OccurredAt.AddDays(-1), Summary = "archived fixture" };
+            var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            File.WriteAllText(Path.Combine(archive, "fixture.jsonl"), JsonSerializer.Serialize(error, jsonOptions) + Environment.NewLine +
+                JsonSerializer.Serialize(archived, jsonOptions) + Environment.NewLine);
+            var history = ApplicationErrorStore.ReadHistory();
+            if (history.Count(entry => entry.Id == error.Id) != 1 || !history.Any(entry => entry.Id == archived.Id) ||
+                ApplicationErrorStore.ReadHistory(1, history.Count - 1).Single().Id != archived.Id)
+                throw new Exception("Archived error history deduplication or pagination failed");
+            Console.WriteLine("PASS error log: details, redaction, duplicate suppression, report marker and archived history pagination");return 0;
         }
         if (args.Contains("--ticket-shutdown-contract"))
         {
@@ -1485,7 +1520,7 @@ internal static class Program
             ResourceSampling = pressure with { MemoryHighSamples = 0, DiskReadLatencyMs = 120, DiskReadOperations = 120 } } };
         if (!DiagnosticRules.GetUserIssues(hddLatency).Any(i => i.Title.Contains("долго отвечает") && i.Severity == "Warning"))
             throw new Exception("Sustained HDD latency advisory missing");
-        if (CriticalMonitoringEvaluator.Evaluate(snapshot with { CpuPercent = 100, AvailableMemoryBytes = 1, Disks = [new DiskSnapshot("C:\\", 100L * 1073741824, 1)] }).Count != 0)
+        if (CriticalMonitoringEvaluator.Evaluate(snapshot with { CpuPercent = 100, AvailableMemoryBytes = 1, Disks = [new DiskSnapshot("C:\\", 100L * 1073741824, 1)] }).Any(issue => issue.Severity == "Critical"))
             throw new Exception("CPU, memory and free-space pressure must not create critical monitoring alerts");
         if (CriticalMonitoringEvaluator.Evaluate(snapshot with { DiskReadLatencyMs = 99 }).Any(issue => issue.Identity == "disk:latency") ||
             !CriticalMonitoringEvaluator.Evaluate(snapshot with { DiskReadLatencyMs = 100 }).Any(issue => issue.Identity == "disk:latency"))

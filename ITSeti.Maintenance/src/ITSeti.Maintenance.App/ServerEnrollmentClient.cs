@@ -36,6 +36,8 @@ internal sealed class ServerEnrollmentClient : IDisposable
             using var resolve = await SendAsync(HttpMethod.Post, "api/v1/assignment/resolve",
                 new { inventoryNumber = ReadInventory() }, cancellationToken);
             var result = await resolve.Content.ReadFromJsonAsync<ResolveAssignmentResponse>(JsonOptions, cancellationToken);
+            if (result?.Matched == true)
+                await SaveDeviceAsync(device with { CompanyId = result.CompanyId, SiteId = result.SiteId }, cancellationToken);
             return result?.Matched == true;
         }
 
@@ -138,6 +140,7 @@ internal sealed class ServerEnrollmentClient : IDisposable
         request.Headers.Add("X-Device-Key", device.DeviceKey);
         if (body is not null) request.Content = JsonContent.Create(body, options: JsonOptions);
         var response = await http.SendAsync(request, cancellationToken);
+        ServerUpdateHint.Observe(response);
         if (!response.IsSuccessStatusCode)
         {
             var error = await ReadErrorAsync(response);

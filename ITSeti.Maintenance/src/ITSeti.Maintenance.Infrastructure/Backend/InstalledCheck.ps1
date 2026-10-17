@@ -94,7 +94,7 @@ $source=$PSScriptRoot
 if(!$SmartOnly){
     & (Join-Path $source 'Upload-Reports.ps1') -RefreshPolicyOnly
 }
-foreach($file in @('FullCheckWorker.ps1','HeadlessDiskWorker.ps1','ResourceSampler.ps1','HWiNFO.ps1','Summary.ps1','DiskTools.ps1','Runtime.ps1','EventWorker.ps1','Repair.ps1','RepairWorker.ps1','NativeDiskMark.cs','allowed-processes.json','allowed-processes-win7.txt','allowed-publishers.txt','Set-WindowsAutomaticUpdates.ps1','Update-Application.ps1')) {
+foreach($file in @('FullCheckWorker.ps1','HeadlessDiskWorker.ps1','ResourceSampler.ps1','HWiNFO.ps1','Summary.ps1','DiskTools.ps1','Runtime.ps1','EventWorker.ps1','Repair.ps1','RepairWorker.ps1','NativeDiskMark.cs','allowed-processes.json','allowed-processes-win7.txt','allowed-publishers.txt','Set-WindowsAutomaticUpdates.ps1','Set-LocalPasswordsNeverExpire.ps1','Update-Application.ps1')) {
     Copy-Item -LiteralPath (Join-Path $source $file) -Destination $run -ErrorAction Stop
 }
 $env:ITSETI_CPU_TEMPERATURE_FILE=$cpuTemperatureFile

@@ -53,7 +53,7 @@ internal static class RefactorContract
             "Hourly batching or restart persistence failed");
         batch.MarkSent(monitoringStart.AddHours(1));
         batch.Add([batchIssue with { Type = MonitoringIssueType.ResourceLoad }], monitoringStart.AddHours(2));
-        Check(batch.Ready(monitoringStart.AddHours(2)).Count == 0, "Resource load entered monitoring queue");
+        Check(batch.Ready(monitoringStart.AddHours(2)).Count == 1, "Confirmed resource load was lost from monitoring queue");
         var packageRoot = Path.Combine(Path.GetTempPath(), "ITSeti-package-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(packageRoot);
         try

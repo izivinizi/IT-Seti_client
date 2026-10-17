@@ -172,7 +172,8 @@ public partial class App : Application
                         "-ParentPid", Environment.ProcessId.ToString() }) start.ArgumentList.Add(argument);
                     Process.Start(start)?.Dispose();
                 }
-                catch (Exception exception) when (exception is Win32Exception or IOException or UnauthorizedAccessException) { }
+                catch (Exception exception) when (exception is Win32Exception or IOException or UnauthorizedAccessException)
+                { ApplicationErrorStore.Record("Обновление", "Продолжение установки после закрытия окна", exception); }
             }
         }
         base.OnExit(e);

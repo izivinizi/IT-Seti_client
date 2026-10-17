@@ -12,17 +12,17 @@ public static class PortalOperations
         {
             await using var connection = await db.OpenConnectionAsync();
             await using var query = new NpgsqlCommand($"""
-                SELECT m.id,m.content,m.is_public,m.state,m.created_at,m.last_error
+                SELECT m.id,m.content,m.is_public,m.state,COALESCE(m.okdesk_created_at,m.created_at),m.last_error,m.okdesk_comment_id,m.direction
                 FROM ticket_messages m
                 WHERE m.request_id=@id AND EXISTS(
                     SELECT 1 FROM ticket_requests t JOIN devices d ON d.id=t.device_id
                     WHERE t.request_id=m.request_id AND {DeviceDisplayFilter.SqlPredicate})
-                ORDER BY m.created_at,m.id LIMIT 500
+                ORDER BY COALESCE(m.okdesk_created_at,m.created_at),m.okdesk_comment_id NULLS LAST,m.created_at,m.id LIMIT 500
                 """, connection);
             query.Parameters.AddWithValue("id", id);
             await using var reader = await query.ExecuteReaderAsync();
             var rows = new List<object>();
-            while (await reader.ReadAsync()) rows.Add(new { id=reader.GetGuid(0), content=reader.GetString(1), isPublic=reader.GetBoolean(2), state=reader.GetString(3), createdAt=reader.GetDateTime(4), error=reader.IsDBNull(5) ? null : reader.GetString(5) });
+            while (await reader.ReadAsync()) rows.Add(new { id=reader.GetGuid(0), content=OkdeskCommentText.ForDisplay(reader.GetString(1),!reader.IsDBNull(6) && reader.GetString(7)=="engineer"), direction=reader.GetString(7), source=reader.IsDBNull(6)?"local":"okdesk", isPublic=reader.GetBoolean(2), state=reader.GetString(3), createdAt=reader.GetDateTime(4), error=reader.IsDBNull(5) ? null : reader.GetString(5) });
             return Results.Ok(rows);
         });
         admin.MapPost("/tickets/{id:guid}/reply", async (Guid id, ReplyRequest body, HttpContext context, IAntiforgery csrf, NpgsqlDataSource db) =>

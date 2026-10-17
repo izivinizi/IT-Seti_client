@@ -8,8 +8,8 @@ public sealed record MonitorIssue(string Category, string Identity, string Title
 
 public static class Monitoring
 {
-    // Applies to older clients too; resource pressure remains in detailed reports.
-    public const string AlertSqlPredicate = "a.title !~* '(загрузк[аи] (CPU|ЦП|процессора|памяти|ОЗУ)|мало (доступной памяти|места)|небольшой объём памяти)'";
+    // Applies to older clients too; resource pressure is visible when warnings are selected.
+    public const string AlertSqlPredicate = "a.severity IN (1,2)";
     public static bool IsResourcePressure(string title, string detail = "") =>
         Regex.IsMatch(title, @"загрузк[аи] (CPU|ЦП|процессора|памяти|ОЗУ)|мало (доступной памяти|места)|небольшой объём памяти", RegexOptions.IgnoreCase) ||
         (title == "Новое замечание диагностики" && (SpaceNote.IsMatch(detail) ||
@@ -22,10 +22,9 @@ public static class Monitoring
         JsonElement? previousEvents = null, IReadOnlyList<MonitorIssue>? currentIssues = null)
     {
         currentIssues ??= Extract(current);
-        // Historical Windows events still need a baseline; current critical findings do not.
-        return currentIssues.Where(issue => issue.Category != "event" && issue.Severity == 1 &&
-                !IsResourcePressure(issue.Title, issue.Detail))
-            .Concat(NewIssues(current, previous, previousEvents, currentIssues: currentIssues))
+        // Historical Windows events still need a baseline; current diagnostic findings do not.
+        return currentIssues.Where(issue => issue.Category != "event" && issue.Severity is 1 or 2)
+            .Concat(NewIssues(current, previous, previousEvents, includeWarnings: true, currentIssues: currentIssues))
             .DistinctBy(issue => (issue.Category.ToLowerInvariant(), issue.Identity.ToLowerInvariant()))
             .ToArray();
     }

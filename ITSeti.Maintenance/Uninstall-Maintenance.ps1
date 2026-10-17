@@ -2,6 +2,8 @@
 if(!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){
     throw 'Run uninstallation as administrator.'
 }
+Remove-Item -LiteralPath (Join-Path $env:ProgramData 'ITSeti\Maintenance\installed.flag') -Force -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName 'ITSeti-Maintenance-ServiceHealth' -Confirm:$false -ErrorAction SilentlyContinue
 $updatePolicy=Join-Path $PSScriptRoot 'Backend\Set-WindowsAutomaticUpdates.ps1'
 if(Test-Path -LiteralPath $updatePolicy){try {& $updatePolicy -Action Restore | Out-Null} catch {Write-Warning ('Не удалось восстановить прежнюю политику автообновлений: '+$_.Exception.Message)}}
 $serviceName='ITSetiMaintenanceService'

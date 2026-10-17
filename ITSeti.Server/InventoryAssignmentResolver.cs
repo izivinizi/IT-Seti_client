@@ -21,13 +21,16 @@ public static class InventoryAssignmentResolver
             JOIN companies c ON c.id=source.company_id AND c.active
             LEFT JOIN service_objects s ON s.id=source.service_object_id AND s.company_id=source.company_id AND s.active
             WHERE source.service_object_id IS NULL OR s.id IS NOT NULL
-            LIMIT 2
             """, connection, transaction);
         command.Parameters.AddWithValue("inventory", inventory);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var candidates = new List<IpAssignment>();
         while (await reader.ReadAsync(cancellationToken))
             candidates.Add(new(reader.GetInt64(0), reader.IsDBNull(1) ? null : reader.GetInt64(1)));
-        return AutomaticIpEnrollment.ResolveUnique(candidates);
+        var companies = candidates.Select(candidate => candidate.CompanyId).Distinct().Take(2).ToArray();
+        if (companies.Length != 1) return null;
+        var sites = candidates.Where(candidate => candidate.SiteId is not null)
+            .Select(candidate => candidate.SiteId).Distinct().Take(2).ToArray();
+        return sites.Length > 1 ? null : new IpAssignment(companies[0], sites.FirstOrDefault());
     }
 }

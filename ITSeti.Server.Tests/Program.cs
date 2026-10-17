@@ -6,6 +6,8 @@ using System.Security.Cryptography;
 using System.Text;
 using ITSeti.Maintenance.Core;
 
+TicketMergeChecks.Run();
+
 if (args.Contains("--feedback-database"))
 {
     await FeedbackDatabaseChecks.RunAsync();
@@ -102,7 +104,8 @@ static void Check(bool value, string caseName)
     Console.WriteLine("PASS " + caseName);
 }
 
-var sourceRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+var sourceRoot = Environment.GetEnvironmentVariable("ITSETI_TEST_SOURCE_ROOT")
+    ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
 var applicationErrorSchema = File.ReadAllText(Path.Combine(sourceRoot, "ITSeti.Server", "Database.cs"));
 var applicationErrorApi = File.ReadAllText(Path.Combine(sourceRoot, "ITSeti.Server", "Program.cs"));
 var applicationErrorPage = File.ReadAllText(Path.Combine(sourceRoot, "ITSeti.Server", "wwwroot", "index.html"));
@@ -128,7 +131,7 @@ Check(applicationErrorApi.Contains("admin.MapPost(\"/monitoring/{id:long}/resolv
     applicationErrorUi.Contains("Игнорировать эту причину"),
     "monitoring issues can be resolved or explicitly ignored for one computer");
 Check(applicationErrorUi.Contains("application-error-card clickable") && applicationErrorUi.Contains("monitor-card clickable") &&
-    applicationErrorUi.Contains("showTelemetryChart") && applicationErrorUi.Contains("Math.round(cpuPercent) + '%'"),
+    applicationErrorUi.Contains("showTelemetryChart") && applicationErrorUi.Contains("Math.round(Number(cpu)) + '%'"),
     "server groups issues by PC, charts recent sensor history and rounds CPU load");
 var ticketRouteStart = applicationErrorApi.IndexOf("admin.MapGet(\"/tickets\"", StringComparison.Ordinal);
 var ticketRouteEnd = applicationErrorApi.IndexOf("admin.MapGet(\"/overview\"", ticketRouteStart, StringComparison.Ordinal);
@@ -155,7 +158,7 @@ using (var sharedDocument = JsonDocument.Parse(sharedReport.ToJsonString()))
     Check(Monitoring.CurrentIssues(sharedDocument.RootElement).Count == DiagnosticEngine.Evaluate(sharedSnapshot).Issues.Count,
         "versioned reports are evaluated by the same client/server core from raw inputs");
 
-var workspaceRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+var workspaceRoot = sourceRoot;
 foreach (var (installer, expectedVersion) in new[]
          {
              (Path.Combine(workspaceRoot, "ITSeti.Maintenance", "dist", "ITSeti-Maintenance-Setup-2.3.9.exe"), new Version(2, 3, 9)),
@@ -446,14 +449,14 @@ var win7Old = Report("""{"Findings":[],"Events":[{"Log":"Application","Source":"
 var win7New = Report("""{"Findings":[],"Events":[{"Log":"Application","Source":"App","Id":101,"Level":1,"Message":"Error"}]}""");
 Check(Monitoring.NewIssues(win7New, win7Old).Single().Title == "App #101", "Windows 7 event format is supported");
 var declared = Report("""{"DiagnosticIssues":[{"Title":"Критическая проблема","Detail":"Диск неисправен","Severity":"Critical"},{"Title":"Предупреждение","Detail":"Мало памяти","Severity":"Warning"}],"Notes":["Пароль уже бессрочный"]}""");
-Check(Monitoring.AlertsForReport(declared, null).Single().Severity == 1,
+Check(Monitoring.AlertsForReport(declared, null).Count == 2,
     "first report critical findings enter monitoring without waiting for a change");
-Check(Monitoring.AlertsForReport(declared, declared).Single().Severity == 1,
+Check(Monitoring.AlertsForReport(declared, declared).Count == 2,
     "repeated critical findings refresh monitoring instead of disappearing behind the baseline");
 Check(Monitoring.AlertsForReport(win7New, null).Count == 0,
     "historical Windows events still establish a baseline before monitoring");
-Check(Monitoring.AlertsForReport(legacyResource, legacyResource).Count == 0,
-    "repeated resource pressure never enters monitoring");
+Check(Monitoring.AlertsForReport(legacyResource, legacyResource).Count == 2 && Monitoring.AlertsForReport(legacyResource, legacyResource).All(issue => issue.Severity == 2),
+    "repeated resource pressure enters monitoring as warnings, outside the default critical filter");
 Check(Monitoring.CurrentIssues(declared).Count == 2 && Monitoring.NewIssues(declared, quick).Single().Severity == 1,
     "client warnings remain in results but only client critical issues become alerts");
 Check(Monitoring.CurrentIssues(Report("""{"Notes":["Пароль уже бессрочный","Без доступа к исполняемому файлу процессов: 13","Автоматическая установка обновлений отключена."]}""")).Count == 0,

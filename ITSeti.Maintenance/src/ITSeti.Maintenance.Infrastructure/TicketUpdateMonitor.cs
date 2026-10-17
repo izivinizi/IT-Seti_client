@@ -61,6 +61,7 @@ public sealed class TicketUpdateMonitor : IDisposable
         request.Headers.Add("X-Support-Key", config.SupportKey);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        ServerUpdateHint.Observe(response);
         if (!response.IsSuccessStatusCode)
             throw new HttpRequestException("Сервер заявок ответил HTTP " + (int)response.StatusCode + ".", null, response.StatusCode);
 

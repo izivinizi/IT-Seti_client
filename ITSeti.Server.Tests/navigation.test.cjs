@@ -4,7 +4,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const elements = new Map();
 function element() { return { value:'', children:[], rows:[], open:false, disabled:false,
-  classList:{toggle(){},remove(){},add(){}}, setAttribute(){}, append(...items){this.children.push(...items);},
+  addEventListener(){}, classList:{toggle(){},remove(){},add(){}}, setAttribute(){}, append(...items){this.children.push(...items);},
   replaceChildren(...items){this.children=items;}, showModal(){this.open=true;}, close(){this.open=false;} }; }
 const kinds = ['events','cpu','memory','temperature','voltage','disks','identity','other'].map(value => ({checked:true,dataset:{monitorKind:value}}));
 const entries = [null]; let position = 0;

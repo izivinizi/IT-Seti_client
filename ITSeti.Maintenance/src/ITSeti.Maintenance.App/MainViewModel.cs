@@ -16,7 +16,7 @@ namespace ITSeti.Maintenance.App;
 
 public sealed record CheckProgressEntry(string Time, string Source, string Message);
 public sealed record NetworkAdapterOverview(string Name, string Type, string Status, string LinkSpeed, string MacAddress, string Addresses);
-public sealed record HwInfoSensorOverview(string Name, string Value, string CapturedAt, string Category);
+public sealed record HwInfoSensorOverview(string Name, string Value, string CapturedAt, string Category, string Group = "Прочее", string? SourceName = null);
 public sealed record DiskOverviewGroup(string Model, string MediaType, string Health, string TransferMode,
     IReadOnlyList<DiskSnapshot> Partitions, long? PowerOnHours = null)
 {
@@ -48,6 +48,28 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public ObservableCollection<DiagnosticSnapshot> History { get; } = [];
+    public ObservableCollection<ApplicationErrorEntry> ApplicationErrors { get; } = [];
+    private ApplicationErrorEntry? selectedApplicationError;
+    private DateTime errorHistoryWriteTime;
+    public ApplicationErrorEntry? SelectedApplicationError
+    {
+        get => selectedApplicationError;
+        set { selectedApplicationError = value; Notify(nameof(SelectedApplicationError), nameof(ApplicationErrorDetail)); }
+    }
+    public string ApplicationErrorDetail => SelectedApplicationError is { } error
+        ? $"{error.Summary}\n{error.Component} · {error.Operation}\nКод: {error.Id:N}\n{error.TechnicalDetails}" : "";
+    public string ApplicationErrorHistoryCount => $"Показано ошибок: {ApplicationErrors.Count}";
+    public void RefreshErrorHistory(bool loadMore = false)
+    {
+        var writeTime = File.GetLastWriteTimeUtc(ApplicationErrorStore.JsonLogPath);
+        if (!loadMore && writeTime == errorHistoryWriteTime && ApplicationErrors.Count > 0) return;
+        errorHistoryWriteTime = writeTime;
+        var rows = ApplicationErrorStore.ReadHistory(100, loadMore ? ApplicationErrors.Count : 0);
+        if (!loadMore) ApplicationErrors.Clear();
+        foreach (var row in rows) ApplicationErrors.Add(row);
+        if (SelectedApplicationError is null) SelectedApplicationError = ApplicationErrors.FirstOrDefault();
+        Notify(nameof(ApplicationErrorHistoryCount));
+    }
     public ObservableCollection<DiskSnapshot> Disks { get; } = [];
     public ObservableCollection<PhysicalDiskDetails> PhysicalDisks { get; } = [];
     public ObservableCollection<SmartDiskDetails> SmartDisks { get; } = [];
@@ -353,6 +375,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     }
     public string ComputerName => Environment.MachineName;
     public string AdminAccountAuditStatus => adminAccountAuditStatus;
+    public IReadOnlyList<string> UnexpectedAdminAccounts => unexpectedAdminAccounts;
     public string AdminPasswordExpiryStatus { get; private set; } = "Срок действия пароля ещё не проверен.";
     public async Task RefreshAdminAccountAuditAsync()
     {
@@ -820,10 +843,17 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
                     : sensor.Unit.Contains("V", StringComparison.OrdinalIgnoreCase) ? 2
                     : sensor.Unit.Contains('%') ? 0 : 2;
                 var value = double.IsFinite(sensor.Value) ? sensor.Value.ToString($"N{decimals}") : "Нет данных";
-                return new HwInfoSensorOverview(sensor.Name,
+                var separator = sensor.Name.LastIndexOf('/');
+                var name = sensor.Name[(separator + 1)..].Trim();
+                var group = sensor.Category.Contains("Temperature", StringComparison.OrdinalIgnoreCase) ? "Температуры"
+                    : sensor.Category.Contains("Voltage", StringComparison.OrdinalIgnoreCase) || sensor.Category.StartsWith("Rail", StringComparison.Ordinal) ? "Напряжения"
+                    : sensor.Category.Contains("Load", StringComparison.OrdinalIgnoreCase) ? "Загрузка"
+                    : sensor.Category.Contains("Disk", StringComparison.OrdinalIgnoreCase) ? "Накопители"
+                    : sensor.Category == "HardwareAlarm" ? "Аппаратные состояния" : "Другие датчики";
+                return new HwInfoSensorOverview(string.IsNullOrWhiteSpace(name) ? sensor.Name : name,
                     string.IsNullOrWhiteSpace(sensor.Unit) ? value : $"{value} {sensor.Unit}", capturedAt,
-                    HwInfoSensorPolicy.DisplayCategory(sensor.Category));
-            }).ToArray();
+                    HwInfoSensorPolicy.DisplayCategory(sensor.Category), group, sensor.Name);
+            }).OrderBy(sensor => sensor.Group).ThenBy(sensor => sensor.Name).ToArray();
         }
 
         var sharedCount = Math.Min(HwInfoSensors.Count, rows.Length);
@@ -934,9 +964,8 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
     {
         get
         {
-            if (Selected is null) return [];
-            var issues = DiagnosticEngine.Evaluate(Selected).Issues.ToList();
-            if (Selected.Full is { } full)
+            var issues = Selected is null ? new List<UserIssue>() : DiagnosticEngine.Evaluate(Selected).Issues.ToList();
+            if (Selected?.Full is { } full)
             {
                 issues.AddRange(DiagnosticRules.GetActionableEvents(full.Events)
                     .Where(e => e.Level == 1 && !(e.Id == 41 && e.Provider.Contains("Kernel-Power", StringComparison.OrdinalIgnoreCase)))
@@ -957,12 +986,16 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
             if (currentAccountUnexpectedAdministrator)
                 issues.Add(new UserIssue("Текущая учётная запись пользователя имеет права администратора",
                     "Для обычной рабочей учётной записи рекомендуется убрать членство в группе Администраторы.", "Warning"));
+            var requiredSoftware = SetupComponents.Where(component => component.InstallKey is "AnyDesk" or "RMS" or "OCS" && component.NeedsAttention).ToArray();
+            if (requiredSoftware.Length > 0)
+                issues.Add(new UserIssue("Обязательное ПО требует внимания",
+                    string.Join("; ", requiredSoftware.Select(component => component.Name + ": " + component.State)), "Warning"));
             return issues.OrderByDescending(issue => issue.Priority).ToArray();
         }
     }
     public string OverviewFindings => string.Join(Environment.NewLine, OverviewIssues.Select(issue => issue.Title + ". " + issue.Detail));
-    public string OverviewStatus => Selected is null ? "Проверка ещё не выполнялась"
-        : OverviewIssues.Count == 0 ? "Отклонений не обнаружено" : $"Требуют внимания: {OverviewIssues.Count}";
+    public string OverviewStatus => OverviewIssues.Count > 0 ? $"Требуют внимания: {OverviewIssues.Count}"
+        : Selected is null ? "Проверка ещё не выполнялась" : "Отклонений не обнаружено";
     public string OverviewUptimeLabel => UserUptimeLabel.Length > 0 ? UserUptimeLabel : "Последний запуск Windows: нет данных";
     public string OverviewCoverage => UserCoverage;
     public string HistoryCount => $"Загружено проверок: {History.Count}";
@@ -1614,6 +1647,7 @@ public sealed class MainViewModel(IDiagnosticsRunner runner, IHistoryStore histo
         if (Interlocked.Exchange(ref liveRefreshRunning, 1) != 0) return;
         try
         {
+            RefreshErrorHistory();
             if (DateTimeOffset.UtcNow >= nextServiceProbeUtc)
             {
                 nextServiceProbeUtc = DateTimeOffset.UtcNow.AddSeconds(30);

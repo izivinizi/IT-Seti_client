@@ -325,5 +325,7 @@ try {
     & (Join-Path $PSScriptRoot 'ServerSoftware.ps1') -AutoUpdate -UseCachedCatalog
 } catch {
     [IO.File]::WriteAllText((Join-Path $root 'server-software-error.txt'),$_.Exception.Message,[Text.Encoding]::UTF8)
+    Write-Error -Message ('Автоматическое обновление ПО: '+$_.Exception.Message) -ErrorAction Continue
+    exit 1
 }
 exit 0

@@ -19,7 +19,11 @@ public sealed class WindowsUpdatePolicyRunner
         try
         {
             if (!File.Exists(ResultPath)) return "Автоматические обновления не изменялись приложением";
-            return JsonSerializer.Deserialize<PolicyResult>(File.ReadAllText(ResultPath))?.Message
+            var result = JsonSerializer.Deserialize<PolicyResult>(File.ReadAllText(ResultPath));
+            if (result?.State is "Disabled" or "AlreadyDisabled" &&
+                !Equals(Microsoft.Win32.Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU", "NoAutoUpdate", null), 1))
+                return "Политика автообновлений изменена вне приложения. Проверьте настройки Windows и GPO/MDM.";
+            return result?.Message
                 ?? "Статус автообновлений недоступен";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -79,7 +83,13 @@ public sealed class WindowsUpdatePolicyRunner
             {
                 if (ReadResult() is { } result && result.UpdatedAt > previous)
                 {
-                    if (result?.Action == action) return result.Message;
+                    if (result?.Action == action)
+                    {
+                        if (result.State == "Failed") throw new InvalidOperationException(result.Message);
+                        if (action == "Disable" && !Equals(Microsoft.Win32.Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU", "NoAutoUpdate", null), 1))
+                            throw new InvalidOperationException("Windows не сохранила политику NoAutoUpdate=1. Проверьте доменные GPO/MDM.");
+                        return result.Message;
+                    }
                 }
             }
             catch (Exception ex) when (ex is IOException or JsonException) { }

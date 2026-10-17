@@ -6,7 +6,7 @@ namespace ITSeti.Server;
 
 public static class MonitoringHistory
 {
-    private const string MigrationKey = "monitor-alerts-2026-10-13";
+    private const string MigrationKey = "monitor-alerts-2026-10-16-ui";
     private const int BatchSize = 25;
 
     public static async Task ReconcileAsync(NpgsqlDataSource db)
@@ -40,7 +40,7 @@ public static class MonitoringHistory
                     hide.Parameters.AddWithValue("run", run.Id);
                     hide.Parameters.Add("cutoff", NpgsqlDbType.TimestampTz).Value = state.Value.Cutoff;
                     await hide.ExecuteNonQueryAsync();
-                    foreach (var issue in Monitoring.NewIssues(run.Report, run.Previous, run.Events, includeWarnings: false))
+                    foreach (var issue in Monitoring.AlertsForReport(run.Report, run.Previous, run.Events))
                     {
                         await using var insert = new NpgsqlCommand("""
                             INSERT INTO monitor_alerts(device_id,run_id,category,identity,title,detail,severity,detected_at,visible)
@@ -80,7 +80,7 @@ public static class MonitoringHistory
             CREATE TABLE IF NOT EXISTS maintenance_migrations (
                 key text PRIMARY KEY, cutoff timestamptz NOT NULL,
                 cursor uuid, completed_at timestamptz);
-            CREATE TABLE IF NOT EXISTS monitor_alerts_backup_20261013 AS SELECT * FROM monitor_alerts WHERE false;
+            CREATE TABLE IF NOT EXISTS monitor_alerts_backup_20261016_ui AS SELECT * FROM monitor_alerts WHERE false;
             """, connection, transaction))
             await schema.ExecuteNonQueryAsync();
         await using (var start = new NpgsqlCommand(
@@ -90,7 +90,7 @@ public static class MonitoringHistory
             if (await start.ExecuteScalarAsync() is not null)
             {
                 await using var backup = new NpgsqlCommand("""
-                    INSERT INTO monitor_alerts_backup_20261013
+                    INSERT INTO monitor_alerts_backup_20261016_ui
                     SELECT a.* FROM monitor_alerts a,maintenance_migrations m
                     WHERE m.key=@key AND a.detected_at>=m.cutoff-interval '90 days' AND a.detected_at<m.cutoff
                     """, connection, transaction);
@@ -123,8 +123,7 @@ public static class MonitoringHistory
               (SELECT p.details FROM check_runs p WHERE p.device_id=r.device_id AND p.started_at<r.started_at
                AND (jsonb_typeof(p.details->'Full'->'Events')='array' OR jsonb_typeof(p.details->'Events')='array')
                ORDER BY p.started_at DESC,p.received_at DESC LIMIT 1)
-            FROM check_runs r WHERE EXISTS (SELECT 1 FROM monitor_alerts a WHERE a.run_id=r.id
-              AND a.detected_at>=@cutoff-interval '90 days' AND a.detected_at<@cutoff)
+            FROM check_runs r WHERE r.received_at>=@cutoff-interval '90 days' AND r.received_at<@cutoff
               AND (@cursor IS NULL OR r.id>@cursor)
             ORDER BY r.id LIMIT @limit
             """, connection);
