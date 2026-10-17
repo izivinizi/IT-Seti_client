@@ -47,13 +47,18 @@ public static class DeviceKeys
         var key = request.Headers[header].ToString();
         if (key.Length is < 32 or > 100) return false;
         await using var connection = await dataSource.OpenConnectionAsync();
-        await using var command = new NpgsqlCommand($"SELECT {column} FROM devices WHERE id=@id", connection);
+        await using var command = new NpgsqlCommand($"SELECT {column},os_name,os_version FROM devices WHERE id=@id", connection);
         command.Parameters.AddWithValue("id", deviceId);
-        var stored = await command.ExecuteScalarAsync() as string;
-        if (stored is null) return false;
+        await using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync() || reader.IsDBNull(0)) return false;
+        var stored = reader.GetString(0);
         var expected = Encoding.ASCII.GetBytes(stored);
         var actual = Encoding.ASCII.GetBytes(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))));
-        return expected.Length == actual.Length && CryptographicOperations.FixedTimeEquals(expected, actual);
+        var authenticated = expected.Length == actual.Length && CryptographicOperations.FixedTimeEquals(expected, actual);
+        if (authenticated && ClientUpdateHints.Platform(request,reader.IsDBNull(1)?null:reader.GetString(1),
+            reader.IsDBNull(2)?null:reader.GetString(2)) is { } platform)
+            request.HttpContext.Items[ClientUpdateHints.AuthenticatedPlatform] = platform;
+        return authenticated;
     }
 }
 

@@ -38,6 +38,7 @@ builder.Services.AddSingleton<IOkdeskClient>(services =>
     string.Equals(builder.Configuration["OkdeskTransport"], "web", StringComparison.OrdinalIgnoreCase)
         ? services.GetRequiredService<OkdeskWebClient>() : services.GetRequiredService<OkdeskApiClient>());
 builder.Services.AddSingleton<ProcessPolicy>();
+builder.Services.AddSingleton<ClientUpdateHints>();
 builder.Services.AddSingleton<EnrollmentDiagnostics>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<OkdeskSyncService>());
 builder.Services.AddHostedService<TicketDispatchService>();
@@ -101,6 +102,7 @@ await MonitoringHistory.ReconcileAsync(dataSource);
 app.UseForwardedHeaders();
 app.UseStaticFiles();
 app.UseRouting();
+app.Use(async (context, next) => { context.RequestServices.GetRequiredService<ClientUpdateHints>().Register(context); await next(); });
 app.Use(async (context, next) =>
 {
     var traced = context.Request.Path == "/api/v1/enroll" || context.Request.Path == "/api/v1/auto-enroll" ||
