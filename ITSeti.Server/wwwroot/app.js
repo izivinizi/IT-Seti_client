@@ -852,9 +852,7 @@ async function loadApplicationErrors() {
       const heading = node('div', undefined, 'application-error-heading');
       const identity = node('div', undefined, 'application-error-identity');
       identity.append(node('strong', computer.inventory ? `PC № ${computer.inventory}` : 'PC № не указан'));
-      identity.append(remoteAccessLine(computer));
       identity.append(node('span', [computer.company, computer.site].filter(Boolean).join(' · ') || 'Компания и объект не указаны', 'application-error-context'));
-      identity.append(node('span', computer.computer || '', 'meta'));
       heading.append(identity, node('time', date(computer.latestErrorAt), 'when'));
       card.append(heading);
       const errors = node('div', undefined, 'application-error-items');
@@ -916,9 +914,7 @@ async function loadMonitoring() {
       const header = node('div', undefined, 'monitor-card-header');
       const identity = node('div');
       identity.append(node('strong', computer.inventory ? 'PC № ' + computer.inventory : 'PC № не указан'));
-      identity.append(remoteAccessLine(computer));
       identity.append(node('span', [computer.company, computer.site].filter(Boolean).join(' · ') || 'Компания и объект не указаны', 'monitor-card-place'));
-      identity.append(node('span', computer.computer || '', 'meta'));
       header.append(identity, node('span', date(computer.latestDetectedAt), 'when'));
       card.append(header);
       const errors = node('div', undefined, 'monitor-card-errors');
